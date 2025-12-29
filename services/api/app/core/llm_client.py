@@ -141,6 +141,102 @@ class AnthropicClient(LlmClient):
             return json.loads(content)
 
 
+class GoogleClient(LlmClient):
+    """Google Gemini LLM client with JSON schema support"""
+    
+    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 60):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError("GOOGLE_API_KEY is required for Google provider")
+        
+        self.model = model or os.getenv("GOOGLE_MODEL", "gemini-1.5-pro")
+        self.timeout = timeout
+    
+    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+        """Generate JSON using Google Gemini with structured output"""
+        
+        # Inject schema into messages for better adherence
+        schema_instruction = {
+            "role": "system",
+            "content": (
+                f"You MUST return a JSON object that EXACTLY matches this schema structure. "
+                f"All field names, types, and nesting must be EXACTLY as specified:\n\n"
+                f"{json.dumps(schema, indent=2)}\n\n"
+                f"CRITICAL RULES:\n"
+                f"- Use EXACT field names from schema (e.g., 'total_calories_kcal' not 'total_calories')\n"
+                f"- If schema says 'array', return [], not an object\n"
+                f"- Include ALL required properties\n"
+                f"- Do NOT add extra properties not in schema\n"
+                f"- Match types exactly (string, number, boolean, array, object)"
+            )
+        }
+        
+        # Combine system messages and convert to Gemini format
+        system_parts = []
+        user_parts = []
+        
+        for msg in messages:
+            if msg["role"] == "system":
+                system_parts.append(msg["content"])
+            elif msg["role"] == "user":
+                user_parts.append(msg["content"])
+        
+        # Add schema instruction to system prompt
+        system_parts.append(schema_instruction["content"])
+        
+        # Gemini uses a single "contents" array with parts
+        contents = []
+        if system_parts:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": "\n\n".join(system_parts)}]
+            })
+        if user_parts:
+            contents.append({
+                "role": "user", 
+                "parts": [{"text": "\n\n".join(user_parts)}]
+            })
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Retry logic for rate limits
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                        headers={
+                            "Content-Type": "application/json",
+                        },
+                        params={
+                            "key": self.api_key
+                        },
+                        json={
+                            "contents": contents,
+                            "generationConfig": {
+                                "temperature": 0.7,
+                                "maxOutputTokens": 4096,
+                                "responseMimeType": "application/json"
+                            }
+                        }
+                    )
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Extract content from Google response
+                    content = result["candidates"][0]["content"]["parts"][0]["text"]
+                    return json.loads(content)
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429 and attempt < max_retries - 1:
+                        # Rate limited - wait with exponential backoff
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                        continue
+                    raise  # Re-raise if not 429 or final attempt
+
+
 class MockLlmClient(LlmClient):
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
         required = set(schema.get("required", []))
@@ -185,6 +281,7 @@ def get_llm_client(provider: str) -> LlmClient:
     - mock: Mock client for testing
     - openai: OpenAI GPT models
     - anthropic: Anthropic Claude models
+    - google: Google Gemini models
     """
     if provider == "mock":
         return MockLlmClient()
@@ -192,8 +289,10 @@ def get_llm_client(provider: str) -> LlmClient:
         return OpenAIClient()
     elif provider == "anthropic":
         return AnthropicClient()
+    elif provider == "google":
+        return GoogleClient()
     else:
-        raise ValueError(f"Unsupported SAVO_LLM_PROVIDER: {provider}. Use 'mock', 'openai', or 'anthropic'.")
+        raise ValueError(f"Unsupported SAVO_LLM_PROVIDER: {provider}. Use 'mock', 'openai', 'anthropic', or 'google'.")
 
 
 def _extract_context(messages: list[dict[str, str]]) -> dict[str, Any] | None:
