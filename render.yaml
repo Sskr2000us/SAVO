@@ -6,6 +6,7 @@ services:
   - type: web
     name: savo-api
     runtime: python
+    pythonVersion: "3.12"
     region: oregon
     plan: free
     buildCommand: cd services/api && pip install -r requirements.txt
@@ -15,8 +16,6 @@ services:
         value: mock
       - key: SAVO_PROMPT_PACK_PATH
         value: ../../docs/spec/prompt-pack.gpt-5.2.json
-      - key: PYTHON_VERSION
-        value: 3.12.0
       # Add your API keys as secret environment variables in Render dashboard:
       # - OPENAI_API_KEY (if using OpenAI)
       # - OPENAI_MODEL (default: gpt-4)
