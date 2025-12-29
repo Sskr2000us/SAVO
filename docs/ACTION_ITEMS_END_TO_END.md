@@ -211,26 +211,26 @@ Mobile app lives in [apps/mobile](../apps/mobile).
 
 ### 4.1 LLM Provider Reliability (OpenAI 429 → google fallback)
 
-- [ ] Implement OpenAI 429 handling with bounded retry/backoff
-  - [ ] Detect HTTP 429 (rate limit) in OpenAI client
-  - [ ] Add exponential backoff with jitter (1s, 2s, 4s) for transient 429 errors
-  - [ ] Respect `Retry-After` header if present
-  - [ ] Cap total retry attempts (max 3) to prevent runaway retries
-  - [ ] Keep "schema retry once" behavior separate (don't multiply attempts)
-- [ ] Implement fallback: OpenAI → google on persistent 429
-  - [ ] After OpenAI backoff attempts exhausted, re-run same request with `SAVO_LLM_PROVIDER=google`
-  - [ ] Validate google output against same JSON schema (fail closed if invalid)
-  - [ ] Log fallback trigger reason (429 only, not timeouts/5xx)
-- [ ] Add fallback configuration
-  - [ ] Add `SAVO_LLM_FALLBACK_PROVIDER=google` env var to control fallback behavior
-  - [ ] Document in `.env.example` and deployment docs
-- [ ] Add observability for production debugging
-  - [ ] Log provider used, attempt count, fallback reason in structured format
-  - [ ] Include provider metadata in error responses (without breaking mobile contract)
-- [ ] Update deployment documentation
-  - [ ] Add google provider setup to [docs/DEPLOY_RENDER.md](DEPLOY_RENDER.md)
-  - [ ] Document `GOOGLE_API_KEY` + `GOOGLE_MODEL` env vars
-  - [ ] Add rate limit troubleshooting guide
+- [x] Implement OpenAI 429 handling with bounded retry/backoff
+  - [x] Detect HTTP 429 (rate limit) in OpenAI client
+  - [x] Add exponential backoff with jitter (1s, 2s, 4s) for transient 429 errors
+  - [x] Respect `Retry-After` header if present
+  - [x] Cap total retry attempts (max 3) to prevent runaway retries
+  - [x] Keep "schema retry once" behavior separate (don't multiply attempts)
+- [x] Implement fallback: OpenAI → google on persistent 429
+  - [x] After OpenAI backoff attempts exhausted, re-run same request with `SAVO_LLM_PROVIDER=google`
+  - [x] Validate google output against same JSON schema (fail closed if invalid)
+  - [x] Log fallback trigger reason (429 only, not timeouts/5xx)
+- [x] Add fallback configuration
+  - [x] Add `SAVO_LLM_FALLBACK_PROVIDER=google` env var to control fallback behavior
+  - [x] Document in `.env.example` and deployment docs
+- [x] Add observability for production debugging
+  - [x] Log provider used, attempt count, fallback reason in structured format
+  - [x] Include provider metadata in error responses (without breaking mobile contract)
+- [x] Update deployment documentation
+  - [x] Add google provider setup to [docs/DEPLOY_RENDER.md](DEPLOY_RENDER.md)
+  - [x] Document `GOOGLE_API_KEY` + `GOOGLE_MODEL` env vars
+  - [x] Add rate limit troubleshooting guide
 - [ ] Verification
   - [ ] Test fallback locally: mock 429 from OpenAI, confirm google provider called
   - [ ] Verify `/plan/daily` returns schema-valid JSON during fallback
