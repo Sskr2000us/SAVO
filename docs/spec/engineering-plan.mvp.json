@@ -1,0 +1,293 @@
+{
+  "engineering_plan": {
+    "name": "SAVO_MVP_ENGINEERING_TASKS",
+    "version": "1.0.0",
+    "assumptions": {
+      "primary_llm": "GPT-5.2",
+      "frontend": "React Native (recommended) or Flutter",
+      "backend": "Node.js (NestJS/Express) or Python (FastAPI)",
+      "db": "Postgres + Redis cache",
+      "storage": "S3-compatible for media",
+      "auth": "Email/OTP or OAuth"
+    },
+    "epics": [
+      {
+        "epic_id": "E1",
+        "name": "App Configuration & Profiles",
+        "goal": "Persistent user settings: family members, health/diet, languages, units, behaviors.",
+        "stories": [
+          {
+            "story_id": "E1-S1",
+            "name": "User onboarding + household setup",
+            "tasks": [
+              "Create onboarding flow screens and API calls",
+              "Persist household_profile and global_settings",
+              "Validate allergens/health conditions enums"
+            ],
+            "acceptance_criteria": [
+              "User can add/edit/remove members with ages and restrictions",
+              "Settings persist across sessions",
+              "Measurement system + language apply across UI"
+            ],
+            "estimate_points": 8
+          },
+          {
+            "story_id": "E1-S2",
+            "name": "Behavior settings and repetition controls",
+            "tasks": [
+              "Store avoid_repetition_days, rotate_cuisines/methods, prefer_expiring_ingredients",
+              "Expose toggles in Settings UI",
+              "Unit tests for config validation"
+            ],
+            "acceptance_criteria": [
+              "Changes reflect in planning responses",
+              "Invalid values rejected with clear errors"
+            ],
+            "estimate_points": 5
+          }
+        ]
+      },
+      {
+        "epic_id": "E2",
+        "name": "Inventory Management (Pantry/Fridge/Freezer)",
+        "goal": "Manage ingredients with quantities, freshness, and leftover states.",
+        "stories": [
+          {
+            "story_id": "E2-S1",
+            "name": "Inventory CRUD + expiry tracking",
+            "tasks": [
+              "Inventory API: add/update/delete/list",
+              "Freshness calculations + manual override",
+              "UI: inventory list + expiring highlight"
+            ],
+            "acceptance_criteria": [
+              "User can update quantity/unit/state/storage",
+              "Expiring items are highlighted and sortable",
+              "Inventory supports leftovers explicitly"
+            ],
+            "estimate_points": 8
+          },
+          {
+            "story_id": "E2-S2",
+            "name": "Ingredient normalization pipeline",
+            "tasks": [
+              "Implement normalize_inventory endpoint",
+              "Canonical ingredient mapping table + synonym matching",
+              "LLM-assisted normalization fallback (optional)"
+            ],
+            "acceptance_criteria": [
+              "Canonical mapping returned for all items (or flagged for clarification)",
+              "Localized display names render in UI"
+            ],
+            "estimate_points": 8
+          }
+        ]
+      },
+      {
+        "epic_id": "E3",
+        "name": "Cuisine Metadata Engine",
+        "goal": "Cuisine-driven menu headers and course structures (10 cuisines) including party-only structures.",
+        "stories": [
+          {
+            "story_id": "E3-S1",
+            "name": "Cuisine metadata store + retrieval",
+            "tasks": [
+              "Define cuisine_metadata JSON storage (db or config file)",
+              "Expose /cuisines endpoint for UI dropdowns",
+              "Add localization support for course headers"
+            ],
+            "acceptance_criteria": [
+              "10 cuisines available",
+              "Daily vs party structures returned correctly",
+              "UI shows cuisine-specific course names"
+            ],
+            "estimate_points": 5
+          }
+        ]
+      },
+      {
+        "epic_id": "E4",
+        "name": "Planning Engines (Daily, Party, Weekly)",
+        "goal": "Generate menus with recipe options; apply variety, scaling, and constraints.",
+        "stories": [
+          {
+            "story_id": "E4-S1",
+            "name": "Daily planning endpoint + UI integration",
+            "tasks": [
+              "POST /plan/daily orchestrator",
+              "Prompt builder with cuisine structure and constraints",
+              "UI: menu screen with 2–3 recipe cards per course"
+            ],
+            "acceptance_criteria": [
+              "Returns valid JSON matching MENU_PLAN_SCHEMA",
+              "Menu headers match cuisine metadata",
+              "2–3 recipe options per course"
+            ],
+            "estimate_points": 13
+          },
+          {
+            "story_id": "E4-S2",
+            "name": "Party planning endpoint + quantity scaling",
+            "tasks": [
+              "POST /plan/party with guest_count (2..80)",
+              "Capture age_group_counts (child_0_12, teen_13_17, adult_18_plus) from UI and validate sum equals guest_count",
+              "Pass age_group_counts into PARTY_SETTINGS for LLM prompt",
+              "Scaling logic + buffer percent (10% default)",
+              "UI: party guest slider + age group stepper inputs (with validation) + menu board + prep timeline"
+            ],
+            "acceptance_criteria": [
+              "Quantities scale with guests (including 10% buffer)",
+              "Party course headers follow party_structure from cuisine metadata",
+              "Age group inputs validated: sum must equal guest_count",
+              "Age toggles influence recipe options and guidance:",
+              "  - When child_0_12 > 0: at least one kid-friendly option per course OR clear mild/kid-safe variants in steps",
+              "  - Kid-friendly constraint: mild spice, familiar textures, avoid high-heat peppers/raw preparations",
+              "  - UI shows kid-friendly hint when child_0_12 > 0",
+              "Prep timeline is generated and displayed"
+            ],
+            "estimate_points": 13
+          },
+          {
+            "story_id": "E4-S3",
+            "name": "Weekly planner endpoint + UI calendar",
+            "tasks": [
+              "POST /plan/weekly with start_date (YYYY-MM-DD), num_days (1..4, default 4), timezone",
+              "Return planning_window object {start_date, num_days, timezone} plus per-day menu identity (date + day_index) for weekly_day menus",
+              "Rules: max_repeat_cuisine, leftover reuse within 2 days (configurable, default 2), treat meal count",
+              "UI: planning window inputs (start_date picker, num_days selector 1-4) + variable-length date strip + day drill-down"
+            ],
+            "acceptance_criteria": [
+              "Plan generated for requested num_days (1..4) anchored to start_date",
+              "Each weekly_day menu includes day_index (0-based) and date (YYYY-MM-DD)",
+              "planning_window returned in response with start_date, num_days, timezone",
+              "UI displays date strip derived from planning_window (not fixed Mon-Sun)",
+              "Tap date in strip -> opens S3_PLAN_RESULTS filtered by date or day_index",
+              "Cuisine repeats obey max_repeat_cuisine rule",
+              "Leftover reuse scheduled within 2 days",
+              "Shopping suggestions aggregated across all days"
+            ],
+            "estimate_points": 13
+          }
+        ]
+      },
+      {
+        "epic_id": "E5",
+        "name": "Recipe Execution & Cook Mode",
+        "goal": "Turn plan into guided cooking experience with step-by-step, timers, tips, and scaling.",
+        "stories": [
+          {
+            "story_id": "E5-S1",
+            "name": "Recipe details view + cook mode",
+            "tasks": [
+              "UI: recipe detail with nutrition badges and ingredients list",
+              "UI: cook mode stepper + timers (per-step + overall recipe timer)",
+              "Timer behavior: user must tap to start (no auto-start)",
+              "Timer controls: start/pause + add 1 minute",
+              "Backend: save cooked recipe to history on completion"
+            ],
+            "acceptance_criteria": [
+              "Cook mode supports step navigation",
+              "Per-step timers shown when steps[*].time_minutes > 0",
+              "Per-step timers: user must tap to start (no auto-start)",
+              "Overall recipe timer shown based on estimated_times.total_minutes",
+              "Overall timer: user must tap to start (separate from step timers)",
+              "Timer controls include: start/pause button + add 1 minute button",
+              "Recipe history is recorded after completion (POST /history/recipes)",
+              "Cook mode respects language + unit settings from app_configuration"
+            ],
+            "estimate_points": 13
+          }
+        ]
+      },
+      {
+        "epic_id": "E6",
+        "name": "Leftovers & Preservation Center",
+        "goal": "Reduce waste with reuse ideas and safe storage guidance.",
+        "stories": [
+          {
+            "story_id": "E6-S1",
+            "name": "Leftover detection + reuse suggestions",
+            "tasks": [
+              "Backend: leftover_center generation from plan + inventory",
+              "UI: leftover hub with reuse tiles",
+              "Preservation guidance templates"
+            ],
+            "acceptance_criteria": [
+              "Leftover items surfaced automatically",
+              "Reuse suggestions shown with 1-tap actions",
+              "Safe storage durations displayed"
+            ],
+            "estimate_points": 8
+          }
+        ]
+      },
+      {
+        "epic_id": "E7",
+        "name": "YouTube Intelligence (Trust + Summary)",
+        "goal": "Rank trustworthy videos and provide 60-second AI summaries.",
+        "stories": [
+          {
+            "story_id": "E7-S1",
+            "name": "YouTube ranking engine + summaries",
+            "tasks": [
+              "Integrate YouTube search (or pre-indexed sources)",
+              "Implement trust scoring + match scoring",
+              "Generate AI summary from transcript"
+            ],
+            "acceptance_criteria": [
+              "Top 3 videos returned with trust_score",
+              "Summary includes key techniques + mistakes",
+              "UI shows 1-minute summary and optional link"
+            ],
+            "estimate_points": 13
+          }
+        ]
+      },
+      {
+        "epic_id": "E8",
+        "name": "AI Orchestration, Validation & Observability",
+        "goal": "Reliable outputs: schema validation, safety guardrails, logging, cost controls.",
+        "stories": [
+          {
+            "story_id": "E8-S1",
+            "name": "LLM orchestrator + schema validator",
+            "tasks": [
+              "Build prompt builder per task",
+              "Implement JSON schema validation (fail closed)",
+              "Retry policy: max 1 retry with corrected instructions"
+            ],
+            "acceptance_criteria": [
+              "Non-JSON outputs rejected",
+              "Schema violations corrected or returned as needs_clarification",
+              "Logs include request_id and token usage"
+            ],
+            "estimate_points": 13
+          },
+          {
+            "story_id": "E8-S2",
+            "name": "Telemetry and quality metrics",
+            "tasks": [
+              "Capture latency, cost, success rate",
+              "Track diversity score and user selection",
+              "Error dashboards"
+            ],
+            "acceptance_criteria": [
+              "Metrics visible per endpoint",
+              "Quality scores stored per plan"
+            ],
+            "estimate_points": 8
+          }
+        ]
+      }
+    ],
+    "release_plan": {
+      "mvp_scope": ["E1", "E2", "E3", "E4-S1", "E5", "E6", "E7", "E8"],
+      "recommended_sprints": [
+        { "sprint": 1, "focus": ["E1", "E2-S1", "E3-S1"] },
+        { "sprint": 2, "focus": ["E2-S2", "E4-S1", "E8-S1"] },
+        { "sprint": 3, "focus": ["E5-S1", "E6-S1"] },
+        { "sprint": 4, "focus": ["E7-S1", "E8-S2", "polish"] }
+      ]
+    }
+  }
+}

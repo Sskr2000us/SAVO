@@ -1,0 +1,318 @@
+{
+  "figma_ui_spec": {
+    "name": "SAVO_FIGMA_READY_SPEC",
+    "version": "1.0.0",
+    "design_goals": [
+      "UI-first, food-centric, vibrant but premium",
+      "Card-driven, image-led layouts",
+      "Minimal text; clear icons and badges",
+      "Fast daily usage: 2 taps to start cooking",
+      "Delight: subtle motion, gradients, ingredient chips"
+    ],
+    "design_tokens": {
+      "color": {
+        "brand": {
+          "primary": "#FF5A3C",
+          "secondary": "#2CCB7F",
+          "accent": "#FFC043"
+        },
+        "food_palette": {
+          "tomato": "#FF4D4D",
+          "basil": "#2ECC71",
+          "saffron": "#FFB000",
+          "blueberry": "#5B6CFF",
+          "cocoa": "#7A4E2D"
+        },
+        "neutrals": {
+          "bg": "#0B0F14",
+          "surface": "#121826",
+          "card": "#161F2E",
+          "text_primary": "#F4F7FF",
+          "text_secondary": "#A9B1C3",
+          "divider": "#243049"
+        },
+        "states": {
+          "success": "#2CCB7F",
+          "warning": "#FFC043",
+          "danger": "#FF4D4D",
+          "info": "#5B6CFF"
+        }
+      },
+      "type": {
+        "font_family": "SF Pro / Inter",
+        "scale": {
+          "display": 34,
+          "h1": 28,
+          "h2": 22,
+          "body": 16,
+          "caption": 13,
+          "micro": 11
+        },
+        "weight": {
+          "regular": 400,
+          "medium": 500,
+          "semibold": 600,
+          "bold": 700
+        }
+      },
+      "spacing": { "xs": 6, "sm": 10, "md": 16, "lg": 24, "xl": 32 },
+      "radius": { "sm": 10, "md": 16, "lg": 24, "pill": 999 },
+      "shadow": {
+        "card": "0 10 30 rgba(0,0,0,0.35)",
+        "float": "0 16 40 rgba(0,0,0,0.45)"
+      },
+      "motion": {
+        "transition_ms": 220,
+        "easing": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        "micro_interactions": ["chip_select", "card_expand", "step_progress"]
+      }
+    },
+    "components": {
+      "app_shell": {
+        "bottom_nav": ["Home", "Plan", "Cook", "Leftovers", "Settings"],
+        "top_bar": {
+          "left": "SAVO logo + greeting",
+          "right": ["notifications", "profile"]
+        }
+      },
+      "core_cards": {
+        "hero_today_card": {
+          "elements": ["dish_image", "headline", "cta_primary", "cta_secondary", "badges_row"],
+          "cta_primary": "Cook Today",
+          "cta_secondary": "Plan Week"
+        },
+        "ingredient_chip": {
+          "states": ["default", "expiring", "low_stock", "leftover"],
+          "elements": ["name", "qty", "icon"]
+        },
+        "recipe_card": {
+          "elements": [
+            "image",
+            "title",
+            "time_badge",
+            "calorie_badge",
+            "protein_badge",
+            "difficulty",
+            "action_select"
+          ]
+        },
+        "course_section": {
+          "elements": ["course_header", "horizontal_scroll_recipes", "see_all"]
+        }
+      },
+      "badges": {
+        "nutrition_badge": ["calories", "protein", "carbs", "fat"],
+        "health_badge": ["diabetic_friendly", "heart_health", "kid_friendly", "low_sodium"],
+        "waste_badge": ["uses_expiring", "leftover_hero", "freeze_friendly"]
+      },
+      "cook_mode": {
+        "stepper": {
+          "elements": ["step_count", "instruction", "timer", "tips_drawer", "next_button", "back_button"]
+        },
+        "timer": {
+          "modes": ["auto_suggested", "manual"],
+          "elements": ["countdown", "start_pause", "add_1_min"]
+        }
+      },
+      "party_planner_widgets": {
+        "guest_slider": { "min": 2, "max": 80, "step": 1 },
+        "age_group_inputs": {
+          "description": "Explicit age distribution inputs using integer counters or segmented controls",
+          "fields": [
+            {
+              "field": "child_0_12",
+              "label": "Children (0-12)",
+              "type": "stepper",
+              "min": 0,
+              "validation": "Must be <= guest_count; sum of all age fields must equal guest_count"
+            },
+            {
+              "field": "teen_13_17",
+              "label": "Teens (13-17)",
+              "type": "stepper",
+              "min": 0,
+              "validation": "Must be <= guest_count; sum of all age fields must equal guest_count"
+            },
+            {
+              "field": "adult_18_plus",
+              "label": "Adults (18+)",
+              "type": "stepper",
+              "min": 0,
+              "validation": "Must be <= guest_count; sum of all age fields must equal guest_count"
+            }
+          ],
+          "validation_rule": "child_0_12 + teen_13_17 + adult_18_plus MUST equal guest_count. Show error if not.",
+          "behavior": "When child_0_12 > 0, UI hints that kid-friendly options will be prioritized"
+        },
+        "menu_board": { "layout": "columns_by_course" },
+        "prep_timeline": { "rows": ["T-24h", "T-4h", "T-2h", "T-1h", "T-0"] }
+      },
+      "weekly_planner_widgets": {
+        "week_strip": {
+          "type": "date_strip",
+          "derived_from": "planning_window (start_date + num_days)",
+          "description": "Variable-length horizontal strip showing dates from start_date for num_days (1..4). Each date tile shows day-of-week and date (e.g., 'Mon 12/30'). Replaces fixed Mon-Sun.",
+          "default_num_days": 4,
+          "max_num_days": 4,
+          "behavior": "Tap date tile -> opens S3_PLAN_RESULTS filtered by that date or day_index from weekly_day menu"
+        },
+        "day_card": { "elements": ["cuisine_tag", "meal_type", "top_recipe_preview", "waste_hint"] }
+      }
+    },
+    "screens": [
+      {
+        "screen_id": "S1_HOME",
+        "name": "Home Dashboard",
+        "layout": [
+          "TopBar",
+          "HeroTodayCard",
+          "ExpiringIngredientsRow (chips)",
+          "QuickActions (Cook Today, Party Mode, Plan Week)",
+          "RecommendedCoursesPreview (course sections)"
+        ],
+        "interactions": [
+          "Tap Cook Today -> S3_PLAN_RESULTS (daily)",
+          "Tap Plan Week -> S5_WEEKLY_PLAN",
+          "Tap Party Mode -> S6_PARTY_PLANNER",
+          "Tap ingredient chip -> S2_INVENTORY"
+        ]
+      },
+      {
+        "screen_id": "S2_INVENTORY",
+        "name": "Inventory",
+        "layout": [
+          "Search + Filters (Pantry/Fridge/Freezer, Expiring, Leftovers)",
+          "IngredientList (chips + quantity editor)",
+          "Add Item CTA"
+        ],
+        "interactions": [
+          "Edit qty/state/freshness inline",
+          "Mark as leftover",
+          "Tap Generate -> S3_PLAN_RESULTS"
+        ]
+      },
+      {
+        "screen_id": "S3_PLAN_RESULTS",
+        "name": "Menu Plan Results",
+        "layout": [
+          "CuisineSelector (auto + 10 cuisines)",
+          "MenuHeaders (dynamic from cuisine metadata)",
+          "CourseSections with horizontal recipe card lists (2–3 options each)",
+          "Sticky Bar: Selected recipes + Start Cooking"
+        ],
+        "interactions": [
+          "Swipe cuisine -> reload plan",
+          "Tap recipe card -> S4_RECIPE_DETAIL",
+          "Tap Start Cooking -> S7_COOK_MODE"
+        ]
+      },
+      {
+        "screen_id": "S4_RECIPE_DETAIL",
+        "name": "Recipe Detail",
+        "layout": [
+          "Hero image",
+          "Title + cuisine tag",
+          "Badges row (time, calories, protein, waste)",
+          "Ingredients list (with scaled quantities)",
+          "YouTube 60-sec summary module",
+          "CTA: Start Cook Mode"
+        ],
+        "interactions": [
+          "Tap YouTube -> show summary drawer + optional open link",
+          "Tap Start -> S7_COOK_MODE"
+        ]
+      },
+      {
+        "screen_id": "S5_WEEKLY_PLAN",
+        "name": "Weekly Planner",
+        "layout": [
+          "Planning window inputs (start_date picker, num_days selector: 1-4)",
+          "WeekStrip (variable-length date strip: displays start_date through start_date+num_days-1)",
+          "DayCards list (one per day in planning window)",
+          "Rules summary (max repeats, leftovers within 2 days)",
+          "CTA: Generate Grocery Suggestions"
+        ],
+        "interactions": [
+          "Tap date in WeekStrip -> opens S3_PLAN_RESULTS filtered to that date/day_index from weekly_day menu",
+          "Change num_days -> updates WeekStrip length and regenerates plan on user action"
+        ]
+      },
+      {
+        "screen_id": "S6_PARTY_PLANNER",
+        "name": "Party Planner",
+        "layout": [
+          "GuestSlider (2-80)",
+          "Age distribution inputs: child_0_12, teen_13_17, adult_18_plus (stepper controls, must sum to guest_count)",
+          "Validation feedback: sum must equal guest_count",
+          "Kid-friendly hint: shows when child_0_12 > 0 (e.g., 'Kid-friendly options will be included')",
+          "CuisineSelector",
+          "Auto-generated menu board (course columns)",
+          "Prep timeline",
+          "Waste plan + leftover reuse plan",
+          "CTA: Generate Party Plan"
+        ],
+        "interactions": [
+          "Change guest_count -> quantities rescale; age inputs reset to 0 if sum exceeds new guest_count",
+          "Adjust age inputs -> UI validates sum = guest_count; if child_0_12 > 0, show kid-friendly hint",
+          "Tap Generate -> calls /plan/party with guest_count + age_group_counts -> opens S3_PLAN_RESULTS (party menu type)"
+        ]
+      },
+      {
+        "screen_id": "S7_COOK_MODE",
+        "name": "Cook Mode",
+        "layout": [
+          "StepStepper fullscreen",
+          "Auto timers",
+          "Tips drawer",
+          "Substitutions button",
+          "Finish button"
+        ],
+        "interactions": [
+          "Next step increments progress",
+          "Timer start/pause",
+          "Finish -> logs history + opens leftovers prompt"
+        ]
+      },
+      {
+        "screen_id": "S8_LEFTOVERS_CENTER",
+        "name": "Leftovers & Preserve",
+        "layout": [
+          "Leftover items list (cards)",
+          "Reuse recipes carousel",
+          "Preservation guidance cards (freeze/refrigerate)",
+          "CTA: Plan Leftover Day"
+        ],
+        "interactions": [
+          "Tap reuse -> opens recipe detail",
+          "Tap preserve -> stores preservation plan + reminder suggestion"
+        ]
+      },
+      {
+        "screen_id": "S9_SETTINGS",
+        "name": "Settings",
+        "layout": [
+          "Family members editor",
+          "Diet/Allergen rules",
+          "Nutrition targets",
+          "Language + units",
+          "Behavior (avoid repetition, rotate cuisines, expiring first)",
+          "YouTube preferences"
+        ],
+        "interactions": [
+          "Save -> config persisted and applied immediately"
+        ]
+      }
+    ],
+    "assets_guidance": {
+      "imagery": {
+        "style": "high-saturation food photography, soft shadows",
+        "fallback": "AI-generated dish images permitted (with safe prompts)",
+        "placeholders": "gradient + icon for loading"
+      },
+      "icons": {
+        "set": "lucide-like",
+        "usage": ["time", "calories", "protein", "waste", "leftover", "freeze", "spice"]
+      }
+    }
+  }
+}

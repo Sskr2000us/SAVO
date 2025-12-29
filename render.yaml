@@ -1,0 +1,33 @@
+# Render Blueprint for SAVO
+# Deploy both backend API and frontend web app
+
+services:
+  # Backend FastAPI Service
+  - type: web
+    name: savo-api
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: cd services/api && pip install -r requirements.txt
+    startCommand: cd services/api && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SAVO_LLM_PROVIDER
+        value: mock
+      - key: SAVO_PROMPT_PACK_PATH
+        value: ../../docs/spec/prompt-pack.gpt-5.2.json
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      # Add your API keys as secret environment variables in Render dashboard:
+      # - OPENAI_API_KEY (if using OpenAI)
+      # - OPENAI_MODEL (default: gpt-4)
+      # - ANTHROPIC_API_KEY (if using Anthropic)
+      # - ANTHROPIC_MODEL (default: claude-3-sonnet-20240229)
+      # - LLM_TIMEOUT (default: 60)
+    healthCheckPath: /health
+
+  # Flutter Web App (Static Site)
+  # Note: Render doesn't natively support Flutter builds
+  # You have two options:
+  # 1. Build locally and deploy dist/ folder to Render Static Site
+  # 2. Use a custom Docker build (see Dockerfile below)
+  # 3. Deploy Flutter web to Netlify/Vercel instead

@@ -1,0 +1,33 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.router import api_router
+from app.core.settings import settings
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="SAVO API",
+        version="0.1.0",
+        description="SAVO backend orchestrator (FastAPI)",
+    )
+
+    # Enable CORS for Flutter web app
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins in development
+        allow_credentials=True,
+        allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, OPTIONS)
+        allow_headers=["*"],  # Allow all headers
+    )
+
+    app.include_router(api_router)
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "llm_provider": settings.llm_provider}
+
+    return app
+
+
+app = create_app()

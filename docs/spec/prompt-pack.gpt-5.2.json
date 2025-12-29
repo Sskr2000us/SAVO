@@ -1,0 +1,607 @@
+{
+  "prompt_pack": {
+    "name": "SAVO_GPT52_PROMPTS",
+    "version": "1.0.0",
+    "model_target": "gpt-5.2",
+    "strategy": {
+      "single_model_multi_prompt": true,
+      "prompt_layers": ["system", "persona", "task", "context"],
+      "output_mode": "json_only",
+      "validation": {
+        "json_schema_required": true,
+        "reject_if_non_json": true,
+        "strict_fields_only": true
+      }
+    },
+    "variables": {
+      "placeholders": {
+        "{{APP_CONFIGURATION}}": "Object: app_configuration from SAVO master JSON",
+        "{{INVENTORY}}": "Object: inventory_state/items",
+        "{{SESSION_REQUEST}}": "Object: session_request",
+        "{{CUISINE_METADATA}}": "Object: cuisine_metadata (10 cuisines)",
+        "{{HISTORY_CONTEXT}}": "Object: history_context (recent recipes/cuisines/methods)",
+        "{{OUTPUT_LANGUAGE}}": "String: request.app_configuration.profile.primary_language or session override",
+        "{{MEASUREMENT_SYSTEM}}": "String: metric|imperial",
+        "{{TIME_AVAILABLE_MIN}}": "Number",
+        "{{SERVINGS}}": "Number",
+        "{{PARTY_SETTINGS}}": "Object: party_settings including guest_count (2..80) and age_group_counts {child_0_12, teen_13_17, adult_18_plus} that sum to guest_count",
+        "{{FEATURE_FLAGS}}": "Object: feature_access/includes",
+        "{{YOUTUBE_INPUT}}": "Object: youtube selection candidates (title, transcript, metadata)",
+        "{{STAPLES_POLICY}}": "Object: staples inclusion policy",
+        "{{NOW_UTC}}": "String ISO timestamp"
+      }
+    },
+    "schemas": {
+      "SAVO_STATUS_SCHEMA": {
+        "type": "object",
+        "required": ["status", "needs_clarification_questions"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "needs_clarification", "error"] },
+          "needs_clarification_questions": { "type": "array", "items": { "type": "string" } },
+          "error_message": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "NORMALIZATION_OUTPUT_SCHEMA": {
+        "type": "object",
+        "required": ["normalized_inventory", "staples_policy_applied"],
+        "properties": {
+          "normalized_inventory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "inventory_id",
+                "canonical_ingredient_id",
+                "canonical_name",
+                "display_name",
+                "quantity",
+                "unit",
+                "state",
+                "storage",
+                "freshness_days_remaining",
+                "confidence"
+              ],
+              "properties": {
+                "inventory_id": { "type": "string" },
+                "canonical_ingredient_id": { "type": "string" },
+                "canonical_name": { "type": "string" },
+                "display_name": { "type": "string" },
+                "quantity": { "type": "number" },
+                "unit": { "type": "string" },
+                "state": { "type": "string", "enum": ["raw", "cooked", "leftover", "frozen"] },
+                "storage": { "type": "string", "enum": ["pantry", "refrigerator", "freezer"] },
+                "freshness_days_remaining": { "type": "number" },
+                "confidence": { "type": "number" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "staples_policy_applied": {
+            "type": "object",
+            "required": ["enabled", "staples_included", "staples_excluded"],
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "staples_included": { "type": "array", "items": { "type": "string" } },
+              "staples_excluded": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "MENU_PLAN_SCHEMA": {
+        "type": "object",
+        "required": [
+          "status",
+          "selected_cuisine",
+          "menu_headers",
+          "menus",
+          "variety_log",
+          "nutrition_summary",
+          "waste_summary",
+          "shopping_suggestions"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "menus": {
+                  "type": "array",
+                  "contains": {
+                    "type": "object",
+                    "properties": { "menu_type": { "const": "weekly_day" } },
+                    "required": ["menu_type"]
+                  }
+                }
+              },
+              "required": ["menus"]
+            },
+            "then": {
+              "required": ["planning_window"]
+            }
+          }
+        ],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "needs_clarification", "error"] },
+          "selected_cuisine": { "type": "string" },
+          "planning_window": {
+            "type": ["object", "null"],
+            "required": ["start_date", "num_days", "timezone"],
+            "properties": {
+              "start_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+              "num_days": { "type": "number", "minimum": 1, "maximum": 4 },
+              "timezone": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "menu_headers": { "type": "array", "items": { "type": "string" } },
+          "menus": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["menu_type", "servings", "courses"],
+              "properties": {
+                "menu_type": { "type": "string", "enum": ["daily", "party", "weekly_day"] },
+                "day_index": { "type": ["number", "null"], "minimum": 0 },
+                "date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+                "servings": {
+                  "type": "object",
+                  "required": ["count", "scaling_factor"],
+                  "properties": {
+                    "count": { "type": "number" },
+                    "scaling_factor": { "type": "number" }
+                  },
+                  "additionalProperties": false
+                },
+                "courses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["course_header", "recipe_options"],
+                    "properties": {
+                      "course_header": { "type": "string" },
+                      "recipe_options": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "recipe_id",
+                            "recipe_name",
+                            "cuisine",
+                            "difficulty",
+                            "estimated_times",
+                            "cooking_method",
+                            "ingredients_used",
+                            "new_ingredients_optional",
+                            "steps",
+                            "nutrition_per_serving",
+                            "health_fit",
+                            "leftover_forecast",
+                            "preservation_guidance",
+                            "youtube_references",
+                            "agent_mode"
+                          ],
+                          "properties": {
+                            "recipe_id": { "type": "string" },
+                            "recipe_name": {
+                              "type": "object",
+                              "patternProperties": {
+                                "^[a-z]{2}(-[A-Z]{2})?$": { "type": "string" }
+                              },
+                              "additionalProperties": true
+                            },
+                            "cuisine": { "type": "string" },
+                            "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+                            "estimated_times": {
+                              "type": "object",
+                              "required": ["prep_minutes", "cook_minutes", "total_minutes"],
+                              "properties": {
+                                "prep_minutes": { "type": "number" },
+                                "cook_minutes": { "type": "number" },
+                                "total_minutes": { "type": "number" }
+                              },
+                              "additionalProperties": false
+                            },
+                            "cooking_method": { "type": "string" },
+                            "ingredients_used": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["inventory_id", "canonical_name", "amount", "unit"],
+                                "properties": {
+                                  "inventory_id": { "type": "string" },
+                                  "canonical_name": { "type": "string" },
+                                  "amount": { "type": "number" },
+                                  "unit": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "new_ingredients_optional": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["canonical_name", "amount", "unit", "reason"],
+                                "properties": {
+                                  "canonical_name": { "type": "string" },
+                                  "amount": { "type": "number" },
+                                  "unit": { "type": "string" },
+                                  "reason": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["step", "instruction", "time_minutes", "tips"],
+                                "properties": {
+                                  "step": { "type": "number" },
+                                  "instruction": {
+                                    "type": "object",
+                                    "patternProperties": {
+                                      "^[a-z]{2}(-[A-Z]{2})?$": { "type": "string" }
+                                    },
+                                    "additionalProperties": true
+                                  },
+                                  "time_minutes": { "type": "number" },
+                                  "tips": { "type": "array", "items": { "type": "string" } }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "nutrition_per_serving": {
+                              "type": "object",
+                              "required": ["calories_kcal", "macros", "micros"],
+                              "properties": {
+                                "calories_kcal": { "type": "number" },
+                                "macros": {
+                                  "type": "object",
+                                  "required": ["protein_g", "carbs_g", "fat_g"],
+                                  "properties": {
+                                    "protein_g": { "type": "number" },
+                                    "carbs_g": { "type": "number" },
+                                    "fat_g": { "type": "number" }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                "micros": {
+                                  "type": "object",
+                                  "properties": {
+                                    "fiber_g": { "type": "number" },
+                                    "sodium_mg": { "type": "number" },
+                                    "sugar_g": { "type": "number" }
+                                  },
+                                  "additionalProperties": true
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "health_fit": {
+                              "type": "object",
+                              "required": ["flags", "scores", "adjustments"],
+                              "properties": {
+                                "flags": { "type": "array", "items": { "type": "string" } },
+                                "scores": {
+                                  "type": "object",
+                                  "additionalProperties": { "type": "number" }
+                                },
+                                "adjustments": { "type": "array", "items": { "type": "string" } }
+                              },
+                              "additionalProperties": false
+                            },
+                            "leftover_forecast": {
+                              "type": "object",
+                              "required": ["expected_leftover_servings", "reuse_ideas"],
+                              "properties": {
+                                "expected_leftover_servings": { "type": "number" },
+                                "reuse_ideas": { "type": "array", "items": { "type": "string" } }
+                              },
+                              "additionalProperties": false
+                            },
+                            "preservation_guidance": {
+                              "type": "object",
+                              "required": ["storage", "safe_duration_hours", "reheat_methods", "quality_notes"],
+                              "properties": {
+                                "storage": { "type": "string", "enum": ["refrigerate", "freeze"] },
+                                "safe_duration_hours": { "type": "number" },
+                                "reheat_methods": { "type": "array", "items": { "type": "string" } },
+                                "quality_notes": { "type": "string" }
+                              },
+                              "additionalProperties": false
+                            },
+                            "youtube_references": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["video_id", "title", "channel", "language", "trust_score", "ai_summary"],
+                                "properties": {
+                                  "video_id": { "type": "string" },
+                                  "title": { "type": "string" },
+                                  "channel": { "type": "string" },
+                                  "language": { "type": "string" },
+                                  "trust_score": { "type": "number" },
+                                  "ai_summary": {
+                                    "type": "object",
+                                    "required": ["one_minute_version", "key_techniques", "common_mistakes"],
+                                    "properties": {
+                                      "one_minute_version": { "type": "string" },
+                                      "key_techniques": { "type": "array", "items": { "type": "string" } },
+                                      "common_mistakes": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "agent_mode": { "type": "string", "enum": ["beginner_coach", "fast_expert", "kid_friendly"] }
+                          },
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "menu_type": { "const": "weekly_day" } },
+                    "required": ["menu_type"]
+                  },
+                  "then": {
+                    "required": ["day_index", "date"]
+                  }
+                }
+              ],
+              "additionalProperties": false
+            }
+          },
+          "variety_log": {
+            "type": "object",
+            "required": ["rules_applied", "excluded_recent", "diversity_scores"],
+            "properties": {
+              "rules_applied": { "type": "array", "items": { "type": "string" } },
+              "excluded_recent": { "type": "array", "items": { "type": "object" } },
+              "diversity_scores": { "type": "object", "additionalProperties": { "type": "number" } }
+            },
+            "additionalProperties": false
+          },
+          "nutrition_summary": {
+            "type": "object",
+            "required": ["total_calories_kcal", "per_member_estimates", "warnings"],
+            "properties": {
+              "total_calories_kcal": { "type": "number" },
+              "per_member_estimates": { "type": "array", "items": { "type": "object" } },
+              "warnings": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          },
+          "waste_summary": {
+            "type": "object",
+            "required": ["expiring_items_used", "waste_reduction_score", "waste_avoided_value_estimate"],
+            "properties": {
+              "expiring_items_used": { "type": "array", "items": { "type": "string" } },
+              "waste_reduction_score": { "type": "number" },
+              "waste_avoided_value_estimate": {
+                "type": "object",
+                "required": ["currency", "value"],
+                "properties": {
+                  "currency": { "type": "string" },
+                  "value": { "type": "number" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "shopping_suggestions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["canonical_name", "quantity", "unit", "reason", "optional"],
+              "properties": {
+                "canonical_name": { "type": "string" },
+                "quantity": { "type": "number" },
+                "unit": { "type": "string" },
+                "reason": { "type": "string" },
+                "optional": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "YOUTUBE_RANK_SCHEMA": {
+        "type": "object",
+        "required": ["ranked_videos"],
+        "properties": {
+          "ranked_videos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["video_id", "title", "channel", "trust_score", "match_score", "reasons"],
+              "properties": {
+                "video_id": { "type": "string" },
+                "title": { "type": "string" },
+                "channel": { "type": "string" },
+                "trust_score": { "type": "number" },
+                "match_score": { "type": "number" },
+                "reasons": { "type": "array", "items": { "type": "string" } }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "prompts": {
+      "system": {
+        "id": "SYS_SAVO_CORE",
+        "content": [
+          "You are SAVO, a global home cooking intelligence engine.",
+          "You MUST output ONLY valid JSON that matches the provided JSON schema.",
+          "Never output markdown, prose, or code fences.",
+          "Never hallucinate ingredients: you may only use ingredients present in INVENTORY or STAPLES_POLICY.",
+          "If a dish requires missing critical ingredients and no acceptable substitution exists, set status=needs_clarification and ask concise questions.",
+          "Respect dietary restrictions, allergens, health conditions, age groups, and calorie targets in APP_CONFIGURATION.",
+          "Use CUISINE_METADATA to derive menu headers and course structure. Do not hard-code cuisine structures.",
+          "Generate 2–3 recipe options per course (minimum 2). Ensure recipe variety based on HISTORY_CONTEXT and behavior_settings (avoid repetition window).",
+          "All steps must be feasible given available_equipment and time_available_minutes.",
+          "Use OUTPUT_LANGUAGE and MEASUREMENT_SYSTEM for all user-facing fields.",
+          "Include leftovers reuse ideas and safe preservation guidance for any expected leftovers.",
+          "YouTube references: provide ranked top matches with trust_score and a 60-second summary (or less)."
+        ]
+      },
+      "personas": [
+        {
+          "id": "PER_BEGINNER_COACH",
+          "name": "beginner_coach",
+          "style_rules": [
+            "Use simple words and short sentences.",
+            "Provide more tips and common mistakes.",
+            "Prioritize safety and clarity."
+          ]
+        },
+        {
+          "id": "PER_FAST_EXPERT",
+          "name": "fast_expert",
+          "style_rules": [
+            "Be concise. Minimal tips.",
+            "Prioritize speed and efficiency."
+          ]
+        },
+        {
+          "id": "PER_KID_FRIENDLY",
+          "name": "kid_friendly",
+          "style_rules": [
+            "Friendly tone.",
+            "Simplify spice and textures.",
+            "Suggest fun plating or naming when appropriate."
+          ]
+        }
+      ],
+      "tasks": [
+        {
+          "id": "TASK_NORMALIZE_INVENTORY",
+          "name": "normalize_inventory",
+          "input_bindings": ["{{INVENTORY}}", "{{OUTPUT_LANGUAGE}}", "{{MEASUREMENT_SYSTEM}}", "{{STAPLES_POLICY}}"],
+          "output_schema_ref": "NORMALIZATION_OUTPUT_SCHEMA",
+          "prompt": [
+            "Normalize the inventory items into canonical ingredient IDs and localized display names.",
+            "Convert quantities into MEASUREMENT_SYSTEM if needed.",
+            "Return normalized_inventory and staples_policy_applied."
+          ]
+        },
+        {
+          "id": "TASK_PLAN_DAILY_MENU",
+          "name": "plan_daily_menu",
+          "input_bindings": [
+            "{{APP_CONFIGURATION}}",
+            "{{SESSION_REQUEST}}",
+            "{{INVENTORY}}",
+            "{{CUISINE_METADATA}}",
+            "{{HISTORY_CONTEXT}}",
+            "{{FEATURE_FLAGS}}",
+            "{{OUTPUT_LANGUAGE}}",
+            "{{MEASUREMENT_SYSTEM}}",
+            "{{TIME_AVAILABLE_MIN}}",
+            "{{SERVINGS}}",
+            "{{NOW_UTC}}"
+          ],
+          "output_schema_ref": "MENU_PLAN_SCHEMA",
+          "prompt": [
+            "Generate a cuisine-driven menu for daily cooking.",
+            "Select cuisine: if requested_cuisine=auto, choose based on inventory fit and variety rotation.",
+            "Derive menu_headers strictly from CUISINE_METADATA[selected_cuisine].daily_structure.",
+            "For each course header, generate 2–3 recipe_options using available ingredients.",
+            "Include quantities, steps, nutrition, health_fit, leftovers forecast, preservation guidance, and YouTube references.",
+            "Apply variety rules: avoid repeating recently cooked recipes and cuisines within the repetition window.",
+            "If constraints make this impossible, return status=needs_clarification with questions."
+          ]
+        },
+        {
+          "id": "TASK_PLAN_PARTY_MENU",
+          "name": "plan_party_menu",
+          "input_bindings": [
+            "{{APP_CONFIGURATION}}",
+            "{{SESSION_REQUEST}}",
+            "{{PARTY_SETTINGS}}",
+            "{{INVENTORY}}",
+            "{{CUISINE_METADATA}}",
+            "{{HISTORY_CONTEXT}}",
+            "{{OUTPUT_LANGUAGE}}",
+            "{{MEASUREMENT_SYSTEM}}"
+          ],
+          "output_schema_ref": "MENU_PLAN_SCHEMA",
+          "prompt": [
+            "Generate a party menu with scaled quantities and prep sequencing guidance.",
+            "Derive menu_headers strictly from CUISINE_METADATA[selected_cuisine].party_structure.",
+            "Ensure menu includes appetizers, mains, sides, and dessert appropriate to the cuisine structure.",
+            "Scale ingredient amounts to guest_count with a 10% buffer unless restricted.",
+            "PARTY_SETTINGS includes guest_count (2..80) and age_group_counts with three integer fields: child_0_12, teen_13_17, adult_18_plus. These must sum to guest_count.",
+            "Age-aware constraints: If child_0_12 > 0, you MUST enforce kid-friendly options:",
+            "  - At least one kid-friendly recipe option per course (mild spice, familiar textures, avoid high-heat peppers/wasabi/raw preparations)",
+            "  - OR provide clear kid-safe variant instructions in recipe steps/tips with spice reduction guidance",
+            "  - Use gentle cooking methods and familiar flavors when children are present",
+            "If teen_13_17 > 0, slightly more adventurous options allowed but still moderate spice/texture.",
+            "If all adult_18_plus, no age restrictions apply.",
+            "Include waste reduction plan and leftover reuse plan tailored to party leftovers."
+          ]
+        },
+        {
+          "id": "TASK_PLAN_WEEKLY",
+          "name": "plan_weekly",
+          "input_bindings": [
+            "{{APP_CONFIGURATION}}",
+            "{{SESSION_REQUEST}}",
+            "{{INVENTORY}}",
+            "{{CUISINE_METADATA}}",
+            "{{HISTORY_CONTEXT}}",
+            "{{OUTPUT_LANGUAGE}}",
+            "{{MEASUREMENT_SYSTEM}}",
+            "{{TIME_AVAILABLE_MIN}}",
+            "{{SERVINGS}}",
+            "{{NOW_UTC}}"
+          ],
+          "output_schema_ref": "MENU_PLAN_SCHEMA",
+          "prompt": [
+            "Create a configurable-horizon weekly plan anchored to SESSION_REQUEST.start_date for SESSION_REQUEST.num_days days (allowed range: 1..4, default 4).",
+            "Timezone priority: Use APP_CONFIGURATION.timezone (preferred), falling back to SESSION_REQUEST.timezone if app config not set, or device timezone as final fallback.",
+            "REQUIRED: Return planning_window object with fields: {start_date (YYYY-MM-DD), num_days (1..4), timezone (string)}.",
+            "Generate one menu with menu_type='weekly_day' for each day in the planning window.",
+            "For each weekly_day menu, you MUST set:",
+            "  - day_index: 0-based integer (0 for first day, 1 for second day, etc.)",
+            "  - date: calculated date in YYYY-MM-DD format (start_date + day_index days)",
+            "Apply weekly planning rules:",
+            "  - max_repeat_cuisine_per_week: avoid same cuisine appearing more than twice in the window",
+            "  - use_leftovers_within_days: schedule leftover reuse within 2 days (configurable, default 2)",
+            "  - treat_meals_per_week: optional special meals if configured",
+            "  - Rotate cuisines and cooking methods for variety",
+            "  - Prefer expiring ingredients in earlier days",
+            "Include shopping_suggestions aggregated across all days for efficient grocery planning."
+          ]
+        },
+        {
+          "id": "TASK_YOUTUBE_RANK",
+          "name": "youtube_rank",
+          "input_bindings": ["{{YOUTUBE_INPUT}}", "{{OUTPUT_LANGUAGE}}"],
+          "output_schema_ref": "YOUTUBE_RANK_SCHEMA",
+          "prompt": [
+            "Rank candidate YouTube videos for the given recipe.",
+            "Compute trust_score using clarity, repeatability, low_clickbait, authenticity, and safe handling indicators.",
+            "Compute match_score based on ingredient overlap and technique alignment.",
+            "Return ranked_videos with reasons."
+          ]
+        }
+      ]
+    }
+  }
+}
