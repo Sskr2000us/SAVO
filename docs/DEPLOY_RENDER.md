@@ -19,12 +19,27 @@
 
 3. **Configure Environment Variables:**
    In Render dashboard, add these secret environment variables:
-   - `SAVO_LLM_PROVIDER` = `mock` (or `openai`/`anthropic`)
-   - `OPENAI_API_KEY` = `sk-...` (if using OpenAI)
-   - `OPENAI_MODEL` = `gpt-4` (optional, defaults to gpt-4)
-   - `ANTHROPIC_API_KEY` = `sk-ant-...` (if using Anthropic)
-   - `ANTHROPIC_MODEL` = `claude-3-sonnet-20240229` (optional)
+   
+   **LLM Provider Configuration:**
+   - `SAVO_LLM_PROVIDER` = `mock` (or `openai`/`anthropic`/`google`)
+   - `SAVO_LLM_FALLBACK_PROVIDER` = `google` (optional, fallback on rate limits)
    - `LLM_TIMEOUT` = `60` (optional, defaults to 60 seconds)
+   
+   **OpenAI (if using):**
+   - `OPENAI_API_KEY` = `sk-...` (get from https://platform.openai.com/api-keys)
+   - `OPENAI_MODEL` = `gpt-4` (optional, defaults to gpt-4-turbo-preview)
+   
+   **Anthropic (if using):**
+   - `ANTHROPIC_API_KEY` = `sk-ant-...` (get from https://console.anthropic.com/account/keys)
+   - `ANTHROPIC_MODEL` = `claude-3-5-sonnet-20241022` (optional)
+   
+   **Google Gemini (if using or as fallback):**
+   - `GOOGLE_API_KEY` = `your-google-api-key` (get from https://makersuite.google.com/app/apikey)
+   - `GOOGLE_MODEL` = `gemini-1.5-pro` (optional, or `gemini-1.5-flash` for faster/cheaper)
+   
+   **Recommended Setup for Production:**
+   - Primary: `SAVO_LLM_PROVIDER=openai` or `anthropic`
+   - Fallback: `SAVO_LLM_FALLBACK_PROVIDER=google` (handles rate limits automatically)
 
 4. **Deploy:**
    - Click "Apply" and Render will build and deploy
@@ -174,6 +189,29 @@ For production, consider adding PostgreSQL:
 
 **Free tier sleeps:**
 - Render free tier sleeps after 15 min inactivity
+- First request after sleep takes ~30 seconds
+- Upgrade to paid tier ($7/month) for always-on service
+
+**Rate Limit Errors (HTTP 429):**
+- **OpenAI Free Tier:** 3 requests/minute, 200/day
+- **OpenAI Paid:** 500+ requests/day (increases with usage history)
+- **Google Gemini Free:** 15 requests/minute, 1500/day
+- **Solution 1:** Set `SAVO_LLM_FALLBACK_PROVIDER=google` to auto-fallback on 429
+- **Solution 2:** Add billing to OpenAI account for higher limits
+- **Solution 3:** Wait 1-2 minutes between requests on free tier
+- Check logs for: `Rate limit exceeded for provider: openai` → `Falling back to google`
+
+**LLM returns invalid JSON:**
+- Check Render logs for schema validation errors
+- Verify prompt pack is loading correctly (SAVO_PROMPT_PACK_PATH)
+- Schema validation errors trigger 1 retry automatically
+- If still failing, check `error_message` in response
+
+**Fallback not working:**
+- Verify `SAVO_LLM_FALLBACK_PROVIDER=google` is set
+- Ensure `GOOGLE_API_KEY` is configured
+- Check logs for "Fallback provider google also failed"
+- Fallback only triggers on 429, not timeouts/5xx errors
 - First request after sleep takes ~30 seconds to wake up
 - Upgrade to paid tier for always-on service
 
