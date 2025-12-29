@@ -159,7 +159,6 @@ async def _try_provider(
 
 
 def _build_error_response(output_schema_name: str, error_message: str, max_retries: int) -> Dict[str, Any]:
-def _build_error_response(output_schema_name: str, error_message: str, max_retries: int) -> Dict[str, Any]:
     """Build error response matching the output schema structure"""
     error_response = {
         "status": "error",
