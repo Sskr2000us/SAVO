@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../models/planning.dart';
+import '../theme/app_theme.dart';
+import '../widgets/savo_widgets.dart';
 import 'planning_results_screen.dart';
 import 'weekly_planner_screen.dart';
 import 'party_planner_screen.dart';
@@ -15,50 +17,62 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('SAVO'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'What would you like to cook today?',
-              style: Theme.of(context).textTheme.headlineSmall,
+            // Hero Card
+            HeroCard(
+              title: 'Cook Today',
+              subtitle: 'Transform your ingredients into delicious meals',
+              primaryButtonText: 'Plan Daily Menu',
+              secondaryButtonText: 'View Recipes',
+              onPrimaryTap: () => _planDaily(context),
+              onSecondaryTap: () {
+                // Navigate to recipes (future feature)
+              },
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Section header
+            Text(
+              'What would you like to plan?',
+              style: AppTypography.h2Style(),
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Planning options
             _PlanningOptionCard(
               title: 'Daily Menu',
               description: 'Plan today\'s meals',
               icon: Icons.today,
-              color: Colors.blue,
+              color: AppColors.primary,
               onTap: () => _planDaily(context),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
             _PlanningOptionCard(
               title: 'Weekly Planner',
               description: 'Plan 1-4 days ahead',
               icon: Icons.calendar_today,
-              color: Colors.green,
+              color: AppColors.secondary,
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => const WeeklyPlannerScreen(),
-                  ),
+                  AppMotion.createRoute(const WeeklyPlannerScreen()),
                 );
               },
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
             _PlanningOptionCard(
               title: 'Party Menu',
               description: 'Plan for guests',
               icon: Icons.celebration,
-              color: Colors.orange,
+              color: AppColors.accent,
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => const PartyPlannerScreen(),
-                  ),
+                  AppMotion.createRoute(const PartyPlannerScreen()),
                 );
               },
             ),
@@ -90,8 +104,8 @@ class HomeScreen extends StatelessWidget {
         final menuPlan = MenuPlanResponse.fromJson(response);
         Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => PlanningResultsScreen(
+          AppMotion.createRoute(
+            PlanningResultsScreen(
               menuPlan: menuPlan,
               planType: 'daily',
             ),
@@ -140,48 +154,44 @@ class _PlanningOptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 2,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 32),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.grey[600],
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.arrow_forward_ios, size: 16),
-            ],
+    return SavoCard(
+      elevated: true,
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Icon(icon, color: color, size: 32),
           ),
-        ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: AppTypography.bodyStyle().copyWith(
+                    fontWeight: AppTypography.semibold,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  description,
+                  style: AppTypography.captionStyle(),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.arrow_forward_ios,
+            size: 16,
+            color: AppColors.textSecondary,
+          ),
+        ],
       ),
     );
   }
