@@ -228,7 +228,12 @@ Mobile app lives in [apps/mobile](../apps/mobile).
 
 ## 6) Release packaging (MVP)
 
-- [ ] Configure environments (dev/stage/prod)
+- [x] Backend deployed to Render (https://savo-ynp1.onrender.com)
+  - [x] Auto-deploy from GitHub main branch
+  - [x] Mock LLM provider configured
+  - [x] All endpoints operational
+- [x] Flutter app configured to use Render backend URL
+- [ ] Configure additional environments (staging/prod with real LLM)
 - [ ] Add basic logging + request IDs on backend
 - [ ] Add crash reporting on mobile (optional but recommended)
 - [ ] Build Android APK / iOS TestFlight

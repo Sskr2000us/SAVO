@@ -28,6 +28,25 @@ class OpenAIClient(LlmClient):
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON using OpenAI with structured output"""
         
+        # Inject schema into messages for better adherence
+        schema_instruction = {
+            "role": "system",
+            "content": (
+                f"You MUST return a JSON object that EXACTLY matches this schema structure. "
+                f"All field names, types, and nesting must be EXACTLY as specified:\n\n"
+                f"{json.dumps(schema, indent=2)}\n\n"
+                f"CRITICAL RULES:\n"
+                f"- Use EXACT field names from schema (e.g., 'total_calories_kcal' not 'total_calories')\n"
+                f"- If schema says 'array', return [], not an object\n"
+                f"- Include ALL required properties\n"
+                f"- Do NOT add extra properties not in schema\n"
+                f"- Match types exactly (string, number, boolean, array, object)"
+            )
+        }
+        
+        # Insert schema instruction after system message
+        enhanced_messages = [messages[0], schema_instruction] + messages[1:]
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
@@ -37,7 +56,7 @@ class OpenAIClient(LlmClient):
                 },
                 json={
                     "model": self.model,
-                    "messages": messages,
+                    "messages": enhanced_messages,
                     "response_format": {"type": "json_object"},
                     "temperature": 0.7,
                     "max_tokens": 4096,
