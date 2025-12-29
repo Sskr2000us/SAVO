@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 import json
 import logging
 
-from app.core.llm_client import get_llm_client
+from app.core.llm_client import get_llm_client, RateLimitException
 from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
 from app.core.schema_validation import validate_json, SchemaValidationException
 from app.core.settings import settings
@@ -39,11 +39,38 @@ async def run_task(
     - If LLM returns non-JSON or schema-invalid on first try: send one corrective retry
     - If still invalid after retry: return status="error" with error details
     - If LLM cannot fulfill request: return status="needs_clarification" with questions
+    - If primary provider hits 429 rate limit: fallback to configured fallback provider (429 only)
     """
     schema = get_schema(output_schema_name)
     messages = _build_messages(task_name=task_name, context=context)
-    client = get_llm_client(settings.llm_provider)
     
+    # Try primary provider first
+    result = await _try_provider(
+        provider=settings.llm_provider,
+        messages=messages,
+        schema=schema,
+        task_name=task_name,
+        output_schema_name=output_schema_name,
+        max_retries=max_retries
+    )
+    
+    return result
+
+
+async def _try_provider(
+    *,
+    provider: str,
+    messages: list[dict[str, str]],
+    schema: dict[str, Any],
+    task_name: str,
+    output_schema_name: str,
+    max_retries: int
+) -> Dict[str, Any]:
+    """
+    Try a specific LLM provider with schema validation and retry logic.
+    Raises RateLimitException if provider hits 429 after all retries.
+    """
+    client = get_llm_client(provider)
     last_error: Optional[str] = None
     
     for attempt in range(max_retries + 1):
@@ -58,16 +85,43 @@ async def run_task(
                 status = result.get("status")
                 if status in ["needs_clarification", "error"]:
                     # LLM is reporting it cannot fulfill request - this is valid
-                    logger.info(f"Task {task_name} returned status={status}")
+                    logger.info(f"Task {task_name} (provider={provider}) returned status={status}")
                     return result
             
             # Validation passed, return result
-            logger.info(f"Task {task_name} completed successfully on attempt {attempt + 1}")
+            logger.info(f"Task {task_name} (provider={provider}) completed successfully on attempt {attempt + 1}")
             return result
+            
+        except RateLimitException as e:
+            # Rate limit hit - try fallback if configured
+            logger.warning(f"Task {task_name} hit rate limit on {provider}: {str(e)}")
+            
+            if settings.llm_fallback_provider and settings.llm_fallback_provider != provider:
+                logger.info(f"Falling back from {provider} to {settings.llm_fallback_provider}")
+                try:
+                    # Try fallback provider (no additional retries for fallback)
+                    fallback_result = await _try_provider(
+                        provider=settings.llm_fallback_provider,
+                        messages=messages,
+                        schema=schema,
+                        task_name=task_name,
+                        output_schema_name=output_schema_name,
+                        max_retries=0  # No retries for fallback
+                    )
+                    logger.info(f"Task {task_name} succeeded with fallback provider {settings.llm_fallback_provider}")
+                    return fallback_result
+                except Exception as fallback_error:
+                    logger.error(f"Fallback provider {settings.llm_fallback_provider} also failed: {str(fallback_error)}")
+                    last_error = f"Primary provider ({provider}) rate limited, fallback provider ({settings.llm_fallback_provider}) failed: {str(fallback_error)}"
+            else:
+                last_error = f"Rate limit exceeded on {provider} and no fallback configured"
+            
+            # No fallback available or fallback failed
+            break
             
         except SchemaValidationException as e:
             last_error = f"Schema validation failed: {', '.join(e.errors)}"
-            logger.warning(f"Task {task_name} attempt {attempt + 1} failed: {last_error}")
+            logger.warning(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}")
             
             if attempt < max_retries:
                 # Add corrective instruction for retry
@@ -81,7 +135,7 @@ async def run_task(
                 
         except json.JSONDecodeError as e:
             last_error = f"Invalid JSON returned: {str(e)}"
-            logger.warning(f"Task {task_name} attempt {attempt + 1} failed: {last_error}")
+            logger.warning(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}")
             
             if attempt < max_retries:
                 correction = (
@@ -94,18 +148,23 @@ async def run_task(
                 
         except Exception as e:
             last_error = f"Unexpected error: {str(e)}"
-            logger.error(f"Task {task_name} attempt {attempt + 1} failed with unexpected error", exc_info=True)
+            logger.error(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed with unexpected error", exc_info=True)
             if attempt < max_retries:
                 continue
     
     # All retries exhausted - return error response in schema format
-    logger.error(f"Task {task_name} failed after {max_retries + 1} attempts: {last_error}")
+    logger.error(f"Task {task_name} (provider={provider}) failed after {max_retries + 1} attempts: {last_error}")
     
-    # Return minimal error response matching SAVO_STATUS_SCHEMA
+    return _build_error_response(output_schema_name, last_error, max_retries)
+
+
+def _build_error_response(output_schema_name: str, error_message: str, max_retries: int) -> Dict[str, Any]:
+def _build_error_response(output_schema_name: str, error_message: str, max_retries: int) -> Dict[str, Any]:
+    """Build error response matching the output schema structure"""
     error_response = {
         "status": "error",
         "needs_clarification_questions": [],
-        "error_message": f"Failed to generate valid response after {max_retries + 1} attempts. {last_error}"
+        "error_message": f"Failed to generate valid response after {max_retries + 1} attempts. {error_message}"
     }
     
     # For MENU_PLAN_SCHEMA, add required fields

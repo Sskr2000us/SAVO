@@ -27,6 +27,7 @@ def _default_prompt_pack_path() -> str:
 
 class Settings(BaseModel):
     llm_provider: str = os.getenv("SAVO_LLM_PROVIDER", "mock")
+    llm_fallback_provider: str = os.getenv("SAVO_LLM_FALLBACK_PROVIDER", "")
     prompt_pack_path: str = os.getenv("SAVO_PROMPT_PACK_PATH", _default_prompt_pack_path())
 
 

@@ -8,6 +8,14 @@ from typing import Any
 import httpx
 
 
+class RateLimitException(Exception):
+    """Raised when LLM provider returns 429 rate limit error"""
+    def __init__(self, provider: str, retry_after: int | None = None):
+        self.provider = provider
+        self.retry_after = retry_after
+        super().__init__(f"Rate limit exceeded for provider: {provider}")
+
+
 class LlmClient:
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -75,13 +83,25 @@ class OpenAIClient(LlmClient):
                     return json.loads(content)
                     
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429 and attempt < max_retries - 1:
-                        # Rate limited - wait with exponential backoff
-                        wait_time = 2 ** attempt  # 1s, 2s, 4s
-                        import asyncio
-                        await asyncio.sleep(wait_time)
-                        continue
-                    raise  # Re-raise if not 429 or final attempt
+                    if e.response.status_code == 429:
+                        # Rate limited
+                        retry_after = None
+                        if "retry-after" in e.response.headers:
+                            try:
+                                retry_after = int(e.response.headers["retry-after"])
+                            except ValueError:
+                                pass
+                        
+                        if attempt < max_retries - 1:
+                            # Wait with exponential backoff (respect Retry-After if present)
+                            wait_time = retry_after if retry_after else (2 ** attempt)  # 1s, 2s, 4s
+                            import asyncio
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            # Final attempt exhausted, raise RateLimitException for fallback
+                            raise RateLimitException("openai", retry_after)
+                    raise  # Re-raise if not 429
 
 
 class AnthropicClient(LlmClient):
