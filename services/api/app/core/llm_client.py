@@ -223,7 +223,7 @@ class GoogleClient(LlmClient):
             for attempt in range(max_retries):
                 try:
                     response = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                        f"https://generativelanguage.googleapis.com/v1/models/{self.model}:generateContent",
                         headers={
                             "Content-Type": "application/json",
                         },
