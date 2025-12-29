@@ -48,27 +48,40 @@ class OpenAIClient(LlmClient):
         enhanced_messages = [messages[0], schema_instruction] + messages[1:]
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": enhanced_messages,
-                    "response_format": {"type": "json_object"},
-                    "temperature": 0.7,
-                    "max_tokens": 4096,
-                }
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            # Extract content from OpenAI response
-            content = result["choices"][0]["message"]["content"]
-            return json.loads(content)
+            # Retry logic for rate limits
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": enhanced_messages,
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.7,
+                            "max_tokens": 4096,
+                        }
+                    )
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Extract content from OpenAI response
+                    content = result["choices"][0]["message"]["content"]
+                    return json.loads(content)
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429 and attempt < max_retries - 1:
+                        # Rate limited - wait with exponential backoff
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                        continue
+                    raise  # Re-raise if not 429 or final attempt
 
 
 class AnthropicClient(LlmClient):
