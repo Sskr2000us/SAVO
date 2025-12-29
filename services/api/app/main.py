@@ -23,6 +23,16 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
+    @app.get("/")
+    def root():
+        return {
+            "name": "SAVO API",
+            "version": "0.1.0",
+            "status": "running",
+            "docs": "/docs",
+            "health": "/health"
+        }
+
     @app.get("/health")
     def health():
         return {"status": "ok", "llm_provider": settings.llm_provider}
