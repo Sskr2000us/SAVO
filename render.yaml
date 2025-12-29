@@ -12,15 +12,18 @@ services:
     buildCommand: cd services/api && pip install -r requirements.txt
     startCommand: cd services/api && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: SAVO_LLM_PROVIDER
-        value: mock
       - key: SAVO_PROMPT_PACK_PATH
         value: ../../docs/spec/prompt-pack.gpt-5.2.json
+      # SAVO_LLM_PROVIDER set in Render dashboard (google, openai, or anthropic)
       # Add your API keys as secret environment variables in Render dashboard:
+      # - SAVO_LLM_PROVIDER (set to: google)
+      # - GOOGLE_API_KEY (required for Google Gemini)
+      # - GOOGLE_MODEL (default: gemini-1.5-pro)
       # - OPENAI_API_KEY (if using OpenAI)
       # - OPENAI_MODEL (default: gpt-4)
       # - ANTHROPIC_API_KEY (if using Anthropic)
       # - ANTHROPIC_MODEL (default: claude-3-sonnet-20240229)
+      # - SAVO_LLM_FALLBACK_PROVIDER (optional: set to fallback provider)
       # - LLM_TIMEOUT (default: 60)
     healthCheckPath: /health
 
