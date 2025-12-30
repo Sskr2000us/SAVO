@@ -127,7 +127,10 @@ async def _try_provider(
                 # Add corrective instruction for retry
                 correction = (
                     f"CORRECTION REQUIRED: Your previous response had schema validation errors: {last_error}. "
-                    f"Please generate a valid response that strictly matches the JSON schema."
+                    f"Please generate a valid response that strictly matches the JSON schema. "
+                    f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
+                    f"For each recipe: youtube_references=[]; new_ingredients_optional=[]; steps length 1-2 with tips=[]; "
+                    f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will correct my response."})
                 messages.append({"role": "user", "content": correction})
@@ -140,7 +143,10 @@ async def _try_provider(
             if attempt < max_retries:
                 correction = (
                     f"CORRECTION REQUIRED: Your previous response was not valid JSON. "
-                    f"Error: {str(e)}. Please return ONLY valid JSON matching the schema."
+                    f"Error: {str(e)}. Please return ONLY valid JSON matching the schema. "
+                    f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
+                    f"For each recipe: youtube_references=[]; new_ingredients_optional=[]; steps length 1-2 with tips=[]; "
+                    f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will return valid JSON."})
                 messages.append({"role": "user", "content": correction})

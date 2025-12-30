@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
+import 'scan_ingredients_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -64,7 +65,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final quantityController = TextEditingController();
     final unitController = TextEditingController();
     String selectedStorage = 'refrigerator';
-    String selectedState = 'fresh';
+    String selectedState = 'raw';
 
     showDialog(
       context: context,
@@ -142,6 +143,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
       appBar: AppBar(
         title: const Text('Inventory'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.photo_camera),
+            tooltip: 'Scan ingredients',
+            onPressed: () async {
+              final added = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ScanIngredientsScreen(),
+                ),
+              );
+              if (added == true) {
+                _loadInventory();
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadInventory,

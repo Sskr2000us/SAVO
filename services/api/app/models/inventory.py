@@ -1,5 +1,8 @@
-"""
-Inventory models for E2 - inventory management
+"""Inventory models.
+
+Includes:
+- E2 inventory management
+- ingredient scan (pantry/fridge) candidates
 """
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
@@ -73,3 +76,24 @@ class NormalizeInventoryResponse(BaseModel):
     """Response from inventory normalization (NORMALIZATION_OUTPUT_SCHEMA)"""
     normalized_inventory: List[NormalizedInventoryItem]
     staples_policy_applied: StaplesPolicyApplied
+
+
+class ScannedIngredientCandidate(BaseModel):
+    """Single ingredient candidate detected from an image."""
+
+    ingredient: str = Field(..., description="Detected ingredient name")
+    quantity_estimate: Optional[str] = Field(
+        None, description="Rough quantity estimate, as a user-editable string"
+    )
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Detection confidence")
+    storage_hint: Optional[Literal["pantry", "refrigerator", "freezer"]] = Field(
+        None, description="Optional storage hint based on context"
+    )
+
+
+class ScanIngredientsResponse(BaseModel):
+    """Response from ingredient scanning."""
+
+    status: Literal["ok", "error"] = "ok"
+    scanned_items: List[ScannedIngredientCandidate] = Field(default_factory=list)
+    error_message: Optional[str] = None

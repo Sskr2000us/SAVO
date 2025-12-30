@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import ast
+import base64
 import json
 import logging
 import os
@@ -260,10 +261,13 @@ class GoogleClient(LlmClient):
         system_parts.append(
             "COMPACTNESS REQUIREMENTS (must follow): "
             "- Use EXACTLY 2 recipe_options per course (not 3). "
-            "- Use EXACTLY 1 youtube_references entry per recipe (array length 1). "
-            "- Keep steps to <= 6 per recipe; keep each instruction <= 140 chars. "
-            "- Keep ai_summary.one_minute_version <= 240 chars; key_techniques and common_mistakes <= 3 items each. "
-            "- Avoid long narratives; keep all strings concise."
+            "- Set youtube_references to [] for EVERY recipe (empty array). "
+            "- Set new_ingredients_optional to [] unless absolutely necessary. "
+            "- Use 1–2 steps per recipe; each instruction <= 120 chars; tips must be []. "
+            "- Keep health_fit.flags=[] and health_fit.adjustments=[]; scores may be {}. "
+            "- Keep leftover_forecast.reuse_ideas to [] and expected_leftover_servings=0 unless clearly needed. "
+            "- Keep preservation_guidance.reheat_methods to [] or 1 item; quality_notes <= 80 chars. "
+            "- Prefer short strings everywhere; do NOT pretty-print; output minified JSON with no newlines."
         )
         
         # Gemini format: combine all into a single user message
@@ -384,6 +388,95 @@ class GoogleClient(LlmClient):
                         await asyncio.sleep(wait_time)
                         continue
                     raise  # Re-raise if not 429 or final attempt
+
+    async def generate_json_multimodal(
+        self,
+        *,
+        system: str,
+        user: str,
+        inline_images: list[dict[str, str]],
+        max_output_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> Any:
+        """Generate JSON from text + one or more inline images.
+
+        inline_images items must be: {"mimeType": "image/jpeg", "data": "<base64>"}
+        """
+
+        system_text = (system or "").strip()
+        user_text = (user or "").strip()
+
+        parts: list[dict[str, Any]] = []
+        combined = ""
+        if system_text:
+            combined += "SYSTEM INSTRUCTIONS:\n" + system_text + "\n\n"
+        combined += "USER REQUEST:\n" + user_text
+        parts.append({"text": combined})
+
+        # Add images as inlineData parts
+        for img in inline_images or []:
+            mime = (img.get("mimeType") or "image/jpeg").strip()
+            data = (img.get("data") or "").strip()
+            if not data:
+                continue
+            # Defensive: accept raw bytes encoded accidentally
+            if not isinstance(data, str):
+                data = base64.b64encode(data).decode("ascii")
+            parts.append({"inlineData": {"mimeType": mime, "data": data}})
+
+        contents = [{"role": "user", "parts": parts}]
+
+        generation_config: dict[str, Any] = {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+            "responseMimeType": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                headers={"Content-Type": "application/json"},
+                params={"key": self.api_key},
+                json={
+                    "contents": contents,
+                    "generationConfig": generation_config,
+                },
+            )
+
+            # Some models reject responseMimeType; retry once without it.
+            if response.status_code == 400:
+                body_text = response.text or ""
+                if "responseMimeType" in body_text or "response_mime_type" in body_text:
+                    generation_config.pop("responseMimeType", None)
+                    response = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                        headers={"Content-Type": "application/json"},
+                        params={"key": self.api_key},
+                        json={
+                            "contents": contents,
+                            "generationConfig": generation_config,
+                        },
+                    )
+
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"Google API error response: {error_detail}")
+                raise httpx.HTTPStatusError(
+                    f"Google API error: {error_detail}",
+                    request=response.request,
+                    response=response,
+                )
+
+            result = response.json()
+            if "candidates" not in result or not result["candidates"]:
+                raise ValueError(f"No candidates in Gemini response: {result}")
+
+            candidate = result["candidates"][0]
+            parts_out = candidate.get("content", {}).get("parts", [])
+            text_parts = [p.get("text", "") for p in parts_out if isinstance(p, dict) and p.get("text")]
+            content_text = "\n".join(text_parts).strip()
+
+            return _parse_json_from_text(content_text)
 
 
 class MockLlmClient(LlmClient):

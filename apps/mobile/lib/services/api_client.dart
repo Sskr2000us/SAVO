@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 class ApiClient {
   final String baseUrl;
@@ -36,6 +37,36 @@ class ApiClient {
     } else {
       throw Exception('Failed to post data: ${response.statusCode}');
     }
+  }
+
+  Future<Map<String, dynamic>> postMultipart(
+    String endpoint, {
+    required XFile file,
+    String fieldName = 'image',
+    Map<String, String> fields = const {},
+  }) async {
+    final uri = Uri.parse('$baseUrl$endpoint');
+    final request = http.MultipartRequest('POST', uri);
+
+    request.fields.addAll(fields);
+
+    final bytes = await file.readAsBytes();
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        fieldName,
+        bytes,
+        filename: file.name,
+      ),
+    );
+
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception('Failed to post multipart: ${response.statusCode} ${response.body}');
   }
 
   Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body) async {
