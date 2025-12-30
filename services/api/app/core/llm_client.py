@@ -120,7 +120,7 @@ class OpenAIClient(LlmClient):
                             "messages": enhanced_messages,
                             "response_format": {"type": "json_object"},
                             "temperature": 0.7,
-                            "max_tokens": 4096,
+                            "max_tokens": 8192,  # Increased to handle full meal plans
                         }
                     )
                     
@@ -129,6 +129,13 @@ class OpenAIClient(LlmClient):
                     
                     # Extract content from OpenAI response
                     content = result["choices"][0]["message"]["content"]
+                    
+                    # Check if response was truncated
+                    finish_reason = result["choices"][0].get("finish_reason")
+                    if finish_reason == "length":
+                        logger.warning(f"OpenAI response truncated (finish_reason=length). Increase max_tokens.")
+                        raise ValueError("Response truncated - increase max_tokens")
+                    
                     return json.loads(content)
                     
                 except httpx.HTTPStatusError as e:
