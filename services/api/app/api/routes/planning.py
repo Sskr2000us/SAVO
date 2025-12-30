@@ -18,6 +18,58 @@ from app.core.cuisine_metadata import get_cuisine_by_id, CUISINE_METADATA
 router = APIRouter()
 
 
+def _inventory_for_llm(*, storage_inventory, request_inventory) -> list[dict]:
+    """Return inventory in the prompt-pack friendly shape.
+
+    The prompt pack expects inventory items like:
+    {inventory_id, canonical_name, amount, unit, ...}
+    """
+    if isinstance(request_inventory, dict):
+        available = request_inventory.get("available_ingredients")
+        if isinstance(available, list) and available:
+            items: list[dict] = []
+            for i, name in enumerate(available, start=1):
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                canonical = name.strip()
+                items.append(
+                    {
+                        "inventory_id": f"req_{i}",
+                        "canonical_name": canonical,
+                        "display_name": canonical,
+                        "amount": 1,
+                        "unit": "pcs",
+                        "state": "raw",
+                        "storage": "pantry",
+                        "freshness_days_remaining": None,
+                        "notes": None,
+                    }
+                )
+            return items
+
+        items_payload = request_inventory.get("items")
+        if isinstance(items_payload, list) and items_payload:
+            return [i for i in items_payload if isinstance(i, dict)]
+
+    # Default: map storage inventory model -> prompt-pack keys
+    mapped: list[dict] = []
+    for item in storage_inventory:
+        mapped.append(
+            {
+                "inventory_id": getattr(item, "inventory_id", None),
+                "canonical_name": getattr(item, "canonical_name", None),
+                "display_name": getattr(item, "display_name", None) or getattr(item, "canonical_name", None),
+                "amount": getattr(item, "quantity", None),
+                "unit": getattr(item, "unit", None),
+                "state": getattr(item, "state", "raw"),
+                "storage": getattr(item, "storage", "pantry"),
+                "freshness_days_remaining": getattr(item, "freshness_days_remaining", None),
+                "notes": getattr(item, "notes", None),
+            }
+        )
+    return mapped
+
+
 def _build_planning_context(
     request,
     plan_type: str,
@@ -48,16 +100,12 @@ def _build_planning_context(
     output_lang = request.output_language or config.global_settings.primary_language
     measurement = request.measurement_system or config.global_settings.measurement_system
     
-    # Use request inventory/family_profile if provided, otherwise use storage
-    inventory_data = request.inventory or {"available_ingredients": [item.canonical_name for item in inventory]}
-    family_data = request.family_profile or config.model_dump(mode='json').get("family_profile", {})
-    
+    inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
+
     context = {
         "app_configuration": config.model_dump(mode='json'),
         "session_request": request.model_dump(mode='json'),
-        "inventory": inventory_data,
-        "family_profile": family_data,
-        "cuisine_preferences": request.cuisine_preferences or [],
+        "inventory": inventory_items,
         "cuisine_metadata": CUISINE_METADATA,
         "history_context": {
             "recent_recipes": [h for h in history[:20]],
