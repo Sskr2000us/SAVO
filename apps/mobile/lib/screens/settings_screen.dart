@@ -405,7 +405,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           member['name']?.isEmpty ?? true
               ? 'New Family Member'
               : member['name'],
-          style: AppTypography.h3Style(),
+          style: AppTypography.h2Style(),
         ),
         subtitle: Text(
           '${member['age'] ?? 30} years old • ${member['age_category'] ?? 'adult'}',
@@ -678,9 +678,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             return FilterChip(
               label: Text(option.replaceAll('_', ' ')),
               selected: isSelected,
-              onSelected: (selected) {
-                final newSelected = List<String>.from(this.selected);
-                if (selected) {
+              onSelected: (isNowSelected) {
+                final newSelected = List<String>.from(selected);
+                if (isNowSelected) {
                   newSelected.add(option);
                 } else {
                   newSelected.remove(option);
