@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import json
+import logging
 import os
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitException(Exception):
