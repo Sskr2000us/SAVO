@@ -75,21 +75,99 @@ netlify deploy --prod
 
 ## Option 3: Vercel
 
-### Step 1: Build Flutter Web
-```bash
-cd apps/mobile
+### Issue: Flutter Not Found During Build
+The error `flutter: command not found` happens because the install command and build command run in separate shell sessions.
+
+### Solution A: Combined Build Command (Easiest)
+
+1. **Go to [Vercel Dashboard](https://vercel.com/dashboard)**
+2. Click **"Add New..." → "Project"**
+3. **Import your GitHub repository**: `Sskr2000us/SAVO`
+4. **Configure project**:
+   - **Project Name**: `savo-web`
+   - **Framework Preset**: `Other`
+   - **Root Directory**: `apps/mobile`
+   - **Build Command**: 
+     ```bash
+     curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz && tar xf flutter_linux_3.16.0-stable.tar.xz && ./flutter/bin/flutter config --enable-web && ./flutter/bin/flutter build web --release
+     ```
+   - **Output Directory**: `build/web`
+   - **Install Command**: Leave empty
+
+5. Click **"Deploy"**
+
+### Solution B: Use vercel.json + package.json (Cleaner)
+
+**Step 1: Create configuration files**
+
+Create `apps/mobile/vercel.json`:
+```json
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build/web"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
+```
+
+Create `apps/mobile/package.json`:
+```json
+{
+  "name": "savo-mobile",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz && tar xf flutter_linux_3.16.0-stable.tar.xz && ./flutter/bin/flutter config --enable-web && ./flutter/bin/flutter build web --release"
+  }
+}
+```
+
+**Step 2: Commit and push**
+```powershell
+cd C:\Users\sskr2\SAVO
+git add apps\mobile\vercel.json apps\mobile\package.json
+git commit -m "Add Vercel configuration for Flutter web deployment"
+git push
+```
+
+**Step 3: Deploy on Vercel**
+- Go to [Vercel Dashboard](https://vercel.com/dashboard)
+- Import repository
+- Vercel will auto-detect `package.json` and use `npm run build`
+- **Root Directory**: `apps/mobile`
+- Click **"Deploy"**
+
+### Solution C: Manual Deploy (Quick Test)
+
+**Step 1: Build Flutter Web locally**
+```powershell
+cd C:\Users\sskr2\SAVO\apps\mobile
+flutter clean
 flutter build web --release
 ```
 
-### Step 2: Deploy to Vercel
-```bash
-# Install Vercel CLI
+**Step 2: Deploy to Vercel**
+```powershell
+# Install Vercel CLI (if not already installed)
 npm install -g vercel
 
-# Deploy
-cd build/web
+# Deploy from local build
+cd build\web
 vercel --prod
 ```
+
+Follow the prompts to create a new project.
 
 **Result**: App live at `https://your-site.vercel.app`
 
