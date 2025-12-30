@@ -56,6 +56,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         setState(() {
           _rankedVideos = [];
           _loadingVideos = false;
+          _videoError = 'No YouTube videos found for "${widget.recipe.getLocalizedName('en')}"';
         });
         return;
       }
