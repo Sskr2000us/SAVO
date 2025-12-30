@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "SAVO Flutter web application",
   "scripts": {
-    "build": "curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz && tar xf flutter_linux_3.16.0-stable.tar.xz && ./flutter/bin/flutter config --enable-web && ./flutter/bin/flutter build web --release"
+    "build": "curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz && tar xf flutter_linux_3.16.0-stable.tar.xz && export PUB_CACHE=./.pub-cache && ./flutter/bin/flutter config --enable-web --no-analytics && ./flutter/bin/flutter build web --release"
   }
 }
