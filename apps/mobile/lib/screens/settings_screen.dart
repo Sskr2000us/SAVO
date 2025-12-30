@@ -109,9 +109,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _saveConfiguration() async {
-    if (!_formKey.currentState!.validate()) return;
-    
+  Future<void> _saveHouseholdProfile() async {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
@@ -145,15 +143,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await apiClient.post('/profile/household', householdData, headers: headers);
       }
       
-      // Save family members to database
-      // Delete existing members first (simplified approach)
-      final existingMembers = await apiClient.get('/profile/family-members', 
-        headers: {'X-User-Id': 'demo-user-123'});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Household settings saved to database!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save household settings: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _saveFamilyMembers() async {
+    setState(() => _isSaving = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final headers = {'X-User-Id': 'demo-user-123'};
+      
+      // Delete existing members first
+      final existingMembers = await apiClient.get('/profile/family-members', headers: headers);
       
       if (existingMembers?['members'] is List) {
         for (var member in existingMembers['members']) {
-          await apiClient.delete('/profile/family-members/${member['id']}',
-            headers: {'X-User-Id': 'demo-user-123'});
+          await apiClient.delete('/profile/family-members/${member['id']}', headers: headers);
         }
       }
       
@@ -171,14 +194,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'food_dislikes': member['food_dislikes'] ?? [],
         };
         
-        await apiClient.post('/profile/family-members', memberData,
-          headers: {'X-User-Id': 'demo-user-123'});
+        await apiClient.post('/profile/family-members', memberData, headers: headers);
       }
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Profile saved to database successfully!'),
+            content: Text('Family members saved to database!'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -187,13 +209,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save to database: $e'),
+            content: Text('Failed to save family members: $e'),
             backgroundColor: AppColors.danger,
           ),
         );
       }
     } finally {
       setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _saveConfiguration() async {
+    // Save both household and family members
+    await _saveHouseholdProfile();
+    if (mounted && !_isSaving) {
+      await _saveFamilyMembers();
     }
   }
 
@@ -283,6 +313,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           items: const ['western', 'indian', 'asian', 'middle_eastern', 'mediterranean'],
                           onChanged: (value) => setState(() => _culture = value!),
                         ),
+                        const SizedBox(height: AppSpacing.md),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Regional Settings'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -312,6 +355,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           value: _dinnerTime,
                           hint: '18:00-21:00',
                           onChanged: (value) => _dinnerTime = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Meal Times'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -350,6 +406,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           min: 1,
                           max: 5,
                           onChanged: (value) => setState(() => _dinnerCourses = value),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Meal Preferences'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -403,6 +472,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       final member = entry.value;
                       return _buildFamilyMemberCard(index, member);
                     }),
+
+                  // Save Family Members button
+                  if (_familyMembers.isNotEmpty) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _saveFamilyMembers,
+                        icon: const Icon(Icons.save),
+                        label: const Text('Save Family Members'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.secondary,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                  ],
 
                   const SizedBox(height: AppSpacing.xl),
                 ],
