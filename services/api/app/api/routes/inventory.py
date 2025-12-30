@@ -128,9 +128,9 @@ async def post_scan_ingredients(
         return ScanIngredientsResponse(
             status="ok",
             scanned_items=[
-                {"ingredient": "tomato", "quantity_estimate": "4 pcs", "confidence": 0.91, "storage_hint": "refrigerator"},
-                {"ingredient": "onion", "quantity_estimate": "2 pcs", "confidence": 0.86, "storage_hint": "pantry"},
-                {"ingredient": "eggs", "quantity_estimate": "6 pcs", "confidence": 0.82, "storage_hint": "refrigerator"},
+                {"ingredient": "tomato", "quantity_estimate": "4 pcs", "confidence": 0.91, "storage_hint": "fridge"},
+                {"ingredient": "onion", "quantity_estimate": "2 pcs", "confidence": 0.88, "storage_hint": "pantry"},
+                {"ingredient": "eggs", "quantity_estimate": "6 pcs", "confidence": 0.82, "storage_hint": "fridge"},
             ],
         )
 
@@ -160,7 +160,7 @@ async def post_scan_ingredients(
         "- ingredient (string): The ingredient name (e.g., 'mozzarella cheese', 'olive oil', 'barilla pasta', 'garlic powder')\n"
         "- quantity_estimate (string|null): Estimated quantity if visible (e.g., '1 bottle', '500g package', '1 jar')\n"
         "- confidence (number): Your confidence 0.0-1.0 (be conservative: 0.95+ for clearly readable labels, 0.7-0.9 for recognizable items, 0.5-0.7 for partially visible)\n"
-        "- storage_hint (string|null): Where to store: 'pantry', 'refrigerator', 'freezer', or null if unsure\n\n"
+        "- storage_hint (string|null): Where to store: 'pantry', 'fridge', 'freezer', or null if unsure\n\n"
         "IMPORTANT:\n"
         "- Carefully READ all visible text on packages, labels, bottles, and jars\n"
         "- List up to 30 items (prioritize clearly visible items first)\n"

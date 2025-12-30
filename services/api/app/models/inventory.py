@@ -16,7 +16,7 @@ class InventoryItemBase(BaseModel):
     quantity: float = Field(..., ge=0, description="Quantity available")
     unit: str = Field(..., description="Unit of measurement (g, kg, pcs, cups, etc.)")
     state: Literal["raw", "cooked", "leftover", "frozen"] = Field(default="raw")
-    storage: Literal["pantry", "refrigerator", "freezer"] = Field(default="pantry")
+    storage: Literal["pantry", "fridge", "freezer"] = Field(default="pantry")
     freshness_days_remaining: Optional[int] = Field(None, ge=0, description="Days until expiry")
     added_date: Optional[datetime] = Field(None, description="When item was added")
     notes: Optional[str] = Field(None, description="User notes")
@@ -39,7 +39,7 @@ class InventoryItemUpdate(BaseModel):
     quantity: Optional[float] = Field(None, ge=0)
     unit: Optional[str] = None
     state: Optional[Literal["raw", "cooked", "leftover", "frozen"]] = None
-    storage: Optional[Literal["pantry", "refrigerator", "freezer"]] = None
+    storage: Optional[Literal["pantry", "fridge", "freezer"]] = None
     freshness_days_remaining: Optional[int] = Field(None, ge=0)
     notes: Optional[str] = None
 
@@ -67,7 +67,7 @@ class NormalizedInventoryItem(BaseModel):
     quantity: float
     unit: str
     state: Literal["raw", "cooked", "leftover", "frozen"]
-    storage: Literal["pantry", "refrigerator", "freezer"]
+    storage: Literal["pantry", "fridge", "freezer"]
     freshness_days_remaining: int
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -86,7 +86,7 @@ class ScannedIngredientCandidate(BaseModel):
         None, description="Rough quantity estimate, as a user-editable string"
     )
     confidence: float = Field(..., ge=0.0, le=1.0, description="Detection confidence")
-    storage_hint: Optional[Literal["pantry", "refrigerator", "freezer"]] = Field(
+    storage_hint: Optional[Literal["pantry", "fridge", "freezer"]] = Field(
         None, description="Optional storage hint based on context"
     )
 
