@@ -26,8 +26,19 @@ def _default_prompt_pack_path() -> str:
 
 
 class Settings(BaseModel):
+    # Legacy provider setting (kept for backward compatibility)
     llm_provider: str = os.getenv("SAVO_LLM_PROVIDER", "mock")
     llm_fallback_provider: str = os.getenv("SAVO_LLM_FALLBACK_PROVIDER", "")
+    
+    # Dual-provider system for optimal performance
+    # Vision: Google Gemini excels at image understanding
+    # Reasoning: OpenAI GPT excels at structured JSON and reasoning
+    vision_provider: str = os.getenv("SAVO_VISION_PROVIDER", "google")
+    reasoning_provider: str = os.getenv(
+        "SAVO_REASONING_PROVIDER",
+        os.getenv("SAVO_LLM_PROVIDER", "openai")  # Fallback to legacy for compatibility
+    )
+    
     prompt_pack_path: str = os.getenv("SAVO_PROMPT_PACK_PATH", _default_prompt_pack_path())
 
 

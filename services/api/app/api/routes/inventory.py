@@ -18,7 +18,8 @@ from app.models.inventory import (
 from app.core.storage import get_storage
 from app.core.orchestrator import normalize_inventory
 from app.core.settings import settings
-from app.core.llm_client import GoogleClient
+from app.core.llm_client import GoogleClient, get_vision_client
+from app.core.settings import settings
 
 router = APIRouter()
 
@@ -158,14 +159,22 @@ async def post_scan_ingredients(
         user += f"\nContext hint: storage_hint={storage_hint}."
 
     try:
-        client = GoogleClient()
-        result = await client.generate_json_multimodal(
-            system=system,
-            user=user,
-            inline_images=[{"mimeType": mime_type, "data": b64}],
-            max_output_tokens=1024,
-            temperature=0.2,
-        )
+        # Use vision provider (Google Gemini Vision by default)
+        # Optimized for image understanding and ingredient detection
+        client = get_vision_client()
+        
+        # For Google, use the multimodal generation method
+        if isinstance(client, GoogleClient):
+            result = await client.generate_json_multimodal(
+                system=system,
+                user=user,
+                inline_images=[{"mimeType": mime_type, "data": b64}],
+                max_output_tokens=1024,
+                temperature=0.2,
+            )
+        else:
+            # Future: Add OpenAI Vision support here
+            raise NotImplementedError(f"Vision provider {settings.vision_provider} not yet implemented for scanning")
 
         scanned_items = []
         if isinstance(result, dict):

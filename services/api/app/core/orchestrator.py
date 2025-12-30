@@ -44,9 +44,10 @@ async def run_task(
     schema = get_schema(output_schema_name)
     messages = _build_messages(task_name=task_name, context=context)
     
-    # Try primary provider first
+    # Use reasoning provider for planning tasks (meal plans, recipes, etc.)
+    # OpenAI GPT excels at structured JSON outputs and complex reasoning
     result = await _try_provider(
-        provider=settings.llm_provider,
+        provider=settings.reasoning_provider,
         messages=messages,
         schema=schema,
         task_name=task_name,

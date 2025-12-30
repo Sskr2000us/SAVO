@@ -537,6 +537,45 @@ def get_llm_client(provider: str) -> LlmClient:
         raise ValueError(f"Unsupported SAVO_LLM_PROVIDER: {provider}. Use 'mock', 'openai', 'anthropic', or 'google'.")
 
 
+def get_vision_provider() -> str:
+    """
+    Get the provider for vision tasks (image scanning).
+    Defaults to Google Gemini Vision which excels at image understanding.
+    """
+    return os.getenv("SAVO_VISION_PROVIDER", "google")
+
+
+def get_reasoning_provider() -> str:
+    """
+    Get the provider for reasoning tasks (meal planning, recipes, YouTube ranking).
+    Defaults to OpenAI GPT for superior structured JSON outputs and reasoning.
+    Falls back to SAVO_LLM_PROVIDER for backward compatibility.
+    """
+    reasoning = os.getenv("SAVO_REASONING_PROVIDER")
+    if reasoning:
+        return reasoning
+    # Fallback to legacy SAVO_LLM_PROVIDER for backward compatibility
+    return os.getenv("SAVO_LLM_PROVIDER", "openai")
+
+
+def get_vision_client() -> LlmClient:
+    """
+    Get LLM client for vision tasks (image scanning).
+    Uses Google Gemini Vision by default for optimal image understanding.
+    """
+    provider = get_vision_provider()
+    return get_llm_client(provider)
+
+
+def get_reasoning_client() -> LlmClient:
+    """
+    Get LLM client for reasoning tasks (planning, recipes, ranking).
+    Uses OpenAI GPT by default for superior structured outputs and reasoning.
+    """
+    provider = get_reasoning_provider()
+    return get_llm_client(provider)
+
+
 def _extract_context(messages: list[dict[str, str]]) -> dict[str, Any] | None:
     for m in messages:
         content = m.get("content") or ""
