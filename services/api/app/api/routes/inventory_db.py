@@ -19,7 +19,7 @@ from app.core.database import (
     deduct_inventory_for_recipe
 )
 
-router = APIRouter(prefix="/inventory", tags=["inventory"])
+router = APIRouter()  # Remove duplicate prefix - already set in main router
 
 
 # ============================================================================
