@@ -251,9 +251,19 @@ class GoogleClient(LlmClient):
                         )
                     
                     result = response.json()
+                    logger.info(f"Google API response structure: {json.dumps(result, indent=2)[:500]}")
                     
                     # Extract content from Google response
-                    content = result["candidates"][0]["content"]["parts"][0]["text"]
+                    if "candidates" not in result or not result["candidates"]:
+                        logger.error(f"No candidates in response: {result}")
+                        raise ValueError(f"No candidates in Gemini response: {result}")
+                    
+                    candidate = result["candidates"][0]
+                    if "content" not in candidate:
+                        logger.error(f"No content in candidate: {candidate}")
+                        raise ValueError(f"No content in candidate: {candidate}")
+                    
+                    content = candidate["content"]["parts"][0]["text"]
                     return json.loads(content)
                     
                 except httpx.HTTPStatusError as e:
