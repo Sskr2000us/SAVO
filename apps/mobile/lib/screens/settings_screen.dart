@@ -716,7 +716,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildDropdown(
                   label: 'Spice Tolerance',
                   value: member['spice_tolerance'] ?? 'medium',
-                  items: const ['none', 'mild', 'medium', 'hot', 'very_hot'],
+                  items: const ['none', 'mild', 'medium', 'high', 'very_high'],
                   onChanged: (value) {
                     setState(() {
                       _familyMembers[index]['spice_tolerance'] = value;
