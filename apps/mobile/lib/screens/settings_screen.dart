@@ -234,15 +234,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: SizedBox(
                   width: 24,
                   height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                 ),
               ),
             )
           else
             IconButton(
-              icon: const Icon(Icons.save),
+              icon: const Icon(Icons.save, color: Colors.white),
               onPressed: _saveConfiguration,
               tooltip: 'Save Settings',
+              iconSize: 28,
             ),
         ],
       ),
@@ -406,6 +407,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: AppSpacing.xl),
                 ],
               ),
+            ),
+      floatingActionButton: _isSaving
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _saveConfiguration,
+              icon: const Icon(Icons.save),
+              label: const Text('Save Profile'),
+              backgroundColor: AppColors.primary,
+              tooltip: 'Save all changes to database',
             ),
     );
   }
