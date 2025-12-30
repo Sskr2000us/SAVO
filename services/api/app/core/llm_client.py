@@ -11,6 +11,40 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _parse_json_from_text(text: str) -> Any:
+    """Best-effort JSON extraction from model output.
+
+    Handles common wrappers like markdown code fences and prefixed explanations.
+    Raises json.JSONDecodeError if no JSON can be parsed.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return json.loads(cleaned)  # will raise JSONDecodeError
+
+    # Strip markdown code fences if present
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+    # First try strict parse
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as first_error:
+        # Try to locate the first JSON value inside the text
+        decoder = json.JSONDecoder()
+        candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
+        if not candidates:
+            raise first_error
+
+        start = min(candidates)
+        try:
+            value, _end = decoder.raw_decode(cleaned[start:])
+            return value
+        except json.JSONDecodeError:
+            raise first_error
+
+
 class RateLimitException(Exception):
     """Raised when LLM provider returns 429 rate limit error"""
     def __init__(self, provider: str, retry_after: int | None = None):
@@ -206,6 +240,11 @@ class GoogleClient(LlmClient):
         
         # Add schema instruction to system prompt
         system_parts.append(schema_instruction["content"])
+
+        # Explicit JSON-only rule (helps Gemini avoid prose/codefences)
+        system_parts.append(
+            "Return ONLY a valid JSON value. No markdown, no code fences, no commentary."
+        )
         
         # Gemini format: combine all into a single user message
         combined_text = ""
@@ -224,6 +263,13 @@ class GoogleClient(LlmClient):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # Prefer JSON-mode if supported by the model.
+                    generation_config: dict[str, Any] = {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 4096,
+                        "responseMimeType": "application/json",
+                    }
+
                     response = await client.post(
                         f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
                         headers={
@@ -234,12 +280,27 @@ class GoogleClient(LlmClient):
                         },
                         json={
                             "contents": contents,
-                            "generationConfig": {
-                                "temperature": 0.7,
-                                "maxOutputTokens": 4096
-                            }
+                            "generationConfig": generation_config,
                         }
                     )
+
+                    # Some models/tiers reject responseMimeType; retry once without it.
+                    if response.status_code == 400 and "responseMimeType" in response.text and attempt < max_retries - 1:
+                        logger.warning("Gemini rejected responseMimeType; retrying without JSON mime type")
+                        generation_config.pop("responseMimeType", None)
+                        response = await client.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                            headers={
+                                "Content-Type": "application/json",
+                            },
+                            params={
+                                "key": self.api_key
+                            },
+                            json={
+                                "contents": contents,
+                                "generationConfig": generation_config,
+                            }
+                        )
                     
                     if response.status_code != 200:
                         error_detail = response.text
@@ -263,8 +324,17 @@ class GoogleClient(LlmClient):
                         logger.error(f"No content in candidate: {candidate}")
                         raise ValueError(f"No content in candidate: {candidate}")
                     
-                    content = candidate["content"]["parts"][0]["text"]
-                    return json.loads(content)
+                    parts = candidate.get("content", {}).get("parts", [])
+                    text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")]
+                    content_text = "\n".join(text_parts).strip()
+
+                    parsed = _parse_json_from_text(content_text)
+                    if not isinstance(parsed, dict):
+                        # Keep the contract consistent with other providers
+                        raise json.JSONDecodeError(
+                            "Expected a JSON object", content_text, 0
+                        )
+                    return parsed
                     
                 except httpx.HTTPStatusError as e:
                     logger.error(f"Google API HTTP error: {e.response.text if hasattr(e.response, 'text') else str(e)}")
