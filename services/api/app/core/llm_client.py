@@ -172,7 +172,7 @@ class GoogleClient(LlmClient):
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY is required for Google provider")
         
-        self.model = model or os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
+        self.model = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
         self.timeout = timeout
     
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
