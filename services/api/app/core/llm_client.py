@@ -238,7 +238,15 @@ class GoogleClient(LlmClient):
                         }
                     )
                     
-                    response.raise_for_status()
+                    if response.status_code != 200:
+                        error_detail = response.text
+                        logger.error(f"Google API error response: {error_detail}")
+                        raise httpx.HTTPStatusError(
+                            f"Google API error: {error_detail}",
+                            request=response.request,
+                            response=response
+                        )
+                    
                     result = response.json()
                     
                     # Extract content from Google response
@@ -246,6 +254,7 @@ class GoogleClient(LlmClient):
                     return json.loads(content)
                     
                 except httpx.HTTPStatusError as e:
+                    logger.error(f"Google API HTTP error: {e.response.text if hasattr(e.response, 'text') else str(e)}")
                     if e.response.status_code == 429 and attempt < max_retries - 1:
                         # Rate limited - wait with exponential backoff
                         wait_time = 2 ** attempt  # 1s, 2s, 4s
