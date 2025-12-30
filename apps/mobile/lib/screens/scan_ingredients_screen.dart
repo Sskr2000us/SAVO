@@ -155,6 +155,39 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     );
   }
 
+  Widget _buildConfidenceChip(double confidence) {
+    final percentage = (confidence * 100).round();
+    final Color color;
+    final IconData icon;
+    
+    if (percentage >= 75) {
+      color = Colors.green;
+      icon = Icons.check_circle;
+    } else if (percentage >= 50) {
+      color = Colors.orange;
+      icon = Icons.warning_amber_rounded;
+    } else {
+      color = Colors.red;
+      icon = Icons.help_outline;
+    }
+
+    return Chip(
+      avatar: Icon(icon, size: 18, color: color),
+      label: Text(
+        '$percentage%',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
+      ),
+      backgroundColor: color.withOpacity(0.1),
+      side: BorderSide(color: color.withOpacity(0.3)),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canScan = !_loading;
@@ -222,23 +255,33 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                                       ),
                                     ),
                                     const SizedBox(width: 12),
-                                    SizedBox(
-                                      width: 110,
-                                      child: Text(
-                                        '${(c.confidence * 100).round()}%',
-                                        textAlign: TextAlign.end,
-                                        style: Theme.of(context).textTheme.labelLarge,
-                                      ),
-                                    ),
+                                    _buildConfidenceChip(c.confidence),
                                   ],
                                 ),
                                 const SizedBox(height: 8),
-                                TextField(
-                                  controller: c.quantityController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Quantity (optional)',
-                                  ),
-                                  onChanged: (v) => c.quantityEstimate = v,
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextField(
+                                        controller: c.quantityController,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Quantity (optional)',
+                                        ),
+                                        onChanged: (v) => c.quantityEstimate = v,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline),
+                                      onPressed: () {
+                                        setState(() {
+                                          _candidates.removeAt(index);
+                                        });
+                                      },
+                                      tooltip: 'Remove',
+                                      color: Colors.red,
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),

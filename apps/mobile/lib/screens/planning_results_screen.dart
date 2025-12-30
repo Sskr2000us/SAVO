@@ -218,10 +218,64 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   }
 }
 
-class _RecipeCard extends StatelessWidget {
+class _RecipeCard extends StatefulWidget {
   final Recipe recipe;
 
   const _RecipeCard({required this.recipe});
+
+  @override
+  State<_RecipeCard> createState() => _RecipeCardState();
+}
+
+class _RecipeCardState extends State<_RecipeCard> {
+  bool _usesExpiringItems = false;
+  bool _checkingExpiring = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExpiringIngredients();
+  }
+
+  Future<void> _checkExpiringIngredients() async {
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final response = await apiClient.get('/inventory');
+
+      if (response is List) {
+        final inventory = (response as List)
+            .map((json) => json as Map<String, dynamic>)
+            .toList();
+
+        // Check if any recipe ingredients are expiring (< 3 days)
+        for (final ingredient in widget.recipe.ingredientsUsed) {
+          final item = inventory.firstWhere(
+            (inv) => inv['inventory_id'] == ingredient.inventoryId,
+            orElse: () => {},
+          );
+          
+          if (item.isNotEmpty) {
+            final freshness = item['freshness_days_remaining'];
+            if (freshness != null && freshness < 3) {
+              setState(() {
+                _usesExpiringItems = true;
+                _checkingExpiring = false;
+              });
+              return;
+            }
+          }
+        }
+      }
+
+      setState(() {
+        _checkingExpiring = false;
+      });
+    } catch (e) {
+      setState(() {
+        _checkingExpiring = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -235,7 +289,7 @@ class _RecipeCard extends StatelessWidget {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => RecipeDetailScreen(recipe: recipe),
+                builder: (_) => RecipeDetailScreen(recipe: widget.recipe),
               ),
             );
           },
@@ -258,11 +312,29 @@ class _RecipeCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      recipe.getLocalizedName('en'),
-                      style: Theme.of(context).textTheme.titleSmall,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.recipe.getLocalizedName('en'),
+                            style: Theme.of(context).textTheme.titleSmall,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (_usesExpiringItems && !_checkingExpiring)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4.0),
+                            child: Tooltip(
+                              message: 'Uses expiring ingredients',
+                              child: Icon(
+                                Icons.eco,
+                                size: 16,
+                                color: Colors.orange[700],
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Row(
@@ -270,7 +342,7 @@ class _RecipeCard extends StatelessWidget {
                         Icon(Icons.timer, size: 14, color: Colors.grey[600]),
                         const SizedBox(width: 4),
                         Text(
-                          '${recipe.estimatedTimes.totalMinutes} min',
+                          '${widget.recipe.estimatedTimes.totalMinutes} min',
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.grey[600],
@@ -280,7 +352,7 @@ class _RecipeCard extends StatelessWidget {
                         Icon(Icons.signal_cellular_alt, size: 14, color: Colors.grey[600]),
                         const SizedBox(width: 4),
                         Text(
-                          recipe.difficulty,
+                          widget.recipe.difficulty,
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.grey[600],
