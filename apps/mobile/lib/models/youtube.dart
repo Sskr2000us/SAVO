@@ -98,3 +98,67 @@ class YouTubeRankResponse {
     );
   }
 }
+
+class YouTubeSummaryRequest {
+  final String videoId;
+  final String recipeName;
+  final String outputLanguage;
+
+  YouTubeSummaryRequest({
+    required this.videoId,
+    required this.recipeName,
+    this.outputLanguage = 'en',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'video_id': videoId,
+        'recipe_name': recipeName,
+        'output_language': outputLanguage,
+      };
+}
+
+class TimestampHighlight {
+  final String time;
+  final String description;
+
+  TimestampHighlight({
+    required this.time,
+    required this.description,
+  });
+
+  factory TimestampHighlight.fromJson(Map<String, dynamic> json) {
+    return TimestampHighlight(
+      time: json['time'] ?? '',
+      description: json['description'] ?? '',
+    );
+  }
+}
+
+class YouTubeSummary {
+  final String videoId;
+  final String summary;
+  final List<String> keyTechniques;
+  final List<TimestampHighlight> timestampHighlights;
+  final String watchTimeEstimate;
+
+  YouTubeSummary({
+    required this.videoId,
+    required this.summary,
+    required this.keyTechniques,
+    required this.timestampHighlights,
+    required this.watchTimeEstimate,
+  });
+
+  factory YouTubeSummary.fromJson(Map<String, dynamic> json) {
+    return YouTubeSummary(
+      videoId: json['video_id'] ?? '',
+      summary: json['summary'] ?? '',
+      keyTechniques: List<String>.from(json['key_techniques'] ?? []),
+      timestampHighlights: (json['timestamp_highlights'] as List?)
+              ?.map((h) => TimestampHighlight.fromJson(h))
+              .toList() ??
+          [],
+      watchTimeEstimate: json['watch_time_estimate'] ?? 'Full video',
+    );
+  }
+}

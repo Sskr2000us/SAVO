@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
 import 'scan_ingredients_screen.dart';
+import 'realtime_scan_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -143,20 +145,61 @@ class _InventoryScreenState extends State<InventoryScreen> {
       appBar: AppBar(
         title: const Text('Inventory'),
         actions: [
-          IconButton(
+          PopupMenuButton<String>(
             icon: const Icon(Icons.photo_camera),
             tooltip: 'Scan ingredients',
-            onPressed: () async {
-              final added = await Navigator.push<bool>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const ScanIngredientsScreen(),
-                ),
-              );
-              if (added == true) {
-                _loadInventory();
+            onSelected: (value) async {
+              dynamic result;
+              if (value == 'realtime' && !kIsWeb) {
+                result = await Navigator.push<List<String>>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const RealtimeScanScreen(),
+                  ),
+                );
+                // TODO: Process realtime scan results
+                if (result != null && result is List<String>) {
+                  // Show ingredients were scanned
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Scanned ${result.length} ingredients')),
+                  );
+                  _loadInventory();
+                }
+              } else {
+                final added = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ScanIngredientsScreen(),
+                  ),
+                );
+                if (added == true) {
+                  _loadInventory();
+                }
               }
             },
+            itemBuilder: (context) => [
+              if (!kIsWeb)
+                const PopupMenuItem(
+                  value: 'realtime',
+                  child: Row(
+                    children: [
+                      Icon(Icons.videocam),
+                      SizedBox(width: 8),
+                      Text('Real-time Scan'),
+                    ],
+                  ),
+                ),
+              const PopupMenuItem(
+                value: 'photo',
+                child: Row(
+                  children: [
+                    Icon(Icons.photo_camera),
+                    SizedBox(width: 8),
+                    Text('Take Photo'),
+                  ],
+                ),
+              ),
+            ],
           ),
           IconButton(
             icon: const Icon(Icons.refresh),

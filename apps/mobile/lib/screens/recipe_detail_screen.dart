@@ -19,6 +19,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   List<RankedVideo>? _rankedVideos;
   bool _loadingVideos = false;
   String? _videoError;
+  final Map<String, YouTubeSummary?> _videoSummaries = {};
+  final Set<String> _loadingSummaries = {};
 
   @override
   void initState() {
@@ -136,6 +138,44 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open YouTube: $url')),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadVideoSummary(String videoId) async {
+    if (_loadingSummaries.contains(videoId) || _videoSummaries.containsKey(videoId)) {
+      return;
+    }
+
+    setState(() {
+      _loadingSummaries.add(videoId);
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final request = YouTubeSummaryRequest(
+        videoId: videoId,
+        recipeName: widget.recipe.getLocalizedName('en'),
+        outputLanguage: 'en',
+      );
+
+      final response = await apiClient.post('/youtube/summary', request.toJson());
+      final summary = YouTubeSummary.fromJson(response);
+
+      setState(() {
+        _videoSummaries[videoId] = summary;
+        _loadingSummaries.remove(videoId);
+      });
+    } catch (e) {
+      setState(() {
+        _videoSummaries[videoId] = null;
+        _loadingSummaries.remove(videoId);
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load summary: ${e.toString()}')),
         );
       }
     }
@@ -308,112 +348,260 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   }
 
   Widget _buildVideoCard(RankedVideo video) {
+    final summary = _videoSummaries[video.videoId];
+    final isLoadingSummary = _loadingSummaries.contains(video.videoId);
+    final showSummary = _videoSummaries.containsKey(video.videoId);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        onTap: () => _launchYouTubeUrl(video.youtubeUrl),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Thumbnail
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  width: 120,
-                  height: 68,
-                  color: Colors.grey[300],
-                  child: Stack(
-                    fit: StackFit.expand,
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => _launchYouTubeUrl(video.youtubeUrl),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Thumbnail
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      width: 120,
+                      height: 68,
+                      color: Colors.grey[300],
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Image.network(
+                            video.thumbnailUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: Colors.grey[300],
+                              child: const Icon(Icons.play_circle_outline, size: 40),
+                            ),
+                          ),
+                          Center(
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.7),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(
+                                Icons.play_arrow,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  // Video info
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          video.title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          video.channel,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        // Scores
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            _buildScoreChip(
+                              'Trust',
+                              video.trustScore,
+                              Colors.blue,
+                            ),
+                            _buildScoreChip(
+                              'Match',
+                              video.matchScore,
+                              Colors.green,
+                            ),
+                          ],
+                        ),
+                        if (video.reasons.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            video.reasons.first,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey[700],
+                              fontStyle: FontStyle.italic,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // AI Summary button
+          if (!showSummary)
+            TextButton.icon(
+              onPressed: isLoadingSummary ? null : () => _loadVideoSummary(video.videoId),
+              icon: isLoadingSummary
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome, size: 16),
+              label: Text(isLoadingSummary ? 'Loading AI Summary...' : 'Show AI Summary'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.purple[700],
+              ),
+            ),
+          // AI Summary content
+          if (showSummary && summary != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.purple[50],
+                border: Border(top: BorderSide(color: Colors.purple[100]!)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Image.network(
-                        video.thumbnailUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          color: Colors.grey[300],
-                          child: const Icon(Icons.play_circle_outline, size: 40),
+                      Icon(Icons.auto_awesome, size: 18, color: Colors.purple[700]),
+                      const SizedBox(width: 8),
+                      Text(
+                        'AI Summary',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.purple[900],
                         ),
                       ),
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.7),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Icon(
-                            Icons.play_arrow,
-                            color: Colors.white,
-                            size: 24,
-                          ),
+                      const Spacer(),
+                      Chip(
+                        label: Text(
+                          summary.watchTimeEstimate,
+                          style: const TextStyle(fontSize: 11),
                         ),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Video info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+                  const SizedBox(height: 8),
+                  Text(
+                    summary.summary,
+                    style: TextStyle(color: Colors.grey[800]),
+                  ),
+                  if (summary.keyTechniques.isNotEmpty) ...[
+                    const SizedBox(height: 12),
                     Text(
-                      video.title,
-                      style: const TextStyle(
+                      'Key Techniques:',
+                      style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        fontSize: 12,
+                        color: Colors.purple[900],
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      video.channel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    // Scores
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
-                      children: [
-                        _buildScoreChip(
-                          'Trust',
-                          video.trustScore,
-                          Colors.blue,
-                        ),
-                        _buildScoreChip(
-                          'Match',
-                          video.matchScore,
-                          Colors.green,
-                        ),
-                      ],
+                      children: summary.keyTechniques
+                          .map((tech) => Chip(
+                                label: Text(tech, style: const TextStyle(fontSize: 11)),
+                                backgroundColor: Colors.purple[100],
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              ))
+                          .toList(),
                     ),
-                    if (video.reasons.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        video.reasons.first,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey[700],
-                          fontStyle: FontStyle.italic,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                  ],
+                  if (summary.timestampHighlights.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Key Moments:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Colors.purple[900],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    ...summary.timestampHighlights.map((highlight) => Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple[200],
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  highlight.time,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  highlight.description,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _videoSummaries.remove(video.videoId);
+                          });
+                        },
+                        child: const Text('Hide'),
                       ),
                     ],
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
+            ),
+          ],
+        ],
       ),
     );
   }
