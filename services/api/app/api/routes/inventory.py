@@ -120,7 +120,8 @@ async def post_scan_ingredients(
             detail="Image too large (max 5MB)",
         )
 
-    provider = (settings.llm_provider or "mock").lower()
+    # Use vision provider (google or openai)
+    provider = (settings.vision_provider or "mock").lower()
 
     # Mock provider: deterministic candidates for local dev.
     if provider == "mock":
@@ -131,13 +132,6 @@ async def post_scan_ingredients(
                 {"ingredient": "onion", "quantity_estimate": "2 pcs", "confidence": 0.86, "storage_hint": "pantry"},
                 {"ingredient": "eggs", "quantity_estimate": "6 pcs", "confidence": 0.82, "storage_hint": "refrigerator"},
             ],
-        )
-
-    if provider != "google":
-        return ScanIngredientsResponse(
-            status="error",
-            scanned_items=[],
-            error_message=f"Ingredient scan requires SAVO_LLM_PROVIDER=google (current: {provider})",
         )
 
     mime_type = image.content_type or "image/jpeg"
