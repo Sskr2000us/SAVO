@@ -255,6 +255,16 @@ class GoogleClient(LlmClient):
         system_parts.append(
             "Return ONLY a valid JSON value. No markdown, no code fences, no commentary."
         )
+
+        # Keep the output compact to avoid truncation (which frequently produces invalid JSON).
+        system_parts.append(
+            "COMPACTNESS REQUIREMENTS (must follow): "
+            "- Use EXACTLY 2 recipe_options per course (not 3). "
+            "- Use EXACTLY 1 youtube_references entry per recipe (array length 1). "
+            "- Keep steps to <= 6 per recipe; keep each instruction <= 140 chars. "
+            "- Keep ai_summary.one_minute_version <= 240 chars; key_techniques and common_mistakes <= 3 items each. "
+            "- Avoid long narratives; keep all strings concise."
+        )
         
         # Gemini format: combine all into a single user message
         combined_text = ""
@@ -278,8 +288,9 @@ class GoogleClient(LlmClient):
                     # Our prompt-pack schemas contain keywords like if/then/allOf/additionalProperties,
                     # which Gemini rejects with INVALID_ARGUMENT. We enforce schema on our side.
                     generation_config: dict[str, Any] = {
-                        "temperature": 0.2,
-                        "maxOutputTokens": 4096,
+                        "temperature": 0.1,
+                        # Allow a larger response to reduce truncation-induced invalid JSON.
+                        "maxOutputTokens": 8192,
                         "responseMimeType": "application/json",
                     }
 
