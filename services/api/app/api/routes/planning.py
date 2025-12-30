@@ -48,10 +48,16 @@ def _build_planning_context(
     output_lang = request.output_language or config.global_settings.primary_language
     measurement = request.measurement_system or config.global_settings.measurement_system
     
+    # Use request inventory/family_profile if provided, otherwise use storage
+    inventory_data = request.inventory or {"available_ingredients": [item.canonical_name for item in inventory]}
+    family_data = request.family_profile or config.model_dump(mode='json').get("family_profile", {})
+    
     context = {
         "app_configuration": config.model_dump(mode='json'),
         "session_request": request.model_dump(mode='json'),
-        "inventory": [item.model_dump(mode='json') for item in inventory],
+        "inventory": inventory_data,
+        "family_profile": family_data,
+        "cuisine_preferences": request.cuisine_preferences or [],
         "cuisine_metadata": CUISINE_METADATA,
         "history_context": {
             "recent_recipes": [h for h in history[:20]],

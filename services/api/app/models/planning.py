@@ -47,8 +47,11 @@ class PartySettings(BaseModel):
 class SessionRequest(BaseModel):
     """Base session request fields common to all planning types"""
     selected_cuisine: Optional[str] = Field(None, description="Cuisine selection, 'auto' for automatic")
+    cuisine_preferences: Optional[List[str]] = Field(None, description="List of preferred cuisines")
     output_language: Optional[str] = Field(None, pattern="^[a-z]{2}(-[A-Z]{2})?$")
     measurement_system: Optional[Literal["metric", "imperial"]] = None
+    inventory: Optional[Dict[str, Any]] = Field(None, description="Inventory with available_ingredients list")
+    family_profile: Optional[Dict[str, Any]] = Field(None, description="Family profile with members, dietary restrictions")
 
 
 class DailyPlanRequest(SessionRequest):
