@@ -50,7 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Load household profile from database
       final householdResponse = await apiClient.get('/profile/household',
         headers: {
-          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
           'X-User-Email': 'demo@savo.app',
         },
       );
@@ -114,7 +114,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final headers = {
-        'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+        'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
         'X-User-Email': 'demo@savo.app',
       };
       

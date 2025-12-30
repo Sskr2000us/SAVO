@@ -67,7 +67,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       // Use database endpoint with user header
       await apiClient.delete('/inventory-db/items/$inventoryId',
         headers: {
-          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
         },
       );
       _loadInventory();
