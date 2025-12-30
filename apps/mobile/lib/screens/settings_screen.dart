@@ -683,31 +683,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     _buildCheckbox(
                       label: 'Low Sodium',
-                      value: member['medical_dietary_needs']?['low_sodium'] ?? false,
+                      value: (member['medical_dietary_needs'] as List?)?.contains('low_sodium') ?? false,
                       onChanged: (value) {
                         setState(() {
-                          _familyMembers[index]['medical_dietary_needs'] ??= {};
-                          _familyMembers[index]['medical_dietary_needs']['low_sodium'] = value;
+                          _familyMembers[index]['medical_dietary_needs'] ??= [];
+                          final list = _familyMembers[index]['medical_dietary_needs'] as List;
+                          if (value) {
+                            if (!list.contains('low_sodium')) list.add('low_sodium');
+                          } else {
+                            list.remove('low_sodium');
+                          }
                         });
                       },
                     ),
                     _buildCheckbox(
                       label: 'Low Sugar',
-                      value: member['medical_dietary_needs']?['low_sugar'] ?? false,
+                      value: (member['medical_dietary_needs'] as List?)?.contains('low_sugar') ?? false,
                       onChanged: (value) {
                         setState(() {
-                          _familyMembers[index]['medical_dietary_needs'] ??= {};
-                          _familyMembers[index]['medical_dietary_needs']['low_sugar'] = value;
+                          _familyMembers[index]['medical_dietary_needs'] ??= [];
+                          final list = _familyMembers[index]['medical_dietary_needs'] as List;
+                          if (value) {
+                            if (!list.contains('low_sugar')) list.add('low_sugar');
+                          } else {
+                            list.remove('low_sugar');
+                          }
                         });
                       },
                     ),
                     _buildCheckbox(
                       label: 'Low Fat',
-                      value: member['medical_dietary_needs']?['low_fat'] ?? false,
+                      value: (member['medical_dietary_needs'] as List?)?.contains('low_fat') ?? false,
                       onChanged: (value) {
                         setState(() {
-                          _familyMembers[index]['medical_dietary_needs'] ??= {};
-                          _familyMembers[index]['medical_dietary_needs']['low_fat'] = value;
+                          _familyMembers[index]['medical_dietary_needs'] ??= [];
+                          final list = _familyMembers[index]['medical_dietary_needs'] as List;
+                          if (value) {
+                            if (!list.contains('low_fat')) list.add('low_fat');
+                          } else {
+                            list.remove('low_fat');
+                          }
                         });
                       },
                     ),
