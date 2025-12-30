@@ -2,7 +2,7 @@
 Recipe Difficulty and Skill Progression Models
 Confidence-based cooking with gradual skill advancement
 """
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Any
 from pydantic import BaseModel, Field
 from datetime import datetime
 

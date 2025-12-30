@@ -21,7 +21,7 @@ from app.models.skill import (
     RecipeSkillFit,
     RecipeDifficulty,
 )
-from app.models.cuisine import rank_cuisines, CuisinePreferences
+from app.models.cuisine import rank_cuisines
 from app.core.storage import get_storage
 from app.core.orchestrator import plan_daily, plan_party, plan_weekly
 from app.core.orchestration_rules import build_orchestration_context
@@ -98,7 +98,7 @@ def _enhance_recipe_with_intelligence(
     if nutrition_profile:
         # Estimate nutrition from recipe (simplified - in production, use actual nutrition data)
         nutrition_estimate = RecipeNutritionEstimate(
-            calories_per_serving=recipe.get("calories", 400),
+            calories=recipe.get("calories", 400),
             protein_g=recipe.get("protein", 20),
             carbs_g=recipe.get("carbs", 40),
             fat_g=recipe.get("fat", 15),
@@ -134,6 +134,7 @@ def _enhance_recipe_with_intelligence(
     # Intelligence Layer: Skill Fit Evaluation
     recipe_skill = RecipeDifficulty(
         level=recipe_difficulty,
+        level_name=RecipeDifficulty.get_level_name(recipe_difficulty),
         skills_required=recipe.get("skills_required", ["basic_cooking"]),
         estimated_time_minutes=recipe_time,
         active_time_minutes=int(recipe_time * 0.6)
@@ -235,20 +236,22 @@ def _build_planning_context(
         if config and config.household_profile and hasattr(config.household_profile, "skill_level"):
             user_skill_level = config.household_profile.skill_level or 2
         
-        # Build cuisine preferences
-        cuisine_prefs = CuisinePreferences(
-            preferred_cuisines=user_preferences,
-            avoided_cuisines=[],
-            spice_tolerance="medium"
-        )
+        # Get nutrition focus
+        nutrition_focus = []
+        if config and config.household_profile and hasattr(config.household_profile, "nutrition_targets"):
+            targets = config.household_profile.nutrition_targets
+            if hasattr(targets, "protein_g") and targets.protein_g > 100:
+                nutrition_focus.append("high_protein")
+            if hasattr(targets, "sugar_g") and targets.sugar_g < 25:
+                nutrition_focus.append("low_sugar")
         
         # Rank cuisines
         cuisine_scores = rank_cuisines(
             available_ingredients=available_ingredients,
-            user_preferences=cuisine_prefs,
+            user_preferences=user_preferences,
             recent_cuisines=recent_cuisines,
-            user_skill_level=user_skill_level,
-            user_nutrition_profile=None  # Will be built below
+            skill_level=user_skill_level,
+            nutrition_focus=nutrition_focus
         )
     
     # Build orchestration context
