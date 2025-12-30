@@ -70,7 +70,7 @@ class LlmClient:
 
 
 class OpenAIClient(LlmClient):
-    """OpenAI LLM client with JSON schema support"""
+    """OpenAI LLM client with JSON schema support and Vision API"""
     
     def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 60):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -78,6 +78,7 @@ class OpenAIClient(LlmClient):
             raise ValueError("OPENAI_API_KEY is required for OpenAI provider")
         
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+        self.vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # gpt-4o has best vision + text reading
         self.timeout = timeout
         self.base_url = "https://api.openai.com/v1"
     
@@ -150,6 +151,78 @@ class OpenAIClient(LlmClient):
                             # Final attempt exhausted, raise RateLimitException for fallback
                             raise RateLimitException("openai", retry_after)
                     raise  # Re-raise if not 429
+
+    async def generate_json_multimodal(
+        self,
+        *,
+        system: str,
+        user: str,
+        inline_images: list[dict[str, str]],
+        max_output_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> Any:
+        """Generate JSON from text + images using OpenAI Vision API.
+        
+        inline_images items must be: {"mimeType": "image/jpeg", "data": "<base64>"}
+        OpenAI Vision (gpt-4o) excels at reading text on product labels and packaging.
+        """
+        
+        # Build content array with text and images
+        content = []
+        
+        # Add system + user instructions as text
+        combined_text = ""
+        if system:
+            combined_text += f"SYSTEM: {system}\n\n"
+        combined_text += f"USER: {user}"
+        
+        content.append({
+            "type": "text",
+            "text": combined_text
+        })
+        
+        # Add images
+        for img in inline_images or []:
+            mime = img.get("mimeType", "image/jpeg")
+            data = img.get("data", "")
+            if not data:
+                continue
+                
+            # OpenAI expects: data:image/jpeg;base64,<data>
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime};base64,{data}"
+                }
+            })
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.vision_model,  # Use gpt-4o for vision
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": content
+                        }
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": max_output_tokens,
+                    "temperature": temperature,
+                }
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Parse JSON from response
+            text = result["choices"][0]["message"]["content"]
+            return _parse_json_from_text(text)
 
 
 class AnthropicClient(LlmClient):

@@ -144,37 +144,53 @@ async def post_scan_ingredients(
     b64 = base64.b64encode(raw).decode("ascii")
 
     system = (
-        "You are an ingredient detector for a cooking app. "
-        "Your job is perception only: list visible food/ingredients and common packaged staples. "
-        "Do not guess brands, expiry dates, or hidden items. "
-        "Return ONLY JSON. No markdown, no prose."
+        "You are an expert ingredient detector for a cooking app. "
+        "Your job: Identify ALL visible food items, ingredients, and packaged products in kitchen photos. "
+        "CRITICAL SKILLS REQUIRED:\n"
+        "1. READ TEXT on product labels, packages, bottles, jars, and containers\n"
+        "2. Identify fresh produce (fruits, vegetables, herbs)\n"
+        "3. Recognize pantry staples (oils, sauces, spices, pasta, rice)\n"
+        "4. Detect dairy products (milk, cheese, yogurt, butter)\n"
+        "5. Spot proteins (meat packages, eggs, tofu)\n"
+        "6. Notice condiments and seasonings\n"
+        "RULES:\n"
+        "- List EVERY food item you can see, even if partially visible\n"
+        "- For packaged items: Read the label text to identify the exact product\n"
+        "- Use specific names when labels are readable (e.g., 'mozzarella cheese' not just 'cheese')\n"
+        "- Include brand names ONLY if clearly visible and helpful for identification\n"
+        "- Return ONLY valid JSON. No markdown, no prose, no explanations."
     )
     user = (
-        "From the image, return a JSON object with key scanned_items (array). "
-        "Each item must have: ingredient (string), quantity_estimate (string|null), confidence (number 0..1), storage_hint (pantry|refrigerator|freezer|null). "
-        "Rules: max 30 items; exclude non-food objects; prefer singular canonical ingredient names (e.g., 'tomato', 'milk'). "
-        "If unsure, include the ingredient with lower confidence rather than omitting."
+        "Analyze this kitchen/pantry photo and return a JSON object with key 'scanned_items' (array). "
+        "Each item must have these exact fields:\n"
+        "- ingredient (string): The ingredient name (e.g., 'mozzarella cheese', 'olive oil', 'barilla pasta', 'garlic powder')\n"
+        "- quantity_estimate (string|null): Estimated quantity if visible (e.g., '1 bottle', '500g package', '1 jar')\n"
+        "- confidence (number): Your confidence 0.0-1.0 (be conservative: 0.95+ for clearly readable labels, 0.7-0.9 for recognizable items, 0.5-0.7 for partially visible)\n"
+        "- storage_hint (string|null): Where to store: 'pantry', 'refrigerator', 'freezer', or null if unsure\n\n"
+        "IMPORTANT:\n"
+        "- Carefully READ all visible text on packages, labels, bottles, and jars\n"
+        "- List up to 30 items (prioritize clearly visible items first)\n"
+        "- Exclude non-food objects (dishes, utensils, appliances)\n"
+        "- If you see text but can't read it clearly, still list the item type with lower confidence\n"
+        "- Better to include an item with lower confidence than omit it entirely"
     )
     if storage_hint:
-        user += f"\nContext hint: storage_hint={storage_hint}."
+        user += f"\n\nContext: User indicated this photo is from {storage_hint}."
 
     try:
-        # Use vision provider (Google Gemini Vision by default)
-        # Optimized for image understanding and ingredient detection
+        # Use vision provider (Google or OpenAI Vision)
+        # Google Gemini: Better for fresh produce, general object detection
+        # OpenAI GPT-4o: Better for reading text on labels, packaged foods
         client = get_vision_client()
         
-        # For Google, use the multimodal generation method
-        if isinstance(client, GoogleClient):
-            result = await client.generate_json_multimodal(
-                system=system,
-                user=user,
-                inline_images=[{"mimeType": mime_type, "data": b64}],
-                max_output_tokens=1024,
-                temperature=0.2,
-            )
-        else:
-            # Future: Add OpenAI Vision support here
-            raise NotImplementedError(f"Vision provider {settings.vision_provider} not yet implemented for scanning")
+        # Both Google and OpenAI support multimodal generation
+        result = await client.generate_json_multimodal(
+            system=system,
+            user=user,
+            inline_images=[{"mimeType": mime_type, "data": b64}],
+            max_output_tokens=1024,
+            temperature=0.2,
+        )
 
         scanned_items = []
         if isinstance(result, dict):
