@@ -40,19 +40,31 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       // Extract techniques from recipe steps
       final techniques = _extractTechniques(widget.recipe.steps);
 
-      // Create mock YouTube candidates
-      // TODO: Replace with actual YouTube API search when available
-      final candidates = _createMockCandidates(
-        widget.recipe.getLocalizedName('en'),
-        widget.recipe.cuisine,
-      );
+      // Search YouTube for real videos using our API
+      final searchResponse = await apiClient.post('/youtube/search', {
+        'recipe_name': widget.recipe.getLocalizedName('en'),
+        'cuisine': widget.recipe.cuisine,
+        'max_results': 5,
+      });
+
+      final candidates = (searchResponse['candidates'] as List)
+          .map((c) => YouTubeVideoCandidate.fromJson(c))
+          .toList();
+
+      // If no real results, fall back to mock data
+      final candidatesToRank = candidates.isEmpty
+          ? _createMockCandidates(
+              widget.recipe.getLocalizedName('en'),
+              widget.recipe.cuisine,
+            )
+          : candidates;
 
       // Rank candidates using /youtube/rank
       final request = YouTubeRankRequest(
         recipeName: widget.recipe.getLocalizedName('en'),
         recipeCuisine: widget.recipe.cuisine,
         recipeTechniques: techniques,
-        candidates: candidates,
+        candidates: candidatesToRank,
         outputLanguage: 'en',
       );
 
