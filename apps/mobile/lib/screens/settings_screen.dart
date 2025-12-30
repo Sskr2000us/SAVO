@@ -169,7 +169,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final headers = {'X-User-Id': '00000000-0000-0000-0000-000000000001'};
+      final headers = {
+        'X-User-Id': '00000000-0000-0000-0000-000000000001',
+        'X-User-Email': 'demo@savo.app',
+      };
       
       // Delete existing members first
       final existingMembers = await apiClient.get('/profile/family-members', headers: headers);

@@ -145,6 +145,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 await apiClient.post('/inventory-db/items', item,
                   headers: {
                     'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
+                    'X-User-Email': 'demo@savo.app',
                   },
                 );
                 Navigator.pop(context);
