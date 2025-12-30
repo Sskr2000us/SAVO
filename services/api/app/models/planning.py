@@ -55,9 +55,24 @@ class SessionRequest(BaseModel):
 
 
 class DailyPlanRequest(SessionRequest):
-    """Request for daily meal planning"""
+    """Request for daily meal planning with meal type and time context"""
     time_available_minutes: int = Field(..., ge=5, le=480, description="Total time available for cooking")
     servings: int = Field(..., ge=1, le=20, description="Number of servings needed")
+    
+    # Meal context for better recommendations
+    meal_type: Optional[Literal["breakfast", "lunch", "dinner", "snack", "any"]] = Field(
+        None,
+        description="Type of meal being planned - helps with cultural/regional appropriateness"
+    )
+    meal_time: Optional[str] = Field(
+        None,
+        pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$",
+        description="Time of meal in 24h format (HH:MM) - used for regional meal type inference"
+    )
+    current_date: Optional[str] = Field(
+        None,
+        description="Current date (YYYY-MM-DD) - used for variety tracking"
+    )
 
 
 class PartyPlanRequest(SessionRequest):

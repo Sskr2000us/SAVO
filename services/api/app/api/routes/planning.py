@@ -121,13 +121,82 @@ def _build_planning_context(
 
 @router.post("/daily", response_model=MenuPlanResponse)
 async def post_daily(req: DailyPlanRequest):
-    """Generate daily meal plan"""
+    """Generate daily meal plan with full family profile and preferences"""
+    storage = get_storage()
+    config = storage.get_config()
+    
     context = _build_planning_context(req, "daily")
     context["time_available_minutes"] = req.time_available_minutes
     context["servings"] = req.servings
     
+    # Add meal context for better recommendations
+    if req.meal_type:
+        context["meal_type"] = req.meal_type
+    if req.meal_time:
+        context["meal_time"] = req.meal_time
+    if req.current_date:
+        context["current_date"] = req.current_date
+    
+    # Add family profile with detailed dietary info
+    if config and config.household_profile and config.household_profile.members:
+        context["family_members"] = [
+            {
+                "name": m.name,
+                "age": m.age,
+                "age_category": m.age_category,
+                "dietary_restrictions": m.dietary_restrictions,
+                "allergens": m.allergens,
+                "health_conditions": m.health_conditions,
+                "medical_dietary_needs": m.medical_dietary_needs,
+                "food_preferences": m.food_preferences,
+                "food_dislikes": m.food_dislikes,
+                "spice_tolerance": m.spice_tolerance
+            }
+            for m in config.household_profile.members
+        ]
+        
+        # Add nutrition targets
+        if config.household_profile.nutrition_targets:
+            context["nutrition_targets"] = config.household_profile.nutrition_targets.model_dump()
+    
+    # Add cultural and regional preferences
+    if config and config.global_settings:
+        gs = config.global_settings
+        context["region"] = gs.region
+        context["culture"] = gs.culture
+        context["meal_times"] = gs.meal_times
+        
+        # Add meal-specific preferences based on meal type
+        if req.meal_type == "breakfast" or (req.meal_time and _is_breakfast_time(req.meal_time, gs.meal_times)):
+            context["meal_preferences"] = gs.breakfast_preferences
+        elif req.meal_type == "lunch" or (req.meal_time and _is_lunch_time(req.meal_time, gs.meal_times)):
+            context["meal_preferences"] = gs.lunch_preferences
+        elif req.meal_type == "dinner" or (req.meal_time and _is_dinner_time(req.meal_time, gs.meal_times)):
+            context["meal_preferences"] = gs.dinner_preferences
+    
     result = await plan_daily(context)
     return MenuPlanResponse(**result)
+
+
+def _is_breakfast_time(time_str: str, meal_times: dict) -> bool:
+    """Check if time falls in breakfast range"""
+    breakfast_range = meal_times.get("breakfast", "07:00-09:00")
+    start, end = breakfast_range.split("-")
+    return start <= time_str <= end
+
+
+def _is_lunch_time(time_str: str, meal_times: dict) -> bool:
+    """Check if time falls in lunch range"""
+    lunch_range = meal_times.get("lunch", "12:00-14:00")
+    start, end = lunch_range.split("-")
+    return start <= time_str <= end
+
+
+def _is_dinner_time(time_str: str, meal_times: dict) -> bool:
+    """Check if time falls in dinner range"""
+    dinner_range = meal_times.get("dinner", "18:00-21:00")
+    start, end = dinner_range.split("-")
+    return start <= time_str <= end
 
 
 @router.post("/party", response_model=MenuPlanResponse)
