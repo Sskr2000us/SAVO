@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
-import '../models/config.dart';
+import '../theme/app_theme.dart';
+import '../widgets/savo_widgets.dart';
 import 'inventory_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -12,193 +13,705 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  AppConfiguration? _config;
-  bool _loading = true;
-  bool _saving = false;
+  final _formKey = GlobalKey<FormState>();
+  
+  // Family members list
+  List<Map<String, dynamic>> _familyMembers = [];
+  
+  // Regional settings
+  String _region = 'US';
+  String _culture = 'western';
+  
+  // Meal times
+  String _breakfastTime = '07:00-09:00';
+  String _lunchTime = '12:00-14:00';
+  String _dinnerTime = '18:00-21:00';
+  
+  // Meal preferences
+  String _breakfastStyle = 'continental';
+  String _lunchStyle = 'balanced';
+  String _dinnerStyle = 'family_meal';
+  int _dinnerCourses = 2;
+  
+  bool _isLoading = false;
+  bool _isSaving = false;
 
   @override
   void initState() {
     super.initState();
-    _loadConfig();
+    _loadConfiguration();
   }
 
-  Future<void> _loadConfig() async {
-    setState(() => _loading = true);
-
+  Future<void> _loadConfiguration() async {
+    setState(() => _isLoading = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final response = await apiClient.get('/config');
-
-      setState(() {
-        _config = AppConfiguration.fromJson(response);
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() => _loading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading config: $e')),
-        );
+      final config = await apiClient.get('/config');
+      
+      if (config != null) {
+        setState(() {
+          // Load family members
+          final householdProfile = config['household_profile'] as Map<String, dynamic>?;
+          if (householdProfile != null) {
+            final members = householdProfile['members'] as List?;
+            if (members != null) {
+              _familyMembers = members.cast<Map<String, dynamic>>();
+            }
+          }
+          
+          // Load global settings
+          final globalSettings = config['global_settings'] as Map<String, dynamic>?;
+          if (globalSettings != null) {
+            _region = globalSettings['region'] ?? 'US';
+            _culture = globalSettings['culture'] ?? 'western';
+            
+            final mealTimes = globalSettings['meal_times'] as Map<String, dynamic>?;
+            if (mealTimes != null) {
+              _breakfastTime = mealTimes['breakfast'] ?? '07:00-09:00';
+              _lunchTime = mealTimes['lunch'] ?? '12:00-14:00';
+              _dinnerTime = mealTimes['dinner'] ?? '18:00-21:00';
+            }
+            
+            final breakfastPrefs = globalSettings['breakfast_preferences'] as Map<String, dynamic>?;
+            if (breakfastPrefs != null) {
+              _breakfastStyle = breakfastPrefs['style'] ?? 'continental';
+            }
+            
+            final lunchPrefs = globalSettings['lunch_preferences'] as Map<String, dynamic>?;
+            if (lunchPrefs != null) {
+              _lunchStyle = lunchPrefs['style'] ?? 'balanced';
+            }
+            
+            final dinnerPrefs = globalSettings['dinner_preferences'] as Map<String, dynamic>?;
+            if (dinnerPrefs != null) {
+              _dinnerStyle = dinnerPrefs['style'] ?? 'family_meal';
+              _dinnerCourses = dinnerPrefs['courses'] ?? 2;
+            }
+          }
+        });
       }
-    }
-  }
-
-  Future<void> _saveConfig() async {
-    if (_config == null) return;
-
-    setState(() => _saving = true);
-
-    try {
-      final apiClient = Provider.of<ApiClient>(context, listen: false);
-      await apiClient.put('/config', _config!.toJson());
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings saved')),
-        );
-      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving: $e')),
+          SnackBar(content: Text('Failed to load configuration: $e')),
         );
       }
     } finally {
-      setState(() => _saving = false);
+      setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _saveConfiguration() async {
+    if (!_formKey.currentState!.validate()) return;
+    
+    setState(() => _isSaving = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      
+      final config = {
+        'household_profile': {
+          'members': _familyMembers,
+        },
+        'global_settings': {
+          'region': _region,
+          'culture': _culture,
+          'meal_times': {
+            'breakfast': _breakfastTime,
+            'lunch': _lunchTime,
+            'dinner': _dinnerTime,
+          },
+          'breakfast_preferences': {
+            'style': _breakfastStyle,
+            'light_or_heavy': 'medium',
+          },
+          'lunch_preferences': {
+            'style': _lunchStyle,
+            'include_rice_roti': _culture == 'indian',
+          },
+          'dinner_preferences': {
+            'style': _dinnerStyle,
+            'courses': _dinnerCourses,
+          },
+        },
+      };
+      
+      await apiClient.put('/config', config);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Configuration saved successfully!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save configuration: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSaving = false);
+    }
+  }
+
+  void _addFamilyMember() {
+    setState(() {
+      _familyMembers.add({
+        'member_id': 'member_${DateTime.now().millisecondsSinceEpoch}',
+        'name': '',
+        'age': 30,
+        'age_category': 'adult',
+        'dietary_restrictions': <String>[],
+        'allergens': <String>[],
+        'health_conditions': <String>[],
+        'medical_dietary_needs': {},
+        'spice_tolerance': 'medium',
+        'food_preferences': <String>[],
+        'food_dislikes': <String>[],
+      });
+    });
+  }
+
+  void _removeFamilyMember(int index) {
+    setState(() {
+      _familyMembers.removeAt(index);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text('Family Profile Settings'),
         actions: [
-          if (_config != null)
-            TextButton(
-              onPressed: _saving ? null : _saveConfig,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
+          if (_isSaving)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16.0),
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.save),
+              onPressed: _saveConfiguration,
+              tooltip: 'Save Settings',
             ),
         ],
       ),
-      body: _loading
+      body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _config == null
-              ? const Center(child: Text('Failed to load configuration'))
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.inventory_2),
-                      title: const Text('Manage Inventory'),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const InventoryScreen(),
-                          ),
-                        );
-                      },
+          : Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                children: [
+                  // Quick Actions
+                  _buildQuickAction(
+                    icon: Icons.inventory_2,
+                    title: 'Manage Inventory',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const InventoryScreen()),
                     ),
-                    const Divider(),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Household Profile',
-                      style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Regional Settings Section
+                  _buildSectionHeader('Regional & Cultural Settings'),
+                  SavoCard(
+                    child: Column(
+                      children: [
+                        _buildDropdown(
+                          label: 'Region',
+                          value: _region,
+                          items: const ['US', 'IN', 'UK', 'CA', 'AU'],
+                          onChanged: (value) => setState(() => _region = value!),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildDropdown(
+                          label: 'Culture',
+                          value: _culture,
+                          items: const ['western', 'indian', 'asian', 'middle_eastern', 'mediterranean'],
+                          onChanged: (value) => setState(() => _culture = value!),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    ListTile(
-                      title: const Text('Family Size'),
-                      trailing: Text(
-                        '${_config!.householdProfile.members.length} members',
-                      ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Meal Times Section
+                  _buildSectionHeader('Meal Times'),
+                  SavoCard(
+                    child: Column(
+                      children: [
+                        _buildTextField(
+                          label: 'Breakfast Time',
+                          value: _breakfastTime,
+                          hint: '07:00-09:00',
+                          onChanged: (value) => _breakfastTime = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'Lunch Time',
+                          value: _lunchTime,
+                          hint: '12:00-14:00',
+                          onChanged: (value) => _lunchTime = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'Dinner Time',
+                          value: _dinnerTime,
+                          hint: '18:00-21:00',
+                          onChanged: (value) => _dinnerTime = value,
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Preferences',
-                      style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Meal Preferences Section
+                  _buildSectionHeader('Meal Preferences'),
+                  SavoCard(
+                    child: Column(
+                      children: [
+                        _buildDropdown(
+                          label: 'Breakfast Style',
+                          value: _breakfastStyle,
+                          items: const ['continental', 'indian', 'american', 'healthy'],
+                          onChanged: (value) => setState(() => _breakfastStyle = value!),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildDropdown(
+                          label: 'Lunch Style',
+                          value: _lunchStyle,
+                          items: const ['balanced', 'light', 'hearty', 'quick'],
+                          onChanged: (value) => setState(() => _lunchStyle = value!),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildDropdown(
+                          label: 'Dinner Style',
+                          value: _dinnerStyle,
+                          items: const ['family_meal', 'romantic', 'quick', 'elaborate'],
+                          onChanged: (value) => setState(() => _dinnerStyle = value!),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildNumberField(
+                          label: 'Dinner Courses',
+                          value: _dinnerCourses,
+                          min: 1,
+                          max: 5,
+                          onChanged: (value) => setState(() => _dinnerCourses = value),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    SwitchListTile(
-                      title: const Text('Metric Units'),
-                      subtitle: const Text('Use grams/liters instead of cups/oz'),
-                      value: _config!.globalSettings.measurementSystem == 'metric',
-                      onChanged: (value) {
-                        setState(() {
-                          _config = AppConfiguration(
-                            householdProfile: _config!.householdProfile,
-                            globalSettings: GlobalSettings(
-                              measurementSystem: value ? 'metric' : 'imperial',
-                              timezone: _config!.globalSettings.timezone,
-                              primaryLanguage: _config!.globalSettings.primaryLanguage,
-                              availableEquipment: _config!.globalSettings.availableEquipment,
-                            ),
-                            behaviorSettings: _config!.behaviorSettings,
-                          );
-                        });
-                      },
-                    ),
-                    ListTile(
-                      title: const Text('Timezone'),
-                      trailing: Text(_config!.globalSettings.timezone),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Behavior',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    ListTile(
-                      title: const Text('Avoid Repetition'),
-                      trailing: Text(
-                        '${_config!.behaviorSettings.avoidRepetitionDays} days',
-                      ),
-                    ),
-                    SwitchListTile(
-                      title: const Text('Prioritize Expiring Items'),
-                      value: _config!.behaviorSettings.preferExpiringIngredients,
-                      onChanged: (value) {
-                        setState(() {
-                          _config = AppConfiguration(
-                            householdProfile: _config!.householdProfile,
-                            globalSettings: _config!.globalSettings,
-                            behaviorSettings: BehaviorSettings(
-                              avoidRepetitionDays:
-                                  _config!.behaviorSettings.avoidRepetitionDays,
-                              preferExpiringIngredients: value,
-                              rotateCuisines: _config!.behaviorSettings.rotateCuisines,
-                              rotateMethods: _config!.behaviorSettings.rotateMethods,
-                              maxRepeatCuisinePerWeek: _config!.behaviorSettings.maxRepeatCuisinePerWeek,
-                            ),
-                          );
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    if (_config!.householdProfile.members.isNotEmpty) ...[
-                      Text(
-                        'Dietary Restrictions',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      ..._config!.householdProfile.members.map(
-                        (member) => ListTile(
-                          title: Text(member.name),
-                          subtitle: member.dietaryRestrictions.isEmpty
-                              ? const Text('No restrictions')
-                              : Text(member.dietaryRestrictions.join(', ')),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Family Members Section
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildSectionHeader('Family Members (${_familyMembers.length})'),
+                      ElevatedButton.icon(
+                        onPressed: _addFamilyMember,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Member'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.secondary,
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+
+                  // Family members list
+                  if (_familyMembers.isEmpty)
+                    SavoCard(
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.lg),
+                          child: Column(
+                            children: [
+                              Icon(Icons.people_outline, size: 48, color: AppColors.textSecondary),
+                              const SizedBox(height: AppSpacing.sm),
+                              Text(
+                                'No family members added yet',
+                                style: AppTypography.bodyStyle(color: AppColors.textSecondary),
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                'Add members to personalize meal planning',
+                                style: AppTypography.captionStyle(color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._familyMembers.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final member = entry.value;
+                      return _buildFamilyMemberCard(index, member);
+                    }),
+
+                  const SizedBox(height: AppSpacing.xl),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildQuickAction({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return SavoCard(
+      child: ListTile(
+        leading: Icon(icon, color: AppColors.primary),
+        title: Text(title, style: AppTypography.bodyStyle()),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        onTap: onTap,
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: Text(
+        title,
+        style: AppTypography.h2Style(),
+      ),
+    );
+  }
+
+  Widget _buildFamilyMemberCard(int index, Map<String, dynamic> member) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      child: ExpansionTile(
+        title: Text(
+          member['name']?.isEmpty ?? true
+              ? 'New Family Member'
+              : member['name'],
+          style: AppTypography.h3Style(),
+        ),
+        subtitle: Text(
+          '${member['age'] ?? 30} years old • ${member['age_category'] ?? 'adult'}',
+          style: AppTypography.captionStyle(),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.delete, color: AppColors.danger),
+          onPressed: () => _removeFamilyMember(index),
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Basic Info
+                _buildTextField(
+                  label: 'Name',
+                  value: member['name'] ?? '',
+                  onChanged: (value) {
+                    setState(() {
+                      _familyMembers[index]['name'] = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: AppSpacing.md),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildNumberField(
+                        label: 'Age',
+                        value: member['age'] ?? 30,
+                        min: 0,
+                        max: 120,
+                        onChanged: (value) {
+                          setState(() {
+                            _familyMembers[index]['age'] = value;
+                            // Auto-set age category
+                            if (value < 13) {
+                              _familyMembers[index]['age_category'] = 'child';
+                            } else if (value < 18) {
+                              _familyMembers[index]['age_category'] = 'teen';
+                            } else if (value < 65) {
+                              _familyMembers[index]['age_category'] = 'adult';
+                            } else {
+                              _familyMembers[index]['age_category'] = 'senior';
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: _buildDropdown(
+                        label: 'Category',
+                        value: member['age_category'] ?? 'adult',
+                        items: const ['child', 'teen', 'adult', 'senior'],
+                        onChanged: (value) {
+                          setState(() {
+                            _familyMembers[index]['age_category'] = value;
+                          });
+                        },
+                      ),
+                    ),
                   ],
                 ),
+                const SizedBox(height: AppSpacing.md),
+
+                // Dietary Restrictions
+                _buildMultiSelectChips(
+                  label: 'Dietary Restrictions',
+                  options: const [
+                    'vegetarian',
+                    'vegan',
+                    'halal',
+                    'kosher',
+                    'gluten-free',
+                    'dairy-free',
+                    'pescatarian',
+                  ],
+                  selected: List<String>.from(member['dietary_restrictions'] ?? []),
+                  onChanged: (selected) {
+                    setState(() {
+                      _familyMembers[index]['dietary_restrictions'] = selected;
+                    });
+                  },
+                ),
+                const SizedBox(height: AppSpacing.md),
+
+                // Allergens
+                _buildMultiSelectChips(
+                  label: 'Allergens',
+                  options: const [
+                    'peanuts',
+                    'tree nuts',
+                    'shellfish',
+                    'fish',
+                    'eggs',
+                    'milk',
+                    'soy',
+                    'wheat',
+                  ],
+                  selected: List<String>.from(member['allergens'] ?? []),
+                  onChanged: (selected) {
+                    setState(() {
+                      _familyMembers[index]['allergens'] = selected;
+                    });
+                  },
+                ),
+                const SizedBox(height: AppSpacing.md),
+
+                // Health Conditions
+                _buildMultiSelectChips(
+                  label: 'Health Conditions',
+                  options: const [
+                    'diabetes',
+                    'hypertension',
+                    'high_cholesterol',
+                    'kidney_disease',
+                    'heart_disease',
+                  ],
+                  selected: List<String>.from(member['health_conditions'] ?? []),
+                  onChanged: (selected) {
+                    setState(() {
+                      _familyMembers[index]['health_conditions'] = selected;
+                    });
+                  },
+                ),
+                const SizedBox(height: AppSpacing.md),
+
+                // Medical Dietary Needs
+                Text('Medical Dietary Needs', style: AppTypography.bodyStyle()),
+                const SizedBox(height: AppSpacing.sm),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: [
+                    _buildCheckbox(
+                      label: 'Low Sodium',
+                      value: member['medical_dietary_needs']?['low_sodium'] ?? false,
+                      onChanged: (value) {
+                        setState(() {
+                          _familyMembers[index]['medical_dietary_needs'] ??= {};
+                          _familyMembers[index]['medical_dietary_needs']['low_sodium'] = value;
+                        });
+                      },
+                    ),
+                    _buildCheckbox(
+                      label: 'Low Sugar',
+                      value: member['medical_dietary_needs']?['low_sugar'] ?? false,
+                      onChanged: (value) {
+                        setState(() {
+                          _familyMembers[index]['medical_dietary_needs'] ??= {};
+                          _familyMembers[index]['medical_dietary_needs']['low_sugar'] = value;
+                        });
+                      },
+                    ),
+                    _buildCheckbox(
+                      label: 'Low Fat',
+                      value: member['medical_dietary_needs']?['low_fat'] ?? false,
+                      onChanged: (value) {
+                        setState(() {
+                          _familyMembers[index]['medical_dietary_needs'] ??= {};
+                          _familyMembers[index]['medical_dietary_needs']['low_fat'] = value;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+
+                // Spice Tolerance
+                _buildDropdown(
+                  label: 'Spice Tolerance',
+                  value: member['spice_tolerance'] ?? 'medium',
+                  items: const ['none', 'mild', 'medium', 'hot', 'very_hot'],
+                  onChanged: (value) {
+                    setState(() {
+                      _familyMembers[index]['spice_tolerance'] = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required String label,
+    required String value,
+    String? hint,
+    required Function(String) onChanged,
+  }) {
+    return TextFormField(
+      initialValue: value,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        border: const OutlineInputBorder(),
+      ),
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _buildNumberField({
+    required String label,
+    required int value,
+    required int min,
+    required int max,
+    required Function(int) onChanged,
+  }) {
+    return TextFormField(
+      initialValue: value.toString(),
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+      keyboardType: TextInputType.number,
+      onChanged: (text) {
+        final number = int.tryParse(text);
+        if (number != null && number >= min && number <= max) {
+          onChanged(number);
+        }
+      },
+    );
+  }
+
+  Widget _buildDropdown({
+    required String label,
+    required String value,
+    required List<String> items,
+    required Function(String?) onChanged,
+  }) {
+    return DropdownButtonFormField<String>(
+      value: value,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+      items: items.map((item) {
+        return DropdownMenuItem(
+          value: item,
+          child: Text(item.replaceAll('_', ' ').toUpperCase()),
+        );
+      }).toList(),
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _buildMultiSelectChips({
+    required String label,
+    required List<String> options,
+    required List<String> selected,
+    required Function(List<String>) onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: AppTypography.bodyStyle()),
+        const SizedBox(height: AppSpacing.sm),
+        Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: options.map((option) {
+            final isSelected = selected.contains(option);
+            return FilterChip(
+              label: Text(option.replaceAll('_', ' ')),
+              selected: isSelected,
+              onSelected: (selected) {
+                final newSelected = List<String>.from(this.selected);
+                if (selected) {
+                  newSelected.add(option);
+                } else {
+                  newSelected.remove(option);
+                }
+                onChanged(newSelected);
+              },
+              selectedColor: AppColors.secondary.withOpacity(0.3),
+              checkmarkColor: AppColors.secondary,
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCheckbox({
+    required String label,
+    required bool value,
+    required Function(bool) onChanged,
+  }) {
+    return IntrinsicWidth(
+      child: Row(
+        children: [
+          Checkbox(
+            value: value,
+            onChanged: (newValue) => onChanged(newValue ?? false),
+            activeColor: AppColors.secondary,
+          ),
+          Text(label, style: AppTypography.captionStyle()),
+        ],
+      ),
     );
   }
 }

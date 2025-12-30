@@ -8,6 +8,7 @@ import 'planning_results_screen.dart';
 import 'weekly_planner_screen.dart';
 import 'party_planner_screen.dart';
 import 'scan_ingredients_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -17,6 +18,18 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('SAVO'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                AppMotion.createRoute(const SettingsScreen()),
+              );
+            },
+            tooltip: 'Family Profile Settings',
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.md),
