@@ -33,6 +33,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final response = await apiClient.get('/inventory-db/items',
         headers: {
           'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
+          'X-User-Email': 'demo@savo.app',
         },
       );
 
@@ -68,6 +69,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       await apiClient.delete('/inventory-db/items/$inventoryId',
         headers: {
           'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
+          'X-User-Email': 'demo@savo.app',
         },
       );
       _loadInventory();
