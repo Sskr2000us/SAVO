@@ -77,7 +77,7 @@ class OpenAIClient(LlmClient):
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for OpenAI provider")
         
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")  # Updated to gpt-4o (current model)
         self.vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # gpt-4o has best vision + text reading
         self.timeout = timeout
         self.base_url = "https://api.openai.com/v1"
@@ -132,6 +132,11 @@ class OpenAIClient(LlmClient):
                     return json.loads(content)
                     
                 except httpx.HTTPStatusError as e:
+                    # Log error details for debugging
+                    error_body = e.response.text if hasattr(e.response, 'text') else str(e)
+                    logger.error(f"OpenAI API error {e.response.status_code}: {error_body}")
+                    logger.error(f"Request model: {self.model}")
+                    
                     if e.response.status_code == 429:
                         # Rate limited
                         retry_after = None
