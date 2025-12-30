@@ -7,6 +7,7 @@ from app.api.routes.inventory import router as inventory_router
 from app.api.routes.planning import router as planning_router
 from app.api.routes.youtube import router as youtube_router
 from app.api.routes.training import router as training_router
+from app.api.routes.recipes import router as recipes_router
 
 api_router = APIRouter()
 
@@ -17,3 +18,4 @@ api_router.include_router(inventory_router, prefix="/inventory", tags=["inventor
 api_router.include_router(planning_router, prefix="/plan", tags=["planning"])
 api_router.include_router(youtube_router, prefix="/youtube", tags=["youtube"])
 api_router.include_router(training_router, prefix="/training", tags=["training"])
+api_router.include_router(recipes_router, prefix="/recipes", tags=["recipes"])

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 
 class ApiClient {
@@ -50,12 +51,30 @@ class ApiClient {
 
     request.fields.addAll(fields);
 
+    // Determine MIME type from file extension
+    String? mimeType = file.mimeType;
+    if (mimeType == null) {
+      final extension = file.name.toLowerCase().split('.').last;
+      if (extension == 'jpg' || extension == 'jpeg') {
+        mimeType = 'image/jpeg';
+      } else if (extension == 'png') {
+        mimeType = 'image/png';
+      } else if (extension == 'gif') {
+        mimeType = 'image/gif';
+      } else if (extension == 'webp') {
+        mimeType = 'image/webp';
+      } else {
+        mimeType = 'image/jpeg'; // Default fallback
+      }
+    }
+
     final bytes = await file.readAsBytes();
     request.files.add(
       http.MultipartFile.fromBytes(
         fieldName,
         bytes,
         filename: file.name,
+        contentType: MediaType.parse(mimeType),
       ),
     );
 

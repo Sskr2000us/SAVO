@@ -7,6 +7,7 @@ import '../widgets/savo_widgets.dart';
 import 'planning_results_screen.dart';
 import 'weekly_planner_screen.dart';
 import 'party_planner_screen.dart';
+import 'scan_ingredients_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -39,6 +40,21 @@ class HomeScreen extends StatelessWidget {
             Text(
               'What would you like to plan?',
               style: AppTypography.h2Style(),
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Scan Ingredients Card (NEW!)
+            _PlanningOptionCard(
+              title: 'Scan Ingredients',
+              description: 'Add items from photo',
+              icon: Icons.camera_alt,
+              color: AppColors.accent,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  AppMotion.createRoute(const ScanIngredientsScreen()),
+                );
+              },
             ),
             const SizedBox(height: AppSpacing.md),
 
