@@ -32,7 +32,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       // Use database endpoint with user header
       final response = await apiClient.get('/inventory-db/items',
         headers: {
-          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
         },
       );
 
@@ -142,7 +142,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 // Use database endpoint with user header
                 await apiClient.post('/inventory-db/items', item,
                   headers: {
-                    'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+                    'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
                   },
                 );
                 Navigator.pop(context);

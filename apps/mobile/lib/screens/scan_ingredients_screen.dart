@@ -124,7 +124,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           'scan_confidence': (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null,
         },
           headers: {
-            'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+            'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
           },
         );
       }

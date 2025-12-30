@@ -58,7 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Load family members from database
       final membersResponse = await apiClient.get('/profile/family-members',
         headers: {
-          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
         },
       );
       
@@ -169,7 +169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final headers = {'X-User-Id': 'demo-user-123'};
+      final headers = {'X-User-Id': '00000000-0000-0000-0000-000000000001'};
       
       // Delete existing members first
       final existingMembers = await apiClient.get('/profile/family-members', headers: headers);
