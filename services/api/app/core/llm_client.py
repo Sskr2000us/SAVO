@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import ast
 import json
 import logging
 import os
@@ -38,11 +39,20 @@ def _parse_json_from_text(text: str) -> Any:
             raise first_error
 
         start = min(candidates)
+        slice_text = cleaned[start:]
+
+        # Try strict JSON from the first bracket
         try:
-            value, _end = decoder.raw_decode(cleaned[start:])
+            value, _end = decoder.raw_decode(slice_text)
             return value
         except json.JSONDecodeError:
-            raise first_error
+            # Fallback: some models output Python-ish dicts (single quotes, None, True/False).
+            # ast.literal_eval is safe for literals and can recover many of these.
+            try:
+                value = ast.literal_eval(slice_text)
+                return value
+            except Exception:
+                raise first_error
 
 
 class RateLimitException(Exception):
@@ -268,6 +278,7 @@ class GoogleClient(LlmClient):
                         "temperature": 0.2,
                         "maxOutputTokens": 4096,
                         "responseMimeType": "application/json",
+                        "responseSchema": schema,
                     }
 
                     response = await client.post(
@@ -284,23 +295,34 @@ class GoogleClient(LlmClient):
                         }
                     )
 
-                    # Some models/tiers reject responseMimeType; retry once without it.
-                    if response.status_code == 400 and "responseMimeType" in response.text and attempt < max_retries - 1:
-                        logger.warning("Gemini rejected responseMimeType; retrying without JSON mime type")
-                        generation_config.pop("responseMimeType", None)
-                        response = await client.post(
-                            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                            headers={
-                                "Content-Type": "application/json",
-                            },
-                            params={
-                                "key": self.api_key
-                            },
-                            json={
-                                "contents": contents,
-                                "generationConfig": generation_config,
-                            }
-                        )
+                    # Some models/tiers reject responseMimeType/responseSchema; retry once without them.
+                    if response.status_code == 400 and attempt < max_retries - 1:
+                        body_text = response.text or ""
+                        rejected_fields: list[str] = []
+                        if "responseMimeType" in body_text:
+                            rejected_fields.append("responseMimeType")
+                        if "responseSchema" in body_text:
+                            rejected_fields.append("responseSchema")
+
+                        if rejected_fields:
+                            logger.warning(
+                                f"Gemini rejected {', '.join(rejected_fields)}; retrying without structured output fields"
+                            )
+                            for f in rejected_fields:
+                                generation_config.pop(f, None)
+                            response = await client.post(
+                                f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                                headers={
+                                    "Content-Type": "application/json",
+                                },
+                                params={
+                                    "key": self.api_key
+                                },
+                                json={
+                                    "contents": contents,
+                                    "generationConfig": generation_config,
+                                }
+                            )
                     
                     if response.status_code != 200:
                         error_detail = response.text
