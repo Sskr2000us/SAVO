@@ -172,7 +172,7 @@ class GoogleClient(LlmClient):
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY is required for Google provider")
         
-        self.model = model or os.getenv("GOOGLE_MODEL", "gemini-pro")
+        self.model = model or os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
         self.timeout = timeout
     
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
@@ -225,7 +225,7 @@ class GoogleClient(LlmClient):
             for attempt in range(max_retries):
                 try:
                     response = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1/models/{self.model}:generateContent",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
                         headers={
                             "Content-Type": "application/json",
                         },
