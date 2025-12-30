@@ -274,11 +274,13 @@ class GoogleClient(LlmClient):
             for attempt in range(max_retries):
                 try:
                     # Prefer JSON-mode if supported by the model.
+                    # NOTE: Gemini's response schema feature does NOT accept full JSON Schema.
+                    # Our prompt-pack schemas contain keywords like if/then/allOf/additionalProperties,
+                    # which Gemini rejects with INVALID_ARGUMENT. We enforce schema on our side.
                     generation_config: dict[str, Any] = {
                         "temperature": 0.2,
                         "maxOutputTokens": 4096,
                         "responseMimeType": "application/json",
-                        "responseSchema": schema,
                     }
 
                     response = await client.post(
@@ -295,13 +297,14 @@ class GoogleClient(LlmClient):
                         }
                     )
 
-                    # Some models/tiers reject responseMimeType/responseSchema; retry once without them.
+                    # Some models/tiers reject responseMimeType; retry once without it.
                     if response.status_code == 400 and attempt < max_retries - 1:
                         body_text = response.text or ""
                         rejected_fields: list[str] = []
-                        if "responseMimeType" in body_text:
+                        if "responseMimeType" in body_text or "response_mime_type" in body_text:
                             rejected_fields.append("responseMimeType")
-                        if "responseSchema" in body_text:
+                        # Defensive: if the API starts reporting schema errors, we don't use it.
+                        if "responseSchema" in body_text or "response_schema" in body_text:
                             rejected_fields.append("responseSchema")
 
                         if rejected_fields:
@@ -309,7 +312,10 @@ class GoogleClient(LlmClient):
                                 f"Gemini rejected {', '.join(rejected_fields)}; retrying without structured output fields"
                             )
                             for f in rejected_fields:
-                                generation_config.pop(f, None)
+                                if f == "responseMimeType":
+                                    generation_config.pop("responseMimeType", None)
+                                if f == "responseSchema":
+                                    generation_config.pop("responseSchema", None)
                             response = await client.post(
                                 f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
                                 headers={
