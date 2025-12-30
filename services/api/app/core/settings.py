@@ -39,6 +39,27 @@ class Settings(BaseModel):
         os.getenv("SAVO_LLM_PROVIDER", "openai")  # Fallback to legacy for compatibility
     )
     
+    # Custom vision model settings (Phase 2)
+    use_custom_vision_model: bool = os.getenv(
+        "SAVO_USE_CUSTOM_VISION",
+        "false"
+    ).lower() == "true"
+    
+    custom_vision_model_path: str = os.getenv(
+        "SAVO_VISION_MODEL_PATH",
+        "./models/savo_yolo_v8.pt"
+    )
+    
+    vision_confidence_threshold: float = float(
+        os.getenv("SAVO_VISION_CONFIDENCE", "0.5")
+    )
+    
+    # Training data collection
+    collect_training_data: bool = os.getenv(
+        "SAVO_COLLECT_TRAINING_DATA",
+        "true"
+    ).lower() == "true"
+    
     prompt_pack_path: str = os.getenv("SAVO_PROMPT_PACK_PATH", _default_prompt_pack_path())
 
 
