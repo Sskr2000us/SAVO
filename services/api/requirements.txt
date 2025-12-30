@@ -8,3 +8,5 @@ anthropic>=0.18.0
 httpx>=0.24.0
 python-multipart
 youtube-transcript-api>=0.6.0
+supabase>=2.3.0
+postgrest>=0.13.0

@@ -1,0 +1,488 @@
+"""
+Supabase Database Client for SAVO
+Handles all database operations with connection pooling and error handling
+"""
+
+from typing import Optional, Dict, Any, List
+import os
+from datetime import datetime, date
+from supabase import create_client, Client
+from postgrest.exceptions import APIError
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class SupabaseDB:
+    """Singleton database client for Supabase operations"""
+    
+    _instance: Optional['SupabaseDB'] = None
+    _client: Optional[Client] = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        if self._client is None:
+            url = os.getenv("SUPABASE_URL")
+            key = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for backend
+            
+            if not url or not key:
+                raise ValueError(
+                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment"
+                )
+            
+            self._client = create_client(url, key)
+            logger.info("Supabase client initialized")
+    
+    @property
+    def client(self) -> Client:
+        """Get the Supabase client instance"""
+        if self._client is None:
+            raise RuntimeError("Supabase client not initialized")
+        return self._client
+
+
+# Singleton instance
+db = SupabaseDB()
+
+
+# ============================================================================
+# USER PROFILE OPERATIONS
+# ============================================================================
+
+async def get_or_create_user(user_id: str, email: str, full_name: Optional[str] = None) -> Dict[str, Any]:
+    """Get or create user profile"""
+    try:
+        # Try to get existing user
+        result = db.client.table("users").select("*").eq("id", user_id).execute()
+        
+        if result.data:
+            return result.data[0]
+        
+        # Create new user
+        user_data = {
+            "id": user_id,
+            "email": email,
+            "full_name": full_name,
+            "last_login_at": datetime.utcnow().isoformat()
+        }
+        
+        result = db.client.table("users").insert(user_data).execute()
+        return result.data[0]
+        
+    except APIError as e:
+        logger.error(f"Error getting/creating user: {e}")
+        raise
+
+
+async def update_user_login(user_id: str) -> None:
+    """Update user's last login timestamp"""
+    try:
+        db.client.table("users").update({
+            "last_login_at": datetime.utcnow().isoformat()
+        }).eq("id", user_id).execute()
+    except APIError as e:
+        logger.error(f"Error updating user login: {e}")
+
+
+# ============================================================================
+# HOUSEHOLD PROFILE OPERATIONS
+# ============================================================================
+
+async def get_household_profile(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get household profile for user"""
+    try:
+        result = db.client.table("household_profiles").select("*").eq("user_id", user_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error getting household profile: {e}")
+        raise
+
+
+async def create_household_profile(user_id: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create new household profile"""
+    try:
+        profile_data["user_id"] = user_id
+        result = db.client.table("household_profiles").insert(profile_data).execute()
+        return result.data[0]
+    except APIError as e:
+        logger.error(f"Error creating household profile: {e}")
+        raise
+
+
+async def update_household_profile(user_id: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update existing household profile"""
+    try:
+        result = db.client.table("household_profiles").update(profile_data).eq("user_id", user_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error updating household profile: {e}")
+        raise
+
+
+async def update_skill_level(user_id: str, recipes_completed: int) -> None:
+    """Update skill level based on completed recipes"""
+    try:
+        # Calculate new skill level based on progression rules
+        skill_level = 1
+        if recipes_completed >= 12:
+            skill_level = 5
+        elif recipes_completed >= 8:
+            skill_level = 4
+        elif recipes_completed >= 5:
+            skill_level = 3
+        elif recipes_completed >= 3:
+            skill_level = 2
+        
+        # Calculate confidence score
+        confidence_score = min(0.95, 0.40 + (recipes_completed * 0.05))
+        
+        db.client.table("household_profiles").update({
+            "skill_level": skill_level,
+            "confidence_score": confidence_score,
+            "recipes_completed": recipes_completed
+        }).eq("user_id", user_id).execute()
+        
+    except APIError as e:
+        logger.error(f"Error updating skill level: {e}")
+
+
+# ============================================================================
+# FAMILY MEMBER OPERATIONS
+# ============================================================================
+
+async def get_family_members(user_id: str) -> List[Dict[str, Any]]:
+    """Get all family members for user"""
+    try:
+        # First get household_id
+        household = await get_household_profile(user_id)
+        if not household:
+            return []
+        
+        result = db.client.table("family_members").select("*").eq(
+            "household_id", household["id"]
+        ).order("display_order").execute()
+        
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting family members: {e}")
+        raise
+
+
+async def create_family_member(user_id: str, member_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create new family member"""
+    try:
+        household = await get_household_profile(user_id)
+        if not household:
+            raise ValueError("Household profile not found")
+        
+        member_data["household_id"] = household["id"]
+        
+        # Determine age category
+        age = member_data.get("age", 0)
+        if age < 13:
+            member_data["age_category"] = "child"
+        elif age < 18:
+            member_data["age_category"] = "teen"
+        elif age < 65:
+            member_data["age_category"] = "adult"
+        else:
+            member_data["age_category"] = "senior"
+        
+        result = db.client.table("family_members").insert(member_data).execute()
+        return result.data[0]
+    except APIError as e:
+        logger.error(f"Error creating family member: {e}")
+        raise
+
+
+async def update_family_member(member_id: str, member_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update existing family member"""
+    try:
+        # Update age category if age changed
+        if "age" in member_data:
+            age = member_data["age"]
+            if age < 13:
+                member_data["age_category"] = "child"
+            elif age < 18:
+                member_data["age_category"] = "teen"
+            elif age < 65:
+                member_data["age_category"] = "adult"
+            else:
+                member_data["age_category"] = "senior"
+        
+        result = db.client.table("family_members").update(member_data).eq("id", member_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error updating family member: {e}")
+        raise
+
+
+async def delete_family_member(member_id: str) -> None:
+    """Delete family member"""
+    try:
+        db.client.table("family_members").delete().eq("id", member_id).execute()
+    except APIError as e:
+        logger.error(f"Error deleting family member: {e}")
+        raise
+
+
+# ============================================================================
+# INVENTORY OPERATIONS
+# ============================================================================
+
+async def get_inventory(user_id: str, include_low_stock_only: bool = False) -> List[Dict[str, Any]]:
+    """Get user's inventory items"""
+    try:
+        query = db.client.table("inventory_items").select("*").eq("user_id", user_id)
+        
+        if include_low_stock_only:
+            query = query.eq("is_low_stock", True)
+        
+        result = query.order("updated_at", desc=True).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting inventory: {e}")
+        raise
+
+
+async def get_inventory_by_category(user_id: str, category: str) -> List[Dict[str, Any]]:
+    """Get inventory items by category"""
+    try:
+        result = db.client.table("inventory_items").select("*").eq(
+            "user_id", user_id
+        ).eq("category", category).execute()
+        
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting inventory by category: {e}")
+        raise
+
+
+async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Add new inventory item"""
+    try:
+        item_data["user_id"] = user_id
+        
+        # Set default low stock threshold if not provided
+        if "low_stock_threshold" not in item_data:
+            item_data["low_stock_threshold"] = 1.0
+        
+        result = db.client.table("inventory_items").insert(item_data).execute()
+        return result.data[0]
+    except APIError as e:
+        logger.error(f"Error adding inventory item: {e}")
+        raise
+
+
+async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update existing inventory item"""
+    try:
+        result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error updating inventory item: {e}")
+        raise
+
+
+async def delete_inventory_item(item_id: str) -> None:
+    """Delete inventory item"""
+    try:
+        db.client.table("inventory_items").delete().eq("id", item_id).execute()
+    except APIError as e:
+        logger.error(f"Error deleting inventory item: {e}")
+        raise
+
+
+async def get_low_stock_items(user_id: str) -> List[Dict[str, Any]]:
+    """Get low stock items using database function"""
+    try:
+        result = db.client.rpc("get_low_stock_items", {"p_user_id": user_id}).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting low stock items: {e}")
+        raise
+
+
+async def get_expiring_items(user_id: str, days: int = 3) -> List[Dict[str, Any]]:
+    """Get items expiring within specified days"""
+    try:
+        result = db.client.rpc("get_expiring_items", {
+            "p_user_id": user_id,
+            "p_days": days
+        }).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting expiring items: {e}")
+        raise
+
+
+async def deduct_inventory_for_recipe(
+    user_id: str,
+    meal_plan_id: str,
+    ingredients: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Deduct inventory items after recipe selection
+    Returns: {success: bool, message: str, insufficient_items: list}
+    """
+    try:
+        result = db.client.rpc("deduct_inventory_for_recipe", {
+            "p_user_id": user_id,
+            "p_meal_plan_id": meal_plan_id,
+            "p_ingredients": ingredients
+        }).execute()
+        
+        return result.data[0] if result.data else {
+            "success": False,
+            "message": "Unknown error",
+            "insufficient_items": []
+        }
+    except APIError as e:
+        logger.error(f"Error deducting inventory: {e}")
+        raise
+
+
+# ============================================================================
+# MEAL PLAN OPERATIONS
+# ============================================================================
+
+async def create_meal_plan(user_id: str, plan_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create new meal plan"""
+    try:
+        plan_data["user_id"] = user_id
+        
+        # Get household_id if available
+        household = await get_household_profile(user_id)
+        if household:
+            plan_data["household_id"] = household["id"]
+        
+        result = db.client.table("meal_plans").insert(plan_data).execute()
+        return result.data[0]
+    except APIError as e:
+        logger.error(f"Error creating meal plan: {e}")
+        raise
+
+
+async def get_meal_plans(
+    user_id: str,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    plan_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get meal plans with optional filters"""
+    try:
+        query = db.client.table("meal_plans").select("*").eq("user_id", user_id)
+        
+        if start_date:
+            query = query.gte("plan_date", start_date.isoformat())
+        
+        if end_date:
+            query = query.lte("plan_date", end_date.isoformat())
+        
+        if plan_type:
+            query = query.eq("plan_type", plan_type)
+        
+        result = query.order("plan_date", desc=True).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting meal plans: {e}")
+        raise
+
+
+async def update_meal_plan(meal_plan_id: str, plan_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update meal plan"""
+    try:
+        result = db.client.table("meal_plans").update(plan_data).eq("id", meal_plan_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error updating meal plan: {e}")
+        raise
+
+
+async def complete_meal_plan(
+    meal_plan_id: str,
+    rating: Optional[int] = None,
+    notes: Optional[str] = None
+) -> Dict[str, Any]:
+    """Mark meal plan as completed"""
+    try:
+        update_data = {
+            "status": "completed",
+            "completed_at": datetime.utcnow().isoformat()
+        }
+        
+        if rating:
+            update_data["completion_rating"] = rating
+        
+        if notes:
+            update_data["completion_notes"] = notes
+        
+        result = db.client.table("meal_plans").update(update_data).eq("id", meal_plan_id).execute()
+        return result.data[0] if result.data else None
+    except APIError as e:
+        logger.error(f"Error completing meal plan: {e}")
+        raise
+
+
+# ============================================================================
+# RECIPE HISTORY OPERATIONS
+# ============================================================================
+
+async def add_recipe_to_history(user_id: str, recipe_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Add completed recipe to history"""
+    try:
+        recipe_data["user_id"] = user_id
+        recipe_data["completed_at"] = datetime.utcnow().isoformat()
+        
+        result = db.client.table("recipe_history").insert(recipe_data).execute()
+        
+        # Update household skill level if recipe was successful
+        if recipe_data.get("was_successful", True):
+            household = await get_household_profile(user_id)
+            if household:
+                new_count = household.get("recipes_completed", 0) + 1
+                await update_skill_level(user_id, new_count)
+        
+        return result.data[0]
+    except APIError as e:
+        logger.error(f"Error adding recipe to history: {e}")
+        raise
+
+
+async def get_recipe_history(
+    user_id: str,
+    limit: int = 50,
+    cuisine: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get recipe history with optional filters"""
+    try:
+        query = db.client.table("recipe_history").select("*").eq("user_id", user_id)
+        
+        if cuisine:
+            query = query.eq("cuisine", cuisine)
+        
+        result = query.order("completed_at", desc=True).limit(limit).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting recipe history: {e}")
+        raise
+
+
+async def get_recent_recipes(user_id: str, days: int = 14) -> List[str]:
+    """Get list of recently cooked recipe names for variety scoring"""
+    try:
+        cutoff_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff_date = cutoff_date.isoformat()
+        
+        result = db.client.table("recipe_history").select("recipe_name").eq(
+            "user_id", user_id
+        ).gte("completed_at", cutoff_date).execute()
+        
+        return [r["recipe_name"] for r in result.data] if result.data else []
+    except APIError as e:
+        logger.error(f"Error getting recent recipes: {e}")
+        return []
