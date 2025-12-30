@@ -4,7 +4,8 @@ import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
 import 'scan_ingredients_screen.dart';
-import 'realtime_scan_screen.dart';
+import 'realtime_scan_screen_stub.dart'
+    if (dart.library.io) 'realtime_scan_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
