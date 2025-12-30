@@ -28,9 +28,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final response = await apiClient.get('/inventory');
+      // Use database endpoint with user header
+      final response = await apiClient.get('/inventory-db/items',
+        headers: {
+          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+        },
+      );
 
-      if (response is List) {
+      if (response is Map && response['items'] is List) {
+        setState(() {
+          _items = (response['items'] as List)
+              .map((json) => InventoryItem.fromJson(json as Map<String, dynamic>))
+              .toList();
+          _loading = false;
+        });
+      } else if (response is List) {
         setState(() {
           _items = (response as List)
               .map((json) => InventoryItem.fromJson(json as Map<String, dynamic>))
@@ -42,7 +54,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       setState(() => _loading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading inventory: $e')),
+          SnackBar(content: Text('Error loading inventory from database: $e')),
         );
       }
     }
@@ -51,12 +63,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> _deleteItem(String inventoryId) async {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      await apiClient.delete('/inventory/$inventoryId');
+      // Use database endpoint with user header
+      await apiClient.delete('/inventory-db/items/$inventoryId',
+        headers: {
+          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+        },
+      );
       _loadInventory();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting item: $e')),
+          SnackBar(content: Text('Error deleting from database: $e')),
         );
       }
     }
@@ -112,22 +129,27 @@ class _InventoryScreenState extends State<InventoryScreen> {
             onPressed: () async {
               final item = {
                 'canonical_name': nameController.text,
+                'display_name': nameController.text,
                 'quantity': double.tryParse(quantityController.text) ?? 1.0,
                 'unit': unitController.text,
-                'storage': selectedStorage,
-                'state': selectedState,
-                'freshness_days_remaining': 7,
+                'storage_location': selectedStorage,  // Match database field name
+                'item_state': selectedState,  // Match database field name
               };
 
               try {
                 final apiClient = Provider.of<ApiClient>(context, listen: false);
-                await apiClient.post('/inventory', item);
+                // Use database endpoint with user header
+                await apiClient.post('/inventory-db/items', item,
+                  headers: {
+                    'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+                  },
+                );
                 Navigator.pop(context);
                 _loadInventory();
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error adding item: $e')),
+                    SnackBar(content: Text('Error adding to database: $e')),
                   );
                 }
               }

@@ -112,24 +112,27 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         if (item is! Map) continue;
         final json = item.cast<String, dynamic>();
 
-        await apiClient.post('/inventory', {
+        // Save to database using /inventory-db/items endpoint
+        await apiClient.post('/inventory-db/items', {
           'canonical_name': json['canonical_name'] ?? '',
           'display_name': json['display_name'],
           'quantity': (json['quantity'] is num) ? (json['quantity'] as num).toDouble() : 1.0,
           'unit': json['unit'] ?? 'pcs',
-          'state': json['state'] ?? 'raw',
-          'storage': json['storage'] ?? 'pantry',
-          'freshness_days_remaining': (json['freshness_days_remaining'] is num)
-              ? (json['freshness_days_remaining'] as num).round()
-              : 7,
-          'notes': null,
-        });
+          'item_state': json['state'] ?? 'raw',  // Match database field name
+          'storage_location': json['storage'] ?? 'pantry',  // Match database field name
+          'source': 'scan',  // Mark as scanned item
+          'scan_confidence': (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null,
+        },
+          headers: {
+            'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          },
+        );
       }
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Added scanned items to inventory')),
+        const SnackBar(content: Text('Saved scanned items to database!')),
       );
       Navigator.pop(context, true);
     } catch (e) {

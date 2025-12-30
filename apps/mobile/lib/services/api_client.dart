@@ -18,8 +18,11 @@ class ApiClient {
     // return 'http://localhost:8000';
   }
 
-  Future<dynamic> get(String endpoint) async {
-    final response = await http.get(Uri.parse('$baseUrl$endpoint'));
+  Future<dynamic> get(String endpoint, {Map<String, String>? headers}) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl$endpoint'),
+      headers: headers,
+    );
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -27,10 +30,13 @@ class ApiClient {
     }
   }
 
-  Future<Map<String, dynamic>> post(String endpoint, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> post(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
+    final allHeaders = {'Content-Type': 'application/json'};
+    if (headers != null) allHeaders.addAll(headers);
+    
     final response = await http.post(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {'Content-Type': 'application/json'},
+      headers: allHeaders,
       body: json.encode(body),
     );
     if (response.statusCode == 200 || response.statusCode == 201) {
@@ -88,10 +94,13 @@ class ApiClient {
     throw Exception('Failed to post multipart: ${response.statusCode} ${response.body}');
   }
 
-  Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
+    final allHeaders = {'Content-Type': 'application/json'};
+    if (headers != null) allHeaders.addAll(headers);
+    
     final response = await http.put(
       Uri.parse('$baseUrl$endpoint'),
-      headers: {'Content-Type': 'application/json'},
+      headers: allHeaders,
       body: json.encode(body),
     );
     if (response.statusCode == 200) {
@@ -101,8 +110,27 @@ class ApiClient {
     }
   }
 
-  Future<void> delete(String endpoint) async {
-    final response = await http.delete(Uri.parse('$baseUrl$endpoint'));
+  Future<Map<String, dynamic>> patch(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
+    final allHeaders = {'Content-Type': 'application/json'};
+    if (headers != null) allHeaders.addAll(headers);
+    
+    final response = await http.patch(
+      Uri.parse('$baseUrl$endpoint'),
+      headers: allHeaders,
+      body: json.encode(body),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to patch data: ${response.statusCode}');
+    }
+  }
+
+  Future<void> delete(String endpoint, {Map<String, String>? headers}) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl$endpoint'),
+      headers: headers,
+    );
     if (response.statusCode != 204 && response.statusCode != 200) {
       throw Exception('Failed to delete data: ${response.statusCode}');
     }

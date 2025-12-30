@@ -46,50 +46,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoading = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final config = await apiClient.get('/config');
       
-      if (config != null) {
-        setState(() {
-          // Load family members
-          final householdProfile = config['household_profile'] as Map<String, dynamic>?;
-          if (householdProfile != null) {
-            final members = householdProfile['members'] as List?;
-            if (members != null) {
-              _familyMembers = members.cast<Map<String, dynamic>>();
-            }
+      // Load household profile from database
+      final householdResponse = await apiClient.get('/profile/household',
+        headers: {
+          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+          'X-User-Email': 'demo@savo.app',
+        },
+      );
+      
+      // Load family members from database
+      final membersResponse = await apiClient.get('/profile/family-members',
+        headers: {
+          'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+        },
+      );
+      
+      setState(() {
+        // Load household profile
+        if (householdResponse != null && householdResponse['exists'] == true) {
+          final profile = householdResponse['profile'] as Map<String, dynamic>;
+          _region = profile['region'] ?? 'US';
+          _culture = profile['culture'] ?? 'western';
+          
+          final mealTimes = profile['meal_times'] as Map<String, dynamic>?;
+          if (mealTimes != null) {
+            _breakfastTime = mealTimes['breakfast'] ?? '07:00-09:00';
+            _lunchTime = mealTimes['lunch'] ?? '12:00-14:00';
+            _dinnerTime = mealTimes['dinner'] ?? '18:00-21:00';
           }
           
-          // Load global settings
-          final globalSettings = config['global_settings'] as Map<String, dynamic>?;
-          if (globalSettings != null) {
-            _region = globalSettings['region'] ?? 'US';
-            _culture = globalSettings['culture'] ?? 'western';
-            
-            final mealTimes = globalSettings['meal_times'] as Map<String, dynamic>?;
-            if (mealTimes != null) {
-              _breakfastTime = mealTimes['breakfast'] ?? '07:00-09:00';
-              _lunchTime = mealTimes['lunch'] ?? '12:00-14:00';
-              _dinnerTime = mealTimes['dinner'] ?? '18:00-21:00';
-            }
-            
-            final breakfastPrefs = globalSettings['breakfast_preferences'] as Map<String, dynamic>?;
-            if (breakfastPrefs != null) {
-              _breakfastStyle = breakfastPrefs['style'] ?? 'continental';
-            }
-            
-            final lunchPrefs = globalSettings['lunch_preferences'] as Map<String, dynamic>?;
-            if (lunchPrefs != null) {
-              _lunchStyle = lunchPrefs['style'] ?? 'balanced';
-            }
-            
-            final dinnerPrefs = globalSettings['dinner_preferences'] as Map<String, dynamic>?;
-            if (dinnerPrefs != null) {
-              _dinnerStyle = dinnerPrefs['style'] ?? 'family_meal';
-              _dinnerCourses = dinnerPrefs['courses'] ?? 2;
-            }
+          final breakfastPrefs = profile['breakfast_preferences'] as List?;
+          if (breakfastPrefs != null && breakfastPrefs.isNotEmpty) {
+            _breakfastStyle = breakfastPrefs[0] ?? 'continental';
           }
-        });
-      }
+          
+          final lunchPrefs = profile['lunch_preferences'] as List?;
+          if (lunchPrefs != null && lunchPrefs.isNotEmpty) {
+            _lunchStyle = lunchPrefs[0] ?? 'balanced';
+          }
+          
+          final dinnerPrefs = profile['dinner_preferences'] as List?;
+          if (dinnerPrefs != null && dinnerPrefs.isNotEmpty) {
+            _dinnerStyle = dinnerPrefs[0] ?? 'family_meal';
+          }
+        }
+        
+        // Load family members
+        if (membersResponse != null && membersResponse['members'] is List) {
+          _familyMembers = (membersResponse['members'] as List)
+              .cast<Map<String, dynamic>>();
+        }
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -107,40 +115,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      
-      final config = {
-        'household_profile': {
-          'members': _familyMembers,
-        },
-        'global_settings': {
-          'region': _region,
-          'culture': _culture,
-          'meal_times': {
-            'breakfast': _breakfastTime,
-            'lunch': _lunchTime,
-            'dinner': _dinnerTime,
-          },
-          'breakfast_preferences': {
-            'style': _breakfastStyle,
-            'light_or_heavy': 'medium',
-          },
-          'lunch_preferences': {
-            'style': _lunchStyle,
-            'include_rice_roti': _culture == 'indian',
-          },
-          'dinner_preferences': {
-            'style': _dinnerStyle,
-            'courses': _dinnerCourses,
-          },
-        },
+      final headers = {
+        'X-User-Id': 'demo-user-123',  // TODO: Get from auth
+        'X-User-Email': 'demo@savo.app',
       };
       
-      await apiClient.put('/config', config);
+      // Check if household exists
+      final existsResponse = await apiClient.get('/profile/household', headers: headers);
+      final householdExists = existsResponse?['exists'] == true;
+      
+      // Prepare household data
+      final householdData = {
+        'region': _region,
+        'culture': _culture,
+        'meal_times': {
+          'breakfast': _breakfastTime,
+          'lunch': _lunchTime,
+          'dinner': _dinnerTime,
+        },
+        'breakfast_preferences': [_breakfastStyle],
+        'lunch_preferences': [_lunchStyle],
+        'dinner_preferences': [_dinnerStyle],
+      };
+      
+      // Create or update household profile in database
+      if (householdExists) {
+        await apiClient.patch('/profile/household', householdData, headers: headers);
+      } else {
+        await apiClient.post('/profile/household', householdData, headers: headers);
+      }
+      
+      // Save family members to database
+      // Delete existing members first (simplified approach)
+      final existingMembers = await apiClient.get('/profile/family-members', 
+        headers: {'X-User-Id': 'demo-user-123'});
+      
+      if (existingMembers?['members'] is List) {
+        for (var member in existingMembers['members']) {
+          await apiClient.delete('/profile/family-members/${member['id']}',
+            headers: {'X-User-Id': 'demo-user-123'});
+        }
+      }
+      
+      // Add new family members
+      for (var member in _familyMembers) {
+        final memberData = {
+          'name': member['name'] ?? 'Family Member',
+          'age': member['age'] ?? 30,
+          'age_category': member['age_category'] ?? 'adult',
+          'dietary_restrictions': member['dietary_restrictions'] ?? [],
+          'allergens': member['allergens'] ?? [],
+          'health_conditions': member['health_conditions'] ?? [],
+          'spice_tolerance': member['spice_tolerance'] ?? 'medium',
+          'food_preferences': member['food_preferences'] ?? [],
+          'food_dislikes': member['food_dislikes'] ?? [],
+        };
+        
+        await apiClient.post('/profile/family-members', memberData,
+          headers: {'X-User-Id': 'demo-user-123'});
+      }
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Configuration saved successfully!'),
+            content: Text('Profile saved to database successfully!'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -149,7 +187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save configuration: $e'),
+            content: Text('Failed to save to database: $e'),
             backgroundColor: AppColors.danger,
           ),
         );
