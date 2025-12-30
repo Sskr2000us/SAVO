@@ -204,18 +204,17 @@ class GoogleClient(LlmClient):
         # Add schema instruction to system prompt
         system_parts.append(schema_instruction["content"])
         
-        # Gemini uses a single "contents" array with parts
-        contents = []
+        # Gemini format: combine all into a single user message
+        combined_text = ""
         if system_parts:
-            contents.append({
-                "role": "user",
-                "parts": [{"text": "\n\n".join(system_parts)}]
-            })
+            combined_text += "SYSTEM INSTRUCTIONS:\n" + "\n\n".join(system_parts) + "\n\n"
         if user_parts:
-            contents.append({
-                "role": "user", 
-                "parts": [{"text": "\n\n".join(user_parts)}]
-            })
+            combined_text += "USER REQUEST:\n" + "\n\n".join(user_parts)
+        
+        contents = [{
+            "role": "user",
+            "parts": [{"text": combined_text}]
+        }]
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             # Retry logic for rate limits
