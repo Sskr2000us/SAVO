@@ -51,20 +51,21 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           .map((c) => YouTubeVideoCandidate.fromJson(c))
           .toList();
 
-      // If no real results, fall back to mock data
-      final candidatesToRank = candidates.isEmpty
-          ? _createMockCandidates(
-              widget.recipe.getLocalizedName('en'),
-              widget.recipe.cuisine,
-            )
-          : candidates;
+      // If no results from YouTube API, skip video section
+      if (candidates.isEmpty) {
+        setState(() {
+          _rankedVideos = [];
+          _loadingVideos = false;
+        });
+        return;
+      }
 
       // Rank candidates using /youtube/rank
       final request = YouTubeRankRequest(
         recipeName: widget.recipe.getLocalizedName('en'),
         recipeCuisine: widget.recipe.cuisine,
         recipeTechniques: techniques,
-        candidates: candidatesToRank,
+        candidates: candidates,
         outputLanguage: 'en',
       );
 

@@ -33,17 +33,8 @@ async def search_youtube(req: YouTubeSearchRequest):
     """
     api_key = os.getenv("YOUTUBE_API_KEY")
     if not api_key:
-        # Return mock data if no API key
-        return YouTubeSearchResponse(candidates=[
-            {
-                "video_id": f"mock_{req.recipe_name}_1",
-                "title": f"How to Make {req.recipe_name}",
-                "channel": "Cooking Channel",
-                "language": "en",
-                "transcript": f"Learn to make {req.recipe_name}...",
-                "metadata": {"duration": "12:00", "views": 500000}
-            }
-        ])
+        # Return empty results if no API key configured
+        return YouTubeSearchResponse(candidates=[])
     
     try:
         # Build search query

@@ -72,14 +72,14 @@ class LlmClient:
 class OpenAIClient(LlmClient):
     """OpenAI LLM client with JSON schema support and Vision API"""
     
-    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 60):
+    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 90):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for OpenAI provider")
         
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")  # Updated to gpt-4o (current model)
         self.vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # gpt-4o has best vision + text reading
-        self.timeout = timeout
+        self.timeout = timeout  # Increased timeout for large responses
         self.base_url = "https://api.openai.com/v1"
     
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +119,7 @@ class OpenAIClient(LlmClient):
                             "model": self.model,
                             "messages": enhanced_messages,
                             "response_format": {"type": "json_object"},
-                            "temperature": 0.7,
+                            "temperature": 0.5,  # Lower temperature = faster, more deterministic
                             "max_tokens": 8192,  # Increased to handle full meal plans
                         }
                     )
