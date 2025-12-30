@@ -31,11 +31,15 @@ class SupabaseDB:
             
             if not url or not key:
                 raise ValueError(
-                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment"
+                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables"
                 )
             
-            self._client = create_client(url, key)
-            logger.info("Supabase client initialized")
+            try:
+                self._client = create_client(url, key)
+                logger.info("Supabase client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Supabase client: {e}")
+                raise
     
     @property
     def client(self) -> Client:
