@@ -47,9 +47,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         'max_results': 5,
       });
 
-      final candidates = (searchResponse['candidates'] as List)
-          .map((c) => YouTubeVideoCandidate.fromJson(c))
-          .toList();
+      final candidates = (searchResponse['candidates'] as List?)
+          ?.map((c) => YouTubeVideoCandidate.fromJson(c as Map<String, dynamic>))
+          .toList() ?? [];
 
       // If no results from YouTube API, skip video section
       if (candidates.isEmpty) {

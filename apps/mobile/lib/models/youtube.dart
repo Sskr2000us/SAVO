@@ -16,6 +16,17 @@ class YouTubeVideoCandidate {
     this.metadata = const {},
   });
 
+  factory YouTubeVideoCandidate.fromJson(Map<String, dynamic> json) {
+    return YouTubeVideoCandidate(
+      videoId: json['video_id'] ?? '',
+      title: json['title'] ?? '',
+      channel: json['channel'] ?? '',
+      language: json['language'] ?? 'en',
+      transcript: json['transcript'],
+      metadata: json['metadata'] ?? {},
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'video_id': videoId,
         'title': title,
