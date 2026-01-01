@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'dart:io' show Platform;
 import '../../theme/app_theme.dart';
 import '../../widgets/savo_widgets.dart';
+import '../../utils/platform_info.dart';
 
 /// Screen for managing active sessions across multiple devices
 /// 
@@ -49,24 +49,7 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
 
   /// Get device information for display
   String _getDeviceInfo() {
-    try {
-      if (Platform.isAndroid) {
-        return 'Android Device';
-      } else if (Platform.isIOS) {
-        return 'iOS Device';
-      } else if (Platform.isMacOS) {
-        return 'macOS';
-      } else if (Platform.isWindows) {
-        return 'Windows PC';
-      } else if (Platform.isLinux) {
-        return 'Linux';
-      } else {
-        return 'Web Browser';
-      }
-    } catch (e) {
-      // Platform.* methods not available on web
-      return 'Web Browser';
-    }
+    return getPlatformName();
   }
 
   /// Format date/time for display
