@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ApiClient {
   final String baseUrl;
@@ -18,10 +19,28 @@ class ApiClient {
     // return 'http://localhost:8000';
   }
 
+  /// Get authentication headers with Bearer token
+  Map<String, String> _getAuthHeaders() {
+    final token = Supabase.instance.client.auth.currentSession?.accessToken;
+    if (token != null) {
+      return {'Authorization': 'Bearer $token'};
+    }
+    return {};
+  }
+
+  /// Merge custom headers with auth headers
+  Map<String, String> _mergeHeaders(Map<String, String>? customHeaders) {
+    final headers = _getAuthHeaders();
+    if (customHeaders != null) {
+      headers.addAll(customHeaders);
+    }
+    return headers;
+  }
+
   Future<dynamic> get(String endpoint, {Map<String, String>? headers}) async {
     final response = await http.get(
       Uri.parse('$baseUrl$endpoint'),
-      headers: headers,
+      headers: _mergeHeaders(headers),
     );
     if (response.statusCode == 200) {
       return json.decode(response.body);
@@ -32,7 +51,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> post(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    if (headers != null) allHeaders.addAll(headers);
+    allHeaders.addAll(_mergeHeaders(headers));
     
     final response = await http.post(
       Uri.parse('$baseUrl$endpoint'),
@@ -55,6 +74,9 @@ class ApiClient {
     final uri = Uri.parse('$baseUrl$endpoint');
     final request = http.MultipartRequest('POST', uri);
 
+    // Add auth headers
+    request.headers.addAll(_getAuthHeaders());
+    
     request.fields.addAll(fields);
 
     // Determine MIME type from file extension
@@ -96,7 +118,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    if (headers != null) allHeaders.addAll(headers);
+    allHeaders.addAll(_mergeHeaders(headers));
     
     final response = await http.put(
       Uri.parse('$baseUrl$endpoint'),
@@ -112,7 +134,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> patch(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    if (headers != null) allHeaders.addAll(headers);
+    allHeaders.addAll(_mergeHeaders(headers));
     
     final response = await http.patch(
       Uri.parse('$baseUrl$endpoint'),
@@ -129,7 +151,7 @@ class ApiClient {
   Future<void> delete(String endpoint, {Map<String, String>? headers}) async {
     final response = await http.delete(
       Uri.parse('$baseUrl$endpoint'),
-      headers: headers,
+      headers: _mergeHeaders(headers),
     );
     if (response.statusCode != 204 && response.statusCode != 200) {
       throw Exception('Failed to delete data: ${response.statusCode}');

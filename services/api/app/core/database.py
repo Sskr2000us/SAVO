@@ -490,3 +490,211 @@ async def get_recent_recipes(user_id: str, days: int = 14) -> List[str]:
     except APIError as e:
         logger.error(f"Error getting recent recipes: {e}")
         return []
+
+
+# ============================================================================
+# AUDIT LOG OPERATIONS
+# ============================================================================
+
+async def log_audit_event(
+    user_id: str,
+    event_type: str,
+    route: str,
+    entity_type: str,
+    entity_id: Optional[str],
+    old_value: Dict[str, Any],
+    new_value: Dict[str, Any],
+    device_info: Optional[Dict[str, Any]] = None,
+    ip_address: Optional[str] = None
+) -> None:
+    """Log audit event for tracking profile changes"""
+    try:
+        audit_data = {
+            "user_id": user_id,
+            "event_type": event_type,
+            "route": route,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "old_value": old_value,
+            "new_value": new_value,
+            "device_info": device_info or {},
+            "ip_address": ip_address
+        }
+        db.client.table("audit_log").insert(audit_data).execute()
+        logger.info(f"Audit log: {event_type} for user {user_id}")
+    except APIError as e:
+        logger.error(f"Error logging audit event: {e}")
+        # Don't raise - audit logging shouldn't break user flow
+
+
+async def get_audit_log(user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Get audit log for user"""
+    try:
+        result = db.client.table("audit_log").select("*").eq(
+            "user_id", user_id
+        ).order("created_at", desc=True).limit(limit).execute()
+        return result.data or []
+    except APIError as e:
+        logger.error(f"Error getting audit log: {e}")
+        raise
+
+
+# ============================================================================
+# ONBOARDING OPERATIONS
+# ============================================================================
+
+async def mark_onboarding_complete(user_id: str) -> None:
+    """Mark onboarding as completed"""
+    try:
+        db.client.table("household_profiles").update({
+            "onboarding_completed_at": datetime.utcnow().isoformat()
+        }).eq("user_id", user_id).execute()
+        logger.info(f"Onboarding completed for user {user_id}")
+    except APIError as e:
+        logger.error(f"Error marking onboarding complete: {e}")
+        raise
+
+
+async def get_onboarding_status(user_id: str) -> Dict[str, Any]:
+    """Check onboarding completion status and determine resume step"""
+    try:
+        # Get household profile
+        profile = await get_household_profile(user_id)
+        
+        if not profile:
+            return {
+                "completed": False,
+                "resume_step": "HOUSEHOLD",
+                "missing_fields": ["household_profile"]
+            }
+        
+        # Check if explicitly marked complete
+        if profile.get("onboarding_completed_at"):
+            return {
+                "completed": True,
+                "resume_step": "COMPLETE",
+                "missing_fields": [],
+                "completed_at": profile["onboarding_completed_at"]
+            }
+        
+        # Check what's missing
+        missing_fields = []
+        
+        # Check family members
+        members = await get_family_members(user_id)
+        if not members:
+            missing_fields.append("household_members")
+        else:
+            # Check if allergens are declared (even empty array counts as declared)
+            allergens_declared = any("allergens" in m for m in members)
+            if not allergens_declared:
+                missing_fields.append("allergens")
+            
+            # Check if dietary restrictions are declared
+            dietary_declared = any("dietary_restrictions" in m for m in members)
+            if not dietary_declared:
+                missing_fields.append("dietary")
+            
+            # Check spice tolerance (optional)
+            spice_declared = any(m.get("spice_tolerance") for m in members)
+            if not spice_declared:
+                missing_fields.append("spice")
+        
+        # Check basic spices availability (optional)
+        if not profile.get("basic_spices_available"):
+            missing_fields.append("pantry")
+        
+        # Check language
+        if not profile.get("primary_language"):
+            missing_fields.append("language")
+        
+        # Determine resume step
+        if "household_members" in missing_fields:
+            resume_step = "HOUSEHOLD"
+        elif "allergens" in missing_fields:
+            resume_step = "ALLERGIES"
+        elif "dietary" in missing_fields:
+            resume_step = "DIETARY"
+        elif "spice" in missing_fields:
+            resume_step = "SPICE"
+        elif "pantry" in missing_fields:
+            resume_step = "PANTRY"
+        elif "language" in missing_fields:
+            resume_step = "LANGUAGE"
+        else:
+            resume_step = "COMPLETE"
+        
+        return {
+            "completed": False,
+            "resume_step": resume_step,
+            "missing_fields": missing_fields
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting onboarding status: {e}")
+        raise
+
+
+# ============================================================================
+# FULL PROFILE AGGREGATION
+# ============================================================================
+
+async def get_full_profile(user_id: str) -> Dict[str, Any]:
+    """Get complete user profile including all related data"""
+    try:
+        # Get user record
+        user_result = db.client.table("users").select("*").eq("id", user_id).execute()
+        user = user_result.data[0] if user_result.data else None
+        
+        # Get household profile
+        profile = await get_household_profile(user_id)
+        
+        # Get family members
+        members = await get_family_members(user_id)
+        
+        # Aggregate allergens from all members
+        all_allergens = set()
+        for member in members:
+            all_allergens.update(member.get("allergens", []))
+        
+        # Aggregate dietary restrictions
+        all_dietary = set()
+        dietary_booleans = {
+            "vegetarian": False,
+            "vegan": False,
+            "no_beef": False,
+            "no_pork": False,
+            "no_alcohol": False
+        }
+        
+        for member in members:
+            restrictions = member.get("dietary_restrictions", [])
+            all_dietary.update(restrictions)
+            
+            # Map to booleans
+            if "vegetarian" in restrictions:
+                dietary_booleans["vegetarian"] = True
+            if "vegan" in restrictions:
+                dietary_booleans["vegan"] = True
+            if "no_beef" in restrictions or "no beef" in restrictions:
+                dietary_booleans["no_beef"] = True
+            if "no_pork" in restrictions or "no pork" in restrictions:
+                dietary_booleans["no_pork"] = True
+            if "no_alcohol" in restrictions or "no alcohol" in restrictions:
+                dietary_booleans["no_alcohol"] = True
+        
+        return {
+            "user": user,
+            "profile": profile,
+            "household": profile,  # Same as profile in current schema
+            "members": members,
+            "allergens": {
+                "declared_allergens": list(all_allergens),
+                "enforcement_level": "strict"
+            },
+            "dietary": dietary_booleans
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting full profile: {e}")
+        raise

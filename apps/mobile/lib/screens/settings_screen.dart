@@ -4,6 +4,7 @@ import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import 'inventory_screen.dart';
+import 'settings/active_sessions_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -294,6 +295,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const InventoryScreen()),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  _buildQuickAction(
+                    icon: Icons.devices,
+                    title: 'Active Sessions',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ActiveSessionsScreen()),
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
@@ -633,8 +643,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: AppSpacing.md),
 
-                // Allergens
-                _buildMultiSelectChips(
+                // Allergens (with safety confirmation for removal)
+                _buildAllergenChips(
                   label: 'Allergens',
                   options: const [
                     'peanuts',
@@ -647,6 +657,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'wheat',
                   ],
                   selected: List<String>.from(member['allergens'] ?? []),
+                  memberName: member['name'] ?? 'member',
                   onChanged: (selected) {
                     setState(() {
                       _familyMembers[index]['allergens'] = selected;
@@ -845,6 +856,149 @@ class _SettingsScreenState extends State<SettingsScreen> {
           }).toList(),
         ),
       ],
+    );
+  }
+
+  /// Special allergen chips with removal confirmation dialog
+  Widget _buildAllergenChips({
+    required String label,
+    required List<String> options,
+    required List<String> selected,
+    required String memberName,
+    required Function(List<String>) onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label, style: AppTypography.bodyStyle()),
+            const SizedBox(width: 8),
+            const Icon(Icons.warning_amber, size: 16, color: Colors.orange),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: options.map((option) {
+            final isSelected = selected.contains(option);
+            return FilterChip(
+              label: Text(option.replaceAll('_', ' ')),
+              selected: isSelected,
+              onSelected: (isNowSelected) async {
+                // Adding allergen - no confirmation needed
+                if (isNowSelected) {
+                  final newSelected = List<String>.from(selected);
+                  newSelected.add(option);
+                  onChanged(newSelected);
+                  return;
+                }
+                
+                // Removing allergen - show confirmation dialog
+                final confirmed = await _showAllergenRemovalConfirmation(
+                  context,
+                  option,
+                  memberName,
+                );
+                
+                if (confirmed == true) {
+                  final newSelected = List<String>.from(selected);
+                  newSelected.remove(option);
+                  onChanged(newSelected);
+                }
+              },
+              selectedColor: Colors.red.withOpacity(0.2),
+              checkmarkColor: Colors.red,
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Safety note: Removing allergens will allow SAVO to suggest recipes containing them.',
+          style: TextStyle(fontSize: 12, color: Colors.orange, fontStyle: FontStyle.italic),
+        ),
+      ],
+    );
+  }
+
+  /// Show confirmation dialog when removing an allergen
+  Future<bool?> _showAllergenRemovalConfirmation(
+    BuildContext context,
+    String allergen,
+    String memberName,
+  ) {
+    return showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber, color: Colors.orange, size: 32),
+              SizedBox(width: 12),
+              Text('Remove Allergen?'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Are you sure you want to remove "$allergen" from ${memberName}\'s allergen list?',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 20, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Text(
+                          'Important:',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'SAVO will start including "$allergen" in recipe suggestions for $memberName.',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'This change will be logged for your safety.',
+                      style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Yes, Remove'),
+            ),
+          ],
+        );
+      },
     );
   }
 
