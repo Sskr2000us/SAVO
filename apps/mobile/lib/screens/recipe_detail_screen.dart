@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
+import '../services/scanning_service.dart';
 import '../models/planning.dart';
 import '../models/youtube.dart';
 import 'cook_mode_screen.dart';
@@ -21,11 +22,17 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   String? _videoError;
   final Map<String, YouTubeSummary?> _videoSummaries = {};
   final Set<String> _loadingSummaries = {};
+  
+  // Serving calculator state
+  int _targetServings = 4;
+  bool _checkingSufficiency = false;
+  Map<String, dynamic>? _sufficiencyResult;
 
   @override
   void initState() {
     super.initState();
     _loadYouTubeVideos();
+    _targetServings = 4; // Default to 4 servings
   }
 
   Future<void> _loadYouTubeVideos() async {
@@ -195,6 +202,39 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     }
   }
 
+  Future<void> _checkSufficiency() async {
+    setState(() {
+      _checkingSufficiency = true;
+      _sufficiencyResult = null;
+    });
+
+    try {
+      final scanningService = ScanningService();
+      final result = await scanningService.checkSufficiency(
+        recipeId: widget.recipe.recipeId,
+        servings: _targetServings,
+      );
+
+      setState(() {
+        _sufficiencyResult = result;
+        _checkingSufficiency = false;
+      });
+    } catch (e) {
+      setState(() {
+        _checkingSufficiency = false;
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not check sufficiency: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -274,6 +314,270 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             ...(_rankedVideos!.take(3).map((video) => _buildVideoCard(video))),
             const SizedBox(height: 24),
           ],
+
+          // Serving Calculator Section
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.restaurant_menu, color: Color(0xFF4CAF50)),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Serving Calculator',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Serving size selector
+                  Row(
+                    children: [
+                      const Text(
+                        'How many people?',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: _targetServings > 1
+                            ? () {
+                                setState(() {
+                                  _targetServings--;
+                                  _sufficiencyResult = null;
+                                });
+                              }
+                            : null,
+                        color: const Color(0xFF4CAF50),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _targetServings.toString(),
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () {
+                          setState(() {
+                            _targetServings++;
+                            _sufficiencyResult = null;
+                          });
+                        },
+                        color: const Color(0xFF4CAF50),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 12),
+                  
+                  // Check button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: _checkingSufficiency
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Icon(Icons.check_circle_outline),
+                      label: Text(_checkingSufficiency
+                          ? 'Checking...'
+                          : 'Check if I have enough'),
+                      onPressed: _checkingSufficiency ? null : _checkSufficiency,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4CAF50),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                  
+                  // Results
+                  if (_sufficiencyResult != null) ...[
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 12),
+                    
+                    if (_sufficiencyResult!['success'] == true) ...[
+                      // Sufficient or not
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: _sufficiencyResult!['sufficient'] == true
+                              ? Colors.green.shade50
+                              : Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _sufficiencyResult!['sufficient'] == true
+                                ? Colors.green
+                                : Colors.orange,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _sufficiencyResult!['sufficient'] == true
+                                  ? Icons.check_circle
+                                  : Icons.warning,
+                              color: _sufficiencyResult!['sufficient'] == true
+                                  ? Colors.green
+                                  : Colors.orange,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _sufficiencyResult!['message'] ?? '',
+                                style: TextStyle(
+                                  color: _sufficiencyResult!['sufficient'] == true
+                                      ? Colors.green.shade900
+                                      : Colors.orange.shade900,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      
+                      // Missing ingredients
+                      if (_sufficiencyResult!['missing'] != null &&
+                          (_sufficiencyResult!['missing'] as List).isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Missing Ingredients:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...(_sufficiencyResult!['missing'] as List).map((item) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.close, color: Colors.red, size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${item['ingredient']}: Need ${item['needed']} ${item['unit']}',
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                      
+                      // Shopping list
+                      if (_sufficiencyResult!['shopping_list'] != null &&
+                          (_sufficiencyResult!['shopping_list'] as List).isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        const Divider(),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Shopping List:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            TextButton.icon(
+                              icon: const Icon(Icons.copy, size: 16),
+                              label: const Text('Copy'),
+                              onPressed: () {
+                                // TODO: Copy shopping list to clipboard
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Shopping list copied!'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ...(_sufficiencyResult!['shopping_list'] as List).map((item) {
+                          return Container(
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.shopping_cart, size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${item['quantity']} ${item['unit']} ${item['ingredient']}',
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ] else ...[
+                      // Error message
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error, color: Colors.red),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _sufficiencyResult!['error'] ?? 'Failed to check sufficiency',
+                                style: TextStyle(color: Colors.red.shade900),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 24),
 
           // Ingredients
           Text(

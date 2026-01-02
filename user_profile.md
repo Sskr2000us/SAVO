@@ -333,6 +333,10 @@ Acceptance:
 
 The AI/LLM layer MUST use profile data from `GET /profile/full` to generate safe, personalized recipes and meal plans. This section defines how to construct prompts with proper safety constraints and context binding.
 
+**Related Documentation**:
+- [VISION_SCANNING_ARCHITECTURE.md](docs/VISION_SCANNING_ARCHITECTURE.md) - Vision scanning foundation
+- [CULTURAL_INTELLIGENCE_SYSTEM.md](docs/CULTURAL_INTELLIGENCE_SYSTEM.md) - Cultural context generation
+
 ### 11.1 Data Source (Always Fresh)
 
 **Rule**: Always fetch profile data immediately before AI generation

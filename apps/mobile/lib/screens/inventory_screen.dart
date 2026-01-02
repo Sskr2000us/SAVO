@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
 import 'scan_ingredients_screen.dart';
+import 'pantry/manual_entry_screen.dart';
 import 'realtime_scan_screen_stub.dart'
     if (dart.library.io) 'realtime_scan_screen.dart';
 
@@ -283,9 +284,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     );
                   },
                 ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddItemDialog,
-        child: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: 'manual_entry_btn',
+            onPressed: () async {
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ManualEntryScreen(),
+                ),
+              );
+              if (result == true) {
+                _loadInventory(); // Reload inventory after adding
+              }
+            },
+            backgroundColor: const Color(0xFF4CAF50),
+            child: const Icon(Icons.edit),
+            tooltip: 'Add manually',
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'scan_btn',
+            onPressed: _showAddItemDialog,
+            child: const Icon(Icons.add),
+            tooltip: 'Scan to add',
+          ),
+        ],
       ),
     );
   }

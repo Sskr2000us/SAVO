@@ -461,13 +461,20 @@ class IngredientCombinationEngine:
     ) -> str:
         """
         Generate AI prompt for multi-ingredient recipe.
-        Integrates with Section 11 safety constraints.
+        Integrates with Section 11 safety constraints + cultural intelligence.
         """
         
         from .safety_constraints import build_complete_safety_context
+        from .cultural_intelligence import build_cultural_intelligence_prompt
         
         # Get safety context from Section 11
         safety_context = build_complete_safety_context(profile)
+        
+        # Get cultural intelligence context
+        cultural_intelligence = build_cultural_intelligence_prompt(
+            ingredients,
+            cuisine=analysis.get("cuisine_matches", [None])[0]
+        )
         
         # Build combination-specific context
         combination_context = f"""
@@ -491,16 +498,28 @@ You are SAVO, an AI cooking assistant generating a recipe using multiple ingredi
 
 {combination_context}
 
+{cultural_intelligence}
+
 INSTRUCTIONS:
 1. Create a recipe that uses ALL provided ingredients: {', '.join(ingredients)}
 2. STRICTLY respect all allergen and dietary constraints (see above)
 3. If suggested additions would improve the recipe, include them in the recipe and add to shopping list
 4. Choose a cuisine that matches the ingredient combination naturally
 5. Ensure the recipe is balanced and nutritious
-6. Format response as JSON with: title, cuisine, description, ingredients (with quantities), 
-   steps (numbered), prep_time, cook_time, servings, difficulty, nutritional_notes
+6. EXPLAIN WHY this combination works culturally, nutritionally, and traditionally
+7. Format response as JSON with: title, cuisine, description, ingredients (with quantities), 
+   steps (numbered), prep_time, cook_time, servings, difficulty, nutritional_notes, 
+   cultural_context (object with: why_this_combo, nutritional_benefits, cultural_significance, 
+   traditional_wisdom, flavor_science)
 
-Generate the recipe now:
+CULTURAL CONTEXT REQUIREMENTS:
+- Explain why these ingredients are traditionally paired in this cuisine
+- Describe nutritional synergies (e.g., "tamarind aids digestion of heavy chickpeas")
+- Include texture and flavor balance reasoning
+- Mention economic/seasonal/festive significance if relevant
+- Use authentic cultural knowledge, not assumptions
+
+Generate the recipe with full cultural reasoning now:
 """
         
         return prompt

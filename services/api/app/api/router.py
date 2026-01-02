@@ -12,6 +12,7 @@ from app.api.routes.recipes import router as recipes_router
 from app.api.routes.nutrition import router as nutrition_router
 from app.api.routes.profile import router as profile_router
 from app.api.routes.inventory_db import router as inventory_db_router
+from app.api.routes.scanning import router as scanning_router
 
 api_router = APIRouter()
 
@@ -27,3 +28,4 @@ api_router.include_router(recipes_router, prefix="/recipes", tags=["recipes"])
 api_router.include_router(nutrition_router, tags=["nutrition"])
 api_router.include_router(profile_router, tags=["profile"])
 api_router.include_router(inventory_db_router, prefix="/inventory-db", tags=["inventory-db"])
+api_router.include_router(scanning_router, tags=["scanning"])
