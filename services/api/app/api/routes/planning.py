@@ -2,7 +2,7 @@
 Planning endpoints - daily/party/weekly meal planning
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.planning import (
