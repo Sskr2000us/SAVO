@@ -178,7 +178,7 @@ async def get_family_members(user_id: str) -> List[Dict[str, Any]]:
 
 
 async def create_family_member(user_id: str, member_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Create new family member with composite key based on user_id + name"""
+    """Create new family member"""
     try:
         household = await get_household_profile(user_id)
         if not household:
@@ -186,12 +186,11 @@ async def create_family_member(user_id: str, member_data: Dict[str, Any]) -> Dic
         
         member_data["household_id"] = household["id"]
         
-        # Generate composite ID: user_id + sanitized name
-        member_name = member_data.get("name", "").lower().strip().replace(" ", "_")
-        composite_id = f"{user_id}_{member_name}"
-        member_data["id"] = composite_id
+        # Don't manually set ID - let database generate UUID
+        # Remove 'id' if it exists in member_data
+        member_data.pop("id", None)
         
-        # Determine age category
+        # Determine age category based on age
         age = member_data.get("age", 0)
         if age < 13:
             member_data["age_category"] = "child"
@@ -202,10 +201,17 @@ async def create_family_member(user_id: str, member_data: Dict[str, Any]) -> Dic
         else:
             member_data["age_category"] = "senior"
         
+        logger.info(f"Creating family member for household {household['id']}: {member_data}")
         result = db.client.table("family_members").insert(member_data).execute()
+        logger.info(f"Successfully created family member: {result.data[0]['id']}")
         return result.data[0]
     except APIError as e:
+        logger.error(f"Database error creating family member: {e}")
+        logger.error(f"Member data: {member_data}")
+        raise
+    except Exception as e:
         logger.error(f"Error creating family member: {e}")
+        logger.error(f"Member data: {member_data}")
         raise
 
 
