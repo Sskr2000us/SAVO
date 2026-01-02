@@ -34,7 +34,7 @@ class HomeScreen extends StatelessWidget {
                       onPressed: () => Navigator.pop(context, false),
                       child: const Text('Cancel'),
                     ),
-                    FilledButton(
+                    ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
                       child: const Text('Sign Out'),
                     ),
