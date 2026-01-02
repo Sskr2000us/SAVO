@@ -57,7 +57,7 @@ db = SupabaseDB()
 # USER PROFILE OPERATIONS
 # ============================================================================
 
-async def get_or_create_user(user_id: str, email: str, full_name: Optional[str] = None) -> Dict[str, Any]:
+async def get_or_create_user(user_id: str, email: Optional[str] = None, full_name: Optional[str] = None) -> Dict[str, Any]:
     """Get or create user profile"""
     try:
         # Try to get existing user
@@ -66,10 +66,10 @@ async def get_or_create_user(user_id: str, email: str, full_name: Optional[str] 
         if result.data:
             return result.data[0]
         
-        # Create new user
+        # Create new user (email is optional, may be set later)
         user_data = {
             "id": user_id,
-            "email": email,
+            "email": email or f"{user_id}@temp.savo.app",  # Temporary email if not provided
             "full_name": full_name,
             "last_login_at": datetime.utcnow().isoformat()
         }
