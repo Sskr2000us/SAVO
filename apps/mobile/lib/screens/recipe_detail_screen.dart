@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../services/scanning_service.dart';
@@ -513,13 +514,20 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                               icon: const Icon(Icons.copy, size: 16),
                               label: const Text('Copy'),
                               onPressed: () {
-                                // TODO: Copy shopping list to clipboard
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Shopping list copied!'),
-                                    duration: Duration(seconds: 2),
-                                  ),
-                                );
+                                // Copy shopping list to clipboard
+                                final shoppingList = (_sufficiencyResult!['shopping_list'] as List)
+                                    .map((item) => '${item['quantity']} ${item['unit']} ${item['ingredient']}')
+                                    .join('\n');
+                                
+                                Clipboard.setData(ClipboardData(text: shoppingList)).then((_) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Shopping list copied to clipboard!'),
+                                      duration: Duration(seconds: 2),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                });
                               },
                             ),
                           ],

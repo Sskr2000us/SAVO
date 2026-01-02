@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -15,8 +16,34 @@ class ScanningService {
     required File imageFile,
     required String scanType,
     String? locationHint,
+    int retryCount = 0,
   }) async {
+    const maxRetries = 2;
+    
     try {
+      // Validate image file exists and has size
+      if (!await imageFile.exists()) {
+        return {
+          'success': false,
+          'error': 'Image file not found. Please try taking the photo again.',
+        };
+      }
+      
+      final fileSize = await imageFile.length();
+      if (fileSize == 0) {
+        return {
+          'success': false,
+          'error': 'Image file is empty. Please try taking the photo again.',
+        };
+      }
+      
+      if (fileSize > 10 * 1024 * 1024) { // 10MB limit
+        return {
+          'success': false,
+          'error': 'Image file is too large (>10MB). Please try taking a smaller photo.',
+        };
+      }
+
       // Get auth token
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('access_token');
@@ -24,7 +51,7 @@ class ScanningService {
       if (token == null) {
         return {
           'success': false,
-          'error': 'Not authenticated. Please log in.',
+          'error': 'Not authenticated. Please log in again.',
         };
       }
 
@@ -51,31 +78,85 @@ class ScanningService {
         request.fields['location_hint'] = locationHint;
       }
 
-      // Send request
-      final streamedResponse = await request.send();
+      // Send request with timeout
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw TimeoutException('Request timed out after 30 seconds');
+        },
+      );
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        
+        // Validate response has required fields
+        if (data['scan_id'] == null || data['ingredients'] == null) {
+          return {
+            'success': false,
+            'error': 'Invalid response from server. Please try again.',
+          };
+        }
+        
         return {
           'success': true,
           'scan_id': data['scan_id'],
           'ingredients': data['ingredients'],
-          'metadata': data['metadata'],
-          'requires_confirmation': data['requires_confirmation'],
-          'message': data['message'],
+          'metadata': data['metadata'] ?? {},
+          'requires_confirmation': data['requires_confirmation'] ?? true,
+          'message': data['message'] ?? 'Ingredients detected successfully',
         };
+      } else if (response.statusCode == 401) {
+        return {
+          'success': false,
+          'error': 'Session expired. Please log in again.',
+        };
+      } else if (response.statusCode >= 500 && retryCount < maxRetries) {
+        // Retry on server errors
+        await Future.delayed(Duration(seconds: 1 << retryCount)); // Exponential backoff
+        return analyzeImage(
+          imageFile: imageFile,
+          scanType: scanType,
+          locationHint: locationHint,
+          retryCount: retryCount + 1,
+        );
       } else {
         final error = json.decode(response.body);
         return {
           'success': false,
-          'error': error['detail'] ?? 'Analysis failed',
+          'error': error['detail'] ?? 'Analysis failed. Please try again.',
         };
       }
-    } catch (e) {
+    } on TimeoutException catch (_) {
+      if (retryCount < maxRetries) {
+        return analyzeImage(
+          imageFile: imageFile,
+          scanType: scanType,
+          locationHint: locationHint,
+          retryCount: retryCount + 1,
+        );
+      }
       return {
         'success': false,
-        'error': 'Network error: $e',
+        'error': 'Request timed out. Please check your internet connection and try again.',
+      };
+    } on SocketException catch (_) {
+      return {
+        'success': false,
+        'error': 'No internet connection. Please check your network and try again.',
+      };
+    } catch (e) {
+      if (retryCount < maxRetries) {
+        return analyzeImage(
+          imageFile: imageFile,
+          scanType: scanType,
+          locationHint: locationHint,
+          retryCount: retryCount + 1,
+        );
+      }
+      return {
+        'success': false,
+        'error': 'Unexpected error: ${e.toString()}. Please try again.',
       };
     }
   }
