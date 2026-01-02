@@ -1,4 +1,4 @@
-import 'package:shared_preferences.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Service for persisting onboarding state locally
 /// Provides offline fallback when server is unreachable

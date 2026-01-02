@@ -67,8 +67,7 @@ class _OnboardingLanguageScreenState extends State<OnboardingLanguageScreen> {
     try {
       if (!skip) {
         await profileService.updateLanguage(
-          preferredLanguage: _selectedLanguage ?? 'en',
-          measurementSystem: _selectedMeasurement ?? 'metric',
+          primaryLanguage: _selectedLanguage ?? 'en',
         );
       }
 

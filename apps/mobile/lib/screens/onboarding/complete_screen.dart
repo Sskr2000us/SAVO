@@ -127,7 +127,7 @@ class _OnboardingCompleteScreenState extends State<OnboardingCompleteScreen> {
                       _SummaryCard(
                         icon: Icons.warning_amber_rounded,
                         title: 'Allergens Tracked',
-                        value: '${allergens.length}',
+                        value: '${allergens?.length ?? 0}',
                       ),
                     ],
                   );
