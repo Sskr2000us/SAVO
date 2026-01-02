@@ -65,21 +65,6 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
         )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing user ID (sub claim)",
-            )
-        
-        logger.debug(f"Authenticated user: {user_id}")
-        return user_id
-        
-    except InvalidTokenError as e:
-        logger.error(f"JWT validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
 
 
 async def get_current_user_optional(authorization: str = Header(None, alias="Authorization")) -> Optional[str]:
