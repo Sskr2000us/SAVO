@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/profile_state.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
@@ -170,24 +169,6 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/home');
       }
-    }
-  }
-      }
-
-      // Save progress
-      final userId = profileState.userId;
-      if (userId != null) {
-        await OnboardingStorage.saveLastStep('HOUSEHOLD', userId);
-      }
-
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/home');
-      }
-    } catch (e) {
-      setState(() {
-        _error = 'Failed to save: ${e.toString()}';
-        _isLoading = false;
-      });
     }
   }
 
