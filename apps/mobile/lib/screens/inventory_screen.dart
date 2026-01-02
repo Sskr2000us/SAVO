@@ -61,7 +61,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       // Use database endpoint with user header
-      await apiClient.delete('/inventory-db/items/${item.id}');
+      await apiClient.delete('/inventory-db/items/$inventoryId');
       _loadInventory();
     } catch (e) {
       if (mounted) {

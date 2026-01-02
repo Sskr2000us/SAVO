@@ -179,9 +179,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       
       // Create or update household profile in database
       if (householdExists) {
-        await apiClient.patch('/profile/household', householdData, headers: headers);
+        await apiClient.patch('/profile/household', householdData);
       } else {
-        await apiClient.post('/profile/household', householdData, headers: headers);
+        await apiClient.post('/profile/household', householdData);
       }
       
       if (mounted) {
@@ -216,7 +216,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       
       if (existingMembers?['members'] is List) {
         for (var member in existingMembers['members']) {
-          await apiClient.delete('/profile/family-members/${member['id']}', headers: headers);
+          await apiClient.delete('/profile/family-members/${member['id']}');
         }
       }
       
@@ -234,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'food_dislikes': member['food_dislikes'] ?? [],
         };
         
-        await apiClient.post('/profile/family-members', memberData, headers: headers);
+        await apiClient.post('/profile/family-members', memberData);
       }
       
       if (mounted) {
