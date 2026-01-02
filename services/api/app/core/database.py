@@ -1,4 +1,4 @@
-"""
+﻿"""
 Supabase Database Client for SAVO
 Handles all database operations with connection pooling and error handling
 """
