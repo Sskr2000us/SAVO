@@ -59,18 +59,34 @@ class _OnboardingSignupScreenState extends State<OnboardingSignupScreen> {
 
       // Check if email confirmation is required
       if (signupResponse.session == null) {
-        // Email confirmation required - sign in to create session
-        await authService.signInWithPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-        );
+        // Email confirmation required - show message
+        if (mounted) {
+          setState(() => _isLoading = false);
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              title: const Text('Verify Your Email'),
+              content: Text(
+                'We sent a confirmation email to ${_emailController.text.trim()}.\n\n'
+                'Please check your inbox and click the confirmation link, then come back and sign in.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop(); // Close dialog
+                    Navigator.of(context).pop(); // Go back to login
+                  },
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
       }
 
-      // Verify we have a session now
-      if (!authService.isAuthenticated) {
-        throw Exception('Failed to create session after signup. Please check your email for confirmation.');
-      }
-
+      // Session exists - email confirmation disabled, proceed with onboarding
       // For new users, skip profile fetch (no data exists yet)
       // Just get onboarding status which handles new users gracefully
       final status = await profileService.getOnboardingStatus();
