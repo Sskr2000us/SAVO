@@ -175,10 +175,17 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
   Future<void> _checkAuthAndOnboarding() async {
     try {
+      // Add small delay to ensure Supabase is initialized
+      await Future.delayed(const Duration(milliseconds: 100));
+      
       final session = Supabase.instance.client.auth.currentSession;
+      
+      debugPrint('🔐 Auth check - Session exists: ${session != null}');
+      debugPrint('🔐 User ID: ${session?.user.id}');
       
       // No session -> start onboarding (which starts at LOGIN)
       if (session == null) {
+        debugPrint('🔐 No session found - navigating to login');
         if (mounted) {
           Navigator.of(context).pushReplacementNamed('/onboarding');
         }
@@ -186,6 +193,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       }
 
       // Has session -> check onboarding status from server
+      debugPrint('🔐 Session found - checking onboarding status');
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final profileService = ProfileService(apiClient);
       final profileState = Provider.of<ProfileState>(context, listen: false);
