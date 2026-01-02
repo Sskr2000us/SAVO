@@ -10,6 +10,7 @@ import 'screens/leftovers_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
+import 'screens/onboarding/login_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/profile_service.dart';
@@ -94,7 +95,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
         home: const AppStartupScreen(),
         routes: {
           '/landing': (context) => const LandingScreen(),
-          '/login': (context) => const OnboardingCoordinator(),
+          '/login': (context) => const OnboardingLoginScreen(),
           '/onboarding': (context) => const OnboardingCoordinator(),
           '/home': (context) => const MainNavigationShell(),
         },

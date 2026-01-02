@@ -94,7 +94,8 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
       }
 
       if (mounted) {
-        navigateToNextOnboardingStep(context, 'LOGIN');
+        // Navigate to onboarding flow (will show appropriate step)
+        Navigator.of(context).pushReplacementNamed('/onboarding');
       }
     } catch (e) {
       setState(() {
@@ -175,7 +176,8 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
       }
 
       if (mounted) {
-        navigateToNextOnboardingStep(context, 'LOGIN');
+        // Navigate to onboarding flow (will show appropriate step)
+        Navigator.of(context).pushReplacementNamed('/onboarding');
       }
     } catch (e) {
       setState(() {
