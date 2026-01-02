@@ -57,15 +57,8 @@ class _OnboardingSignupScreenState extends State<OnboardingSignupScreen> {
         password: _passwordController.text,
       );
 
-      // Fetch profile data (will be empty for new users)
-      try {
-        final profile = await profileService.getFullProfile();
-        profileState.updateProfileData(profile);
-      } catch (e) {
-        debugPrint('No profile yet (expected for new user): $e');
-      }
-
-      // Get onboarding status
+      // For new users, skip profile fetch (no data exists yet)
+      // Just get onboarding status which handles new users gracefully
       final status = await profileService.getOnboardingStatus();
       profileState.updateOnboardingStatus(status);
 

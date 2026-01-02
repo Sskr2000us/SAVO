@@ -54,17 +54,19 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
         password: _passwordController.text,
       );
 
-      // Fetch profile data
-      try {
-        final profile = await profileService.getFullProfile();
-        profileState.updateProfileData(profile);
-      } catch (e) {
-        debugPrint('No profile yet: $e');
-      }
-
-      // Get onboarding status
+      // Get onboarding status (returns resume step for existing/new users)
       final status = await profileService.getOnboardingStatus();
       profileState.updateOnboardingStatus(status);
+      
+      // Fetch full profile only if onboarding is complete
+      if (status['completed'] == true) {
+        try {
+          final profile = await profileService.getFullProfile();
+          profileState.updateProfileData(profile);
+        } catch (e) {
+          debugPrint('Could not load profile: $e');
+        }
+      }
 
       // Save progress locally for offline resume
       final userId = profileState.userId;
@@ -133,17 +135,19 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
         token: _otpController.text.trim(),
       );
 
-      // Fetch profile data
-      try {
-        final profile = await profileService.getFullProfile();
-        profileState.updateProfileData(profile);
-      } catch (e) {
-        debugPrint('No profile yet: $e');
-      }
-
-      // Get onboarding status
+      // Get onboarding status (returns resume step for existing/new users)
       final status = await profileService.getOnboardingStatus();
       profileState.updateOnboardingStatus(status);
+      
+      // Fetch full profile only if onboarding is complete
+      if (status['completed'] == true) {
+        try {
+          final profile = await profileService.getFullProfile();
+          profileState.updateProfileData(profile);
+        } catch (e) {
+          debugPrint('Could not load profile: $e');
+        }
+      }
 
       // Save progress locally for offline resume
       final userId = profileState.userId;
