@@ -87,15 +87,19 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
     final profileState = Provider.of<ProfileState>(context, listen: false);
 
     try {
-      // Update dietary restrictions for all members
+      // Update dietary restrictions only for members without existing restrictions
+      // This allows each member to have their own dietary preferences
       final members = profileState.members;
       if (members.isEmpty) {
         throw Exception('No household members found');
       }
 
-      for (var member in members) {
+      // Apply selected restrictions only to the first/primary member
+      // Other members can be configured individually in Settings
+      if (members.isNotEmpty) {
+        final primaryMember = members[0];
         await profileService.updateDietary(
-          memberId: member['id'],
+          memberId: primaryMember['id'],
           dietaryRestrictions: _selectedRestrictions.toList(),
         );
       }
@@ -139,12 +143,13 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
       // Save dietary restrictions if members exist and data entered
       final members = profileState.members;
       if (members.isNotEmpty && _selectedRestrictions.isNotEmpty) {
-        for (var member in members) {
-          await profileService.updateDietary(
-            memberId: member['id'],
-            dietaryRestrictions: _selectedRestrictions.toList(),
-          );
-        }
+        // Only apply to primary member during onboarding
+        // Other members can set their own restrictions in Settings
+        final primaryMember = members[0];
+        await profileService.updateDietary(
+          memberId: primaryMember['id'],
+          dietaryRestrictions: _selectedRestrictions.toList(),
+        );
 
         // Save progress
         final userId = profileState.userId;
@@ -195,10 +200,31 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Select all that apply',
+                    'Select all that apply for the primary household member',
                     style: TextStyle(color: Colors.grey),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.info_outline, size: 20, color: Colors.blue),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Other family members can set their own dietary restrictions in Settings',
+                            style: TextStyle(fontSize: 13, color: Colors.black87),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
                   
                   // Dietary restriction checkboxes
                   ...dietaryOptions.map((option) {

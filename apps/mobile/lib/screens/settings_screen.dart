@@ -525,7 +525,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: AppSpacing.md),
+                  const SizedBox(height: AppSpacing.xs),
+                  
+                  // Info card about individual preferences
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.only(bottom: AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.info_outline, size: 20, color: Colors.blue),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Each family member can have their own dietary restrictions and allergens',
+                            style: TextStyle(fontSize: 13, color: Colors.black87),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                   // Family members list
                   if (_familyMembers.isEmpty)
@@ -617,6 +640,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildFamilyMemberCard(int index, Map<String, dynamic> member) {
+    // Get member's dietary restrictions for summary
+    final dietaryRestrictions = List<String>.from(member['dietary_restrictions'] ?? []);
+    final allergens = List<String>.from(member['allergens'] ?? []);
+    
+    // Build summary text
+    String summaryText = '${member['age'] ?? 30} years old • ${member['age_category'] ?? 'adult'}';
+    if (dietaryRestrictions.isNotEmpty) {
+      summaryText += '\nDietary: ${dietaryRestrictions.join(", ")}';
+    }
+    if (allergens.isNotEmpty) {
+      summaryText += '\nAllergens: ${allergens.join(", ")}';
+    }
+    
     return Card(
       margin: const EdgeInsets.only(bottom: AppSpacing.md),
       child: ExpansionTile(
@@ -627,8 +663,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: AppTypography.h2Style(),
         ),
         subtitle: Text(
-          '${member['age'] ?? 30} years old • ${member['age_category'] ?? 'adult'}',
+          summaryText,
           style: AppTypography.captionStyle(),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
         trailing: IconButton(
           icon: const Icon(Icons.delete, color: AppColors.danger),
