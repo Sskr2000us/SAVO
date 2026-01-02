@@ -4,7 +4,6 @@ import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import 'settings_screen.dart';
 import 'inventory_screen.dart';
-import 'settings/active_sessions_screen.dart';
 
 /// Account and app settings screen
 /// Contains inventory, sessions, sign out, and link to profile settings
@@ -103,20 +102,6 @@ class AccountSettingsScreen extends StatelessWidget {
           
           // Account Section
           _buildSectionHeader('Account'),
-          const SizedBox(height: 12),
-          _buildSettingCard(
-            context: context,
-            icon: Icons.devices,
-            iconColor: Colors.green,
-            title: 'Active Sessions',
-            subtitle: 'Manage logged-in devices',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ActiveSessionsScreen()),
-              );
-            },
-          ),
           const SizedBox(height: 12),
           _buildSettingCard(
             context: context,
