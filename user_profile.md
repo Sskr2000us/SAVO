@@ -1113,6 +1113,562 @@ Generate weekly plan as JSON array of 7 recipes.
 
 ---
 
+---
+
+### 11.10 Global Staples Ontology (Safe Defaults)
+
+**Golden Rule**: Staples are functional, not cultural.
+
+#### ✅ Universally Safe (Always Assumable)
+
+These are foundational and can be assumed without explicit consent:
+
+```python
+UNIVERSAL_STAPLES = {
+    "water": {"category": "liquid", "allergen_free": True},
+    "salt": {"category": "seasoning", "allergen_free": True},
+    "neutral_cooking_oil": {"category": "fat", "allergen_free": True, "note": "vegetable/canola"},
+    "heat_source": {"category": "equipment", "assumed": True},
+    "basic_cookware": {"category": "equipment", "assumed": True}
+}
+```
+
+**Why**: These are functionally universal and pose no safety or cultural risk.
+
+---
+
+#### ⚠️ Soft-Assumable (Only After Consent/Learning)
+
+These are culture-specific and should only be assumed after user confirms or usage patterns emerge:
+
+```python
+SOFT_STAPLES_BY_CULTURE = {
+    "South_Indian": {
+        "soft_staples": ["mustard_seeds", "curry_leaves", "urad_dal"],
+        "confirm_before_use": True,
+        "removable": True
+    },
+    "Italian": {
+        "soft_staples": ["olive_oil", "garlic", "basil"],
+        "confirm_before_use": True,
+        "removable": True
+    },
+    "Mexican": {
+        "soft_staples": ["cumin", "cilantro", "lime"],
+        "confirm_before_use": True,
+        "removable": True
+    },
+    "Chinese": {
+        "soft_staples": ["soy_sauce", "ginger", "garlic"],
+        "confirm_before_use": True,
+        "removable": True
+    }
+}
+```
+
+**Validation Over Time**:
+- If a "soft staple" is used → reinforced
+- If removed/avoided → dropped permanently from assumptions
+
+---
+
+#### ❌ Never Assume (Always Require Explicit Confirmation)
+
+These must ALWAYS be scanned, confirmed, or learned through explicit user action:
+
+```python
+NEVER_ASSUME = [
+    # Allergen risks
+    "nuts", "tree_nuts", "peanuts",
+    "dairy", "milk", "butter", "cheese",
+    "eggs",
+    "soy_sauce", "soy",
+    "sesame",
+    "shellfish",
+    
+    # Spice blends (unknown composition)
+    "garam_masala", "curry_powder", "five_spice",
+    
+    # Alcohol
+    "wine", "beer", "cooking_wine", "vanilla_extract",
+    
+    # Religious/cultural sensitivities
+    "ghee",  # dairy + potential religious significance
+    "onion",  # Jain restriction
+    "garlic",  # Jain restriction
+    "beef",  # Hindu/religious
+    "pork",  # Muslim/Jewish/religious
+    
+    # Specialty items
+    "miso", "tahini", "fish_sauce"
+]
+```
+
+**UX When Unsure**:
+```python
+# CORRECT approach
+if ingredient in NEVER_ASSUME and not confirmed_by_user:
+    return {
+        "action": "ask",
+        "message": f"Do you have {ingredient}? I can suggest an alternative."
+    }
+
+# INCORRECT approach (DON'T DO THIS)
+if ingredient in NEVER_ASSUME:
+    # ❌ Assuming or silently substituting
+    pass
+```
+
+---
+
+### 11.11 Religious & Cultural Stress Testing (Critical)
+
+**Purpose**: Ensure SAVO handles real-world constraints correctly across diverse households.
+
+#### 🟣 Test Case 1: Jain Household
+
+**Constraints**:
+- No onion
+- No garlic
+- No root vegetables (potato, carrot, radish, etc.)
+
+**Expected Behavior**:
+```python
+def test_jain_household():
+    profile = {
+        "dietary_restrictions": ["no_onion", "no_garlic", "no_root_vegetables"]
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Validation
+    assert "onion" not in recipe["ingredients_lower"]
+    assert "garlic" not in recipe["ingredients_lower"]
+    assert "potato" not in recipe["ingredients_lower"]
+    
+    # UX validation
+    assert "Avoided onion and garlic" in recipe.get("notes", "")
+```
+
+**UX Copy**:
+> "Made without onion, garlic, or root vegetables based on your dietary preferences."
+
+---
+
+#### 🟣 Test Case 2: Muslim Household
+
+**Constraints**:
+- No pork
+- No alcohol (cooking wine, extracts)
+
+**Expected Behavior**:
+```python
+def test_muslim_household():
+    profile = {
+        "dietary_restrictions": ["no_pork", "no_alcohol", "halal_preferred"]
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Hard validations
+    assert "pork" not in recipe["ingredients_lower"]
+    assert "wine" not in recipe["ingredients_lower"]
+    assert "bacon" not in recipe["ingredients_lower"]
+    
+    # If chicken/beef included
+    if any(meat in recipe["ingredients_lower"] for meat in ["chicken", "beef"]):
+        assert "halal" in recipe.get("notes", "") or "any meat" in recipe.get("notes", "")
+```
+
+**UX Copy**:
+> "No pork or alcohol. For halal certification, please source meat from halal suppliers."
+
+---
+
+#### 🟣 Test Case 3: Hindu Household
+
+**Constraints**:
+- No beef
+- Vegetarian on specific days (optional)
+
+**Expected Behavior**:
+```python
+def test_hindu_household():
+    profile = {
+        "dietary_restrictions": ["no_beef"],
+        "vegetarian_days": ["tuesday", "thursday"]  # Optional
+    }
+    
+    # Test beef exclusion
+    recipe = generate_recipe(profile)
+    assert "beef" not in recipe["ingredients_lower"]
+    
+    # Test vegetarian day
+    recipe_tuesday = generate_recipe(profile, day="tuesday")
+    assert not any(meat in recipe_tuesday["ingredients_lower"] 
+                   for meat in ["chicken", "fish", "pork", "lamb"])
+```
+
+**UX Copy**:
+> "No beef. Today is Tuesday—here's a vegetarian option."
+
+---
+
+#### 🟣 Test Case 4: Jewish (Kosher-Aware, Non-Certified)
+
+**Constraints**:
+- No pork
+- No shellfish
+- Caution on meat + dairy mixing
+
+**Expected Behavior**:
+```python
+def test_jewish_household():
+    profile = {
+        "dietary_restrictions": ["no_pork", "no_shellfish", "kosher_aware"]
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Hard restrictions
+    assert "pork" not in recipe["ingredients_lower"]
+    assert "shrimp" not in recipe["ingredients_lower"]
+    
+    # Meat + dairy check
+    has_meat = any(m in recipe["ingredients_lower"] for m in ["chicken", "beef"])
+    has_dairy = any(d in recipe["ingredients_lower"] for d in ["milk", "cheese", "butter"])
+    
+    if has_meat and has_dairy:
+        assert "note" in recipe
+        assert "kosher" in recipe["notes"].lower() or "dairy" in recipe["notes"].lower()
+```
+
+**UX Copy**:
+> "No pork or shellfish. Note: This recipe mixes meat and dairy, which may not meet kosher standards."
+
+---
+
+#### 🟣 Test Case 5: Buddhist / Strict Vegan
+
+**Constraints**:
+- No animal products (meat, dairy, eggs, honey)
+
+**Expected Behavior**:
+```python
+def test_vegan_household():
+    profile = {
+        "dietary_restrictions": ["vegan"]
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Strict validation
+    animal_products = ["meat", "chicken", "fish", "milk", "butter", 
+                      "cheese", "egg", "honey", "ghee"]
+    
+    for product in animal_products:
+        assert product not in recipe["ingredients_lower"], \
+            f"Vegan violation: {product} found in recipe"
+```
+
+**UX Copy**:
+> "Completely plant-based—no animal products."
+
+---
+
+#### 🟣 Test Case 6: Mixed Household
+
+**Constraints**:
+- Kids eat everything
+- One adult is vegetarian
+
+**Expected Behavior**:
+```python
+def test_mixed_household():
+    profile = {
+        "members": [
+            {"role": "adult", "dietary": ["vegetarian"]},
+            {"role": "child", "dietary": []}
+        ]
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Option 1: Veg base with optional protein
+    if recipe["type"] == "split":
+        assert "optional_protein" in recipe
+        assert "vegetarian_complete" in recipe["flags"]
+    
+    # Option 2: Fully vegetarian
+    elif recipe["type"] == "vegetarian":
+        assert not any(meat in recipe["ingredients_lower"] 
+                      for meat in ["chicken", "beef", "fish"])
+```
+
+**UX Copy**:
+> "Vegetarian base. Add chicken for non-vegetarian members if desired."
+
+---
+
+### 11.12 QA Rejection Criteria (Non-Negotiable)
+
+**Purpose**: Define hard failure conditions for QA testing. Any build that violates these MUST be rejected.
+
+#### ❌ Rejection Criterion 1: Allergen Inference
+
+**Rule**: Any allergen is inferred or assumed without explicit user declaration.
+
+**Test**:
+```python
+def test_no_allergen_inference():
+    """Allergens must NEVER be inferred from behavior or context"""
+    
+    # User profile has NO allergen declarations
+    profile = {
+        "allergens": []  # Empty/missing
+    }
+    
+    # Generate 100 recipes
+    for _ in range(100):
+        recipe = generate_recipe(profile)
+        
+        # System should NEVER add allergens automatically
+        assert recipe.get("inferred_allergens") is None, \
+            "System attempted to infer allergens"
+        
+        # Should prompt user instead
+        if "allergen" in recipe.get("warnings", []):
+            assert "please_declare" in recipe["warnings"]
+```
+
+**Why**: Inferring allergens creates legal liability. Only explicit user input is acceptable.
+
+---
+
+#### ❌ Rejection Criterion 2: Silent Religious Restriction Violations
+
+**Rule**: Any religious restriction is violated without explicit warning or explanation.
+
+**Test**:
+```python
+def test_no_silent_violations():
+    """Religious restrictions must NEVER be violated silently"""
+    
+    profile = {
+        "dietary_restrictions": ["no_pork", "halal"]
+    }
+    
+    recipe = generate_recipe(profile, request="bacon pasta")
+    
+    # System MUST refuse or explain
+    assert recipe["status"] in ["refused", "modified"], \
+        "System allowed pork recipe without refusal"
+    
+    if recipe["status"] == "refused":
+        assert "cannot" in recipe["message"].lower()
+        assert "pork" in recipe["message"].lower()
+```
+
+**Why**: Violating religious beliefs silently destroys trust permanently.
+
+---
+
+#### ❌ Rejection Criterion 3: Spice/Blend Assumptions Without Consent
+
+**Rule**: Any spice blend or specialty ingredient is assumed to be available without user confirmation.
+
+**Test**:
+```python
+def test_no_spice_assumptions():
+    """Spice blends must NEVER be assumed"""
+    
+    profile = {
+        "pantry": {"basic_spices_available": "no"}
+    }
+    
+    recipe = generate_recipe(profile)
+    
+    # Check for assumed blends
+    assumed_blends = ["garam_masala", "curry_powder", "five_spice", "za'atar"]
+    
+    for blend in assumed_blends:
+        if blend in recipe["ingredients_lower"]:
+            # Must be in shopping list OR prompted
+            assert blend in recipe["shopping_list"] or \
+                   f"do you have {blend}" in recipe.get("prompt", "").lower(), \
+                   f"System assumed {blend} without confirmation"
+```
+
+**Why**: Assuming specialty items creates friction and abandoned recipes.
+
+---
+
+#### ❌ Rejection Criterion 4: Refusal Without Explanation
+
+**Rule**: Any refusal to generate a recipe lacks clear explanation of why.
+
+**Test**:
+```python
+def test_refusal_clarity():
+    """Refusals must ALWAYS explain why"""
+    
+    profile = {
+        "allergens": ["dairy", "eggs"],
+        "dietary_restrictions": ["vegan"]
+    }
+    
+    recipe = generate_recipe(profile, request="cheese soufflé")
+    
+    # If refused
+    if recipe["status"] == "refused":
+        # Must have explanation
+        assert "reason" in recipe
+        assert len(recipe["reason"]) > 20  # Substantive explanation
+        
+        # Should mention specific constraint
+        assert any(word in recipe["reason"].lower() 
+                  for word in ["dairy", "egg", "vegan", "allergen"])
+```
+
+**Why**: Silent refusals feel like bugs. Explained refusals build trust.
+
+---
+
+#### ❌ Rejection Criterion 5: Language & Culture Conflation
+
+**Rule**: Language preference is conflated with cuisine preference or cultural assumptions.
+
+**Test**:
+```python
+def test_no_language_cuisine_conflation():
+    """Language ≠ Cuisine preference"""
+    
+    # User prefers Spanish language
+    profile = {
+        "language": "es",
+        "preferred_cuisines": []  # Not specified
+    }
+    
+    recipes = [generate_recipe(profile) for _ in range(10)]
+    
+    # Should NOT be all Spanish/Mexican cuisine
+    cuisines = [r.get("cuisine") for r in recipes]
+    
+    # Expect diversity, not all Latin American
+    assert len(set(cuisines)) > 3, \
+        "System assumed Spanish language = Spanish/Mexican cuisine only"
+```
+
+**Why**: Language ≠ culture. Spanish speakers exist globally with diverse food preferences.
+
+---
+
+### 11.13 The Golden Rule (Memorize & Enforce)
+
+**The single principle that defines SAVO's standard:**
+
+> **"If SAVO isn't sure, it asks. If it can't ask, it refuses."**
+
+#### What This Means in Practice
+
+**Scenario 1: Unknown Ingredient Availability**
+```python
+# User scans: "chicken, rice"
+# Recipe needs: soy sauce
+
+# ✅ CORRECT
+return {
+    "message": "Do you have soy sauce? I can suggest an alternative if not.",
+    "alternatives": ["salt", "tamari"]
+}
+
+# ❌ WRONG
+# Assume they have it and generate recipe
+```
+
+**Scenario 2: Ambiguous Dietary Request**
+```python
+# User says: "vegetarian"
+# But profile shows: no explicit allergen declarations
+
+# ✅ CORRECT
+return {
+    "message": "Does anyone have allergies I should know about?",
+    "reason": "safety_first"
+}
+
+# ❌ WRONG
+# Generate vegetarian recipe without checking allergens
+```
+
+**Scenario 3: Cannot Meet Constraints**
+```python
+# User wants: "peanut butter cookies"
+# Profile has: peanut allergy
+
+# ✅ CORRECT
+return {
+    "status": "refused",
+    "message": "I can't safely make peanut butter cookies due to your peanut allergy.",
+    "alternative": "Would you like almond butter cookies instead?"
+}
+
+# ❌ WRONG
+# Silently substitute ingredients without explanation
+```
+
+#### Implementation in Code
+
+```python
+class SAVOGoldenRule:
+    """Enforce: If unsure → ask. If can't ask → refuse."""
+    
+    @staticmethod
+    def check_before_generate(profile: dict, request: str) -> dict:
+        """Pre-generation safety gate"""
+        
+        # Check 1: Profile complete?
+        if not profile.get("allergens_declared"):
+            return {
+                "can_proceed": False,
+                "action": "ask",
+                "message": "I need to know about any allergies first for safety."
+            }
+        
+        # Check 2: Request conflicts with restrictions?
+        conflicts = detect_conflicts(profile, request)
+        if conflicts:
+            return {
+                "can_proceed": False,
+                "action": "refuse",
+                "message": f"I can't make {request} because: {conflicts['reason']}",
+                "alternative": conflicts.get("alternative")
+            }
+        
+        # Check 3: Missing required ingredients?
+        required_unknown = find_unknown_ingredients(profile, request)
+        if required_unknown:
+            return {
+                "can_proceed": False,
+                "action": "ask",
+                "message": f"Do you have {required_unknown[0]}?",
+                "alternatives": get_alternatives(required_unknown[0])
+            }
+        
+        # All clear
+        return {"can_proceed": True}
+```
+
+#### Engineering Mandate
+
+Every engineer working on SAVO must be able to recite:
+
+> **"If SAVO isn't sure, it asks. If it can't ask, it refuses."**
+
+This is not a suggestion—it's the product standard.
+
+---
+
 **Phase 11 Complete** ✅
 
-This comprehensive guide ensures the AI layer generates safe, personalized recipes while respecting all user constraints and preferences.
+This comprehensive guide ensures the AI layer generates safe, personalized recipes while respecting all user constraints and preferences across all global contexts.
