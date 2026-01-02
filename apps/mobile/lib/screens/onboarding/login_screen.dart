@@ -6,6 +6,7 @@ import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
 import 'onboarding_coordinator.dart';
+import 'signup_screen.dart';
 
 class OnboardingLoginScreen extends StatefulWidget {
   const OnboardingLoginScreen({super.key});
@@ -269,6 +270,26 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
                     child: const Text('Sign in with password instead'),
                   ),
                 ],
+                
+                // Signup link
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('Don\'t have an account? '),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const OnboardingSignupScreen(),
+                          ),
+                        );
+                      },
+                      child: const Text('Sign Up'),
+                    ),
+                  ],
+                ),
                 
                 if (_otpSent) ...[
                   // OTP code field
