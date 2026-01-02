@@ -6,7 +6,6 @@ import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import 'inventory_screen.dart';
 import 'settings/active_sessions_screen.dart';
-import 'onboarding/login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -80,10 +79,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (mounted) {
         // Navigate to login screen and remove all previous routes
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(
-            builder: (context) => const OnboardingLoginScreen(),
-          ),
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/login',
           (route) => false,
         );
       }

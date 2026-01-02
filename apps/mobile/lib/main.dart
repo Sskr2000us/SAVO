@@ -94,6 +94,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
         home: const AppStartupScreen(),
         routes: {
           '/landing': (context) => const LandingScreen(),
+          '/login': (context) => const OnboardingCoordinator(),
           '/onboarding': (context) => const OnboardingCoordinator(),
           '/home': (context) => const MainNavigationShell(),
         },
@@ -201,11 +202,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       }
       debugPrint('==========================');
       
-      // No session -> start onboarding (which starts at LOGIN)
+      // No session -> go to login screen
       if (session == null) {
         debugPrint('🔐 No session found - navigating to login');
         if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/onboarding');
+          Navigator.of(context).pushReplacementNamed('/login');
         }
         return;
       }
@@ -267,8 +268,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     } catch (e) {
       debugPrint('Error checking auth/onboarding: $e');
       if (mounted) {
-        // Error -> start onboarding
-        Navigator.of(context).pushReplacementNamed('/onboarding');
+        // Error -> go to login
+        Navigator.of(context).pushReplacementNamed('/login');
       }
     }
   }
@@ -312,7 +313,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
                   const SizedBox(height: 16),
                   TextButton(
                     onPressed: () {
-                      Navigator.of(context).pushReplacementNamed('/onboarding');
+                      Navigator.of(context).pushReplacementNamed('/login');
                     },
                     child: const Text('Go to Login'),
                   ),
