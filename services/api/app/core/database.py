@@ -113,7 +113,8 @@ async def create_household_profile(user_id: str, profile_data: Dict[str, Any]) -
         result = db.client.table("household_profiles").insert(profile_data).execute()
         return result.data[0]
     except APIError as e:
-        logger.error(f"Error creating household profile: {e}")
+        logger.error(f"Error creating household profile for user {user_id}: {e}")
+        logger.error(f"Profile data: {profile_data}")
         raise
 
 
