@@ -2,6 +2,7 @@
 Planning endpoints - daily/party/weekly meal planning
 """
 from datetime import datetime
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.planning import (
@@ -871,7 +872,3 @@ def _build_prep_strategy(courses: List[Dict], meal_plan: Dict) -> Dict:
         "serving_sequence": [c["course_type"] for c in courses],
         "total_active_time": sum(c["recipe"].get("prep_time", 15) for c in courses) // 2  # Assume 50% parallel
     }
-
-
-# Import List type for type hints
-from typing import List, Optional
