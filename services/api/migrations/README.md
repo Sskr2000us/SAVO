@@ -1,6 +1,127 @@
 # SAVO Database Migrations
 
-Complete Supabase database setup for SAVO meal planning application.
+Database migration scripts for SAVO application.
+
+## Migration Files
+
+### 001_initial_schema.sql
+- **Status:** ✅ Base schema
+- **Creates:**
+  - `users` table
+  - `household_profiles` table (with skill_level)
+  - `family_members` table
+  - `meal_plans` table
+  - Basic indexes and RLS policies
+
+### 002_vision_scanning_tables.sql
+- **Status:** ✅ Vision scanning
+- **Creates:**
+  - `ingredient_scans` table
+  - `detected_ingredients` table
+  - `user_pantry` table
+  - `scan_feedback` table
+  - `scan_corrections` table
+  - Triggers for auto-adding to pantry
+
+### 002_user_profile_spec.sql
+- **Status:** ✅ Profile enhancements
+- **Adds:**
+  - `onboarding_completed_at` to household_profiles
+  - `basic_spices_available` to household_profiles
+  - `audit_log` table
+  - Full profile view function
+
+### 003_add_quantities.sql
+- **Status:** ✅ Quantity tracking (Idempotent)
+- **Adds:**
+  - `quantity`, `unit`, `estimated`, `quantity_confidence` columns to user_pantry
+  - `detected_quantity`, `detected_unit` columns to detected_ingredients
+  - `quantity_units` reference table (21 units)
+  - `standard_serving_sizes` table (50+ ingredients)
+  - Helper functions: `convert_unit()`, `get_standard_serving()`, `check_recipe_sufficiency()`
+  - Materialized view: `pantry_inventory_summary`
+  - Updated triggers for quantity handling
+
+### 004_add_dinner_courses.sql
+- **Status:** ✅ Meal planning (Idempotent)
+- **Adds:**
+  - `dinner_courses` column to household_profiles (1-5 range)
+  - Check constraint for valid range
+  - Documentation comments
+
+## Running Migrations
+
+### Option 1: Automatic (Python Helper)
+
+```bash
+cd services/api/migrations
+python run_migrations.py
+```
+
+This will:
+- Run all migrations in order (001 → 002 → 003 → 004)
+- Handle errors gracefully
+- Verify all objects were created
+- Show detailed results
+
+### Option 2: Verification Only
+
+```bash
+cd services/api/migrations
+python db_helper.py
+```
+
+This will:
+- Check database connection
+- Verify all tables exist
+- Verify all columns exist
+- Verify all functions exist
+- Show detailed schema information
+
+### Option 3: Manual (Supabase SQL Editor)
+
+Run each migration file manually in Supabase SQL Editor:
+
+1. Go to Supabase Dashboard → SQL Editor
+2. Create new query
+3. Paste migration file contents (in order 001 → 004)
+4. Click "Run"
+5. Verify success message
+
+## Environment Setup
+
+Required environment variables:
+
+```bash
+# Option 1: Direct database URL
+DATABASE_URL=postgresql://postgres:password@host:5432/database
+
+# Option 2: Supabase credentials
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_DB_PASSWORD=your_db_password
+```
+
+## Migration Safety
+
+All migrations 003+ are **idempotent** (safe to re-run):
+- Use `IF NOT EXISTS` checks
+- Use `ON CONFLICT DO NOTHING` for inserts
+- Use `CREATE ... IF NOT EXISTS` for objects
+- Check constraints before adding
+
+## Verification Checklist
+
+After running migrations, verify:
+
+- [ ] All tables created
+- [ ] All columns added
+- [ ] All indexes created
+- [ ] All functions defined
+- [ ] All triggers active
+- [ ] RLS policies enabled
+- [ ] Sample data inserted (reference tables)
+
+Run `python db_helper.py` for automated verification.
 
 ## Quick Start
 
@@ -11,13 +132,14 @@ Complete Supabase database setup for SAVO meal planning application.
 # Copy your project URL and anon key
 ```
 
-### 2. Run Migration
+### 2. Run Migrations
 ```bash
-# In Supabase Dashboard:
-# 1. Go to SQL Editor
-# 2. Create new query
-# 3. Paste contents of 001_initial_schema.sql
-# 4. Click "Run"
+# In Supabase Dashboard SQL Editor, run in order:
+# 1. 001_initial_schema.sql
+# 2. 002_vision_scanning_tables.sql
+# 3. 002_user_profile_spec.sql
+# 4. 003_add_quantities.sql
+# 5. 004_add_dinner_courses.sql
 ```
 
 ### 3. Set Environment Variables
