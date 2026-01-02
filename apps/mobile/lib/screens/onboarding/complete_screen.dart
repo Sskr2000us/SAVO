@@ -45,7 +45,7 @@ class _OnboardingCompleteScreenState extends State<OnboardingCompleteScreen> {
       }
 
       if (mounted) {
-        // Navigate to landing page (replace entire navigation stack)
+        // Navigate to landing page for first-time welcome
         Navigator.of(context).pushReplacementNamed('/landing');
       }
     } catch (e) {

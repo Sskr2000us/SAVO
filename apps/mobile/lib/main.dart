@@ -233,8 +233,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
         if (mounted) {
           if (status['completed'] == true) {
-            // Onboarding complete -> go to landing page
-            Navigator.of(context).pushReplacementNamed('/landing');
+            // Onboarding complete -> go to home
+            Navigator.of(context).pushReplacementNamed('/home');
           } else {
             // Onboarding incomplete -> resume onboarding
             Navigator.of(context).pushReplacementNamed('/onboarding');
@@ -249,9 +249,9 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           
           if (mounted) {
             if (isComplete) {
-              // Local cache says complete - go to landing page
+              // Local cache says complete - go to home
               debugPrint('Using cached completion status (offline mode)');
-              Navigator.of(context).pushReplacementNamed('/landing');
+              Navigator.of(context).pushReplacementNamed('/home');
             } else {
               // Resume onboarding with cached progress
               debugPrint('Resuming onboarding from cache (offline mode)');

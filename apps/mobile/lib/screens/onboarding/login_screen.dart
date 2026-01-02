@@ -94,8 +94,14 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
       }
 
       if (mounted) {
-        // Navigate to onboarding flow (will show appropriate step)
-        Navigator.of(context).pushReplacementNamed('/onboarding');
+        // Navigate based on onboarding status
+        if (status['completed'] == true) {
+          // Existing user with complete profile -> go to home
+          Navigator.of(context).pushReplacementNamed('/home');
+        } else {
+          // New user or incomplete onboarding -> continue setup
+          Navigator.of(context).pushReplacementNamed('/onboarding');
+        }
       }
     } catch (e) {
       setState(() {
@@ -176,8 +182,14 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
       }
 
       if (mounted) {
-        // Navigate to onboarding flow (will show appropriate step)
-        Navigator.of(context).pushReplacementNamed('/onboarding');
+        // Navigate based on onboarding status
+        if (status['completed'] == true) {
+          // Existing user with complete profile -> go to home
+          Navigator.of(context).pushReplacementNamed('/home');
+        } else {
+          // New user or incomplete onboarding -> continue setup
+          Navigator.of(context).pushReplacementNamed('/onboarding');
+        }
       }
     } catch (e) {
       setState(() {
