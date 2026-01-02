@@ -3,7 +3,7 @@ class Config {
   // TODO: Move these to Vercel environment variables in production
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://tifecgfgtxkydqxjumnn.supabase.co', // Your Supabase project URL
+    defaultValue: 'https://ondfkfkvfxffclzotuvm.supabase.co', // Your Supabase project URL
   );
   
   static const String supabaseAnonKey = String.fromEnvironment(
