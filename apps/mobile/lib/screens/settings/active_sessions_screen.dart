@@ -139,29 +139,65 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Active Sessions'),
+        title: const Text('Active Devices'),
         backgroundColor: AppColors.surface,
       ),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.md),
         children: [
-          // Info header
+          // Security info header
           SavoCard(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(
-                    Icons.info_outline,
-                    color: AppColors.primary,
-                    size: 24,
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.security,
+                        color: Colors.orange.shade700,
+                        size: 24,
+                      ),
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: Text(
+                          'Security Check',
+                          style: AppTypography.h3Style().copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Text(
-                      'Manage where you\'re signed in to SAVO. '
-                      'You can sign out of other devices for security.',
-                      style: AppTypography.captionStyle(),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Review devices accessing your household account. '
+                    'If you see an unknown device, sign it out immediately.',
+                    style: AppTypography.captionStyle(),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info, size: 16, color: Colors.blue.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Max 5 devices per household',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue.shade700,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -172,7 +208,7 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
 
           // Current session section
           Text(
-            'Current Session',
+            'This Device',
             style: AppTypography.h2Style(),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -182,12 +218,12 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
               leading: Container(
                 padding: const EdgeInsets.all(AppSpacing.sm),
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.2),
+                  color: Colors.green.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.smartphone,
-                  color: AppColors.primary,
+                  color: Colors.green.shade700,
                 ),
               ),
               title: Row(

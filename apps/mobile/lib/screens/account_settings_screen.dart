@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import 'settings_screen.dart';
 import 'inventory_screen.dart';
+import 'settings/device_security_screen.dart';
 
 /// Account and app settings screen
 /// Contains inventory, sessions, sign out, and link to profile settings
@@ -100,8 +101,22 @@ class AccountSettingsScreen extends StatelessWidget {
           
           const SizedBox(height: 32),
           
-          // Account Section
-          _buildSectionHeader('Account'),
+          // Security Section
+          _buildSectionHeader('Security'),
+          const SizedBox(height: 12),
+          _buildSettingCard(
+            context: context,
+            icon: Icons.devices,
+            iconColor: Colors.red.shade700,
+            title: 'Device Security (Max 2)',
+            subtitle: 'Prevent unauthorized access - manage devices',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DeviceSecurityScreen()),
+              );
+            },
+          ),
           const SizedBox(height: 12),
           _buildSettingCard(
             context: context,
