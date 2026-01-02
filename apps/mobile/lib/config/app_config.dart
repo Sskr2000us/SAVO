@@ -8,7 +8,7 @@ class Config {
   
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRpZmVjZ2ZndHhreWRxeGp1bW5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU1OTUxNjEsImV4cCI6MjA1MTE3MTE2MX0.PUQ_BEv-KTkKnAvVd2_LbSPdO7kU8AkkIOKo8z_hXqc', // Your Supabase anon key
+    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9uZGZrZmt2ZnhmZmNsem90dXZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwMzU1NzYsImV4cCI6MjA4MjYxMTU3Nn0.ksizl220jrw0n7P2otYEprTgdNpke5whaoCK_09_kdQ', // Your Supabase anon key
   );
   
   // Backend API Configuration
