@@ -174,6 +174,9 @@ async def create_household(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists in database (creates if not exists)
+        await get_or_create_user(user_id)
+        
         # Check if profile already exists
         existing = await get_household_profile(user_id)
         if existing:
