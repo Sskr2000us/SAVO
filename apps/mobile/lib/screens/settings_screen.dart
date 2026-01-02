@@ -36,6 +36,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _dinnerStyle = 'family_meal';
   int _dinnerCourses = 2;
   
+  // Cooking skill level
+  int _skillLevel = 2; // 1=Beginner, 2=Basic, 3=Intermediate, 4=Multi-step, 5=Advanced
+  
   bool _isLoading = false;
   bool _isSaving = false;
 
@@ -135,6 +138,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (dinnerPrefs != null && dinnerPrefs.isNotEmpty) {
             _dinnerStyle = dinnerPrefs[0] ?? 'family_meal';
           }
+          
+          // Load skill level
+          _skillLevel = profile['skill_level'] ?? 2;
         }
         
         // Load family members
@@ -175,6 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'breakfast_preferences': [_breakfastStyle],
         'lunch_preferences': [_lunchStyle],
         'dinner_preferences': [_dinnerStyle],
+        'skill_level': _skillLevel,
       };
       
       // Create or update household profile in database
@@ -499,6 +506,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: _saveHouseholdProfile,
                             icon: const Icon(Icons.save),
                             label: const Text('Save Meal Preferences'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Cooking Skill Level Section
+                  _buildSectionHeader('Cooking Skill Level'),
+                  SavoCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Your cooking experience helps us recommend appropriate recipes',
+                          style: AppTypography.captionStyle(color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildSkillLevelSelector(),
+                        const SizedBox(height: AppSpacing.md),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Skill Level'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.primary,
                               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1128,6 +1165,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text(label, style: AppTypography.captionStyle()),
         ],
       ),
+    );
+  }
+
+  Widget _buildSkillLevelSelector() {
+    const skillLevels = {
+      1: {'name': 'Beginner', 'description': 'Assembly / No-Skill', 'icon': Icons.looks_one},
+      2: {'name': 'Basic', 'description': 'Simple cooking', 'icon': Icons.looks_two},
+      3: {'name': 'Intermediate', 'description': 'Technique-based', 'icon': Icons.looks_3},
+      4: {'name': 'Multi-Step', 'description': 'Complex recipes', 'icon': Icons.looks_4},
+      5: {'name': 'Advanced', 'description': 'Professional techniques', 'icon': Icons.looks_5},
+    };
+
+    return Column(
+      children: skillLevels.entries.map((entry) {
+        final level = entry.key;
+        final data = entry.value;
+        final isSelected = _skillLevel == level;
+
+        return GestureDetector(
+          onTap: () => setState(() => _skillLevel = level),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isSelected ? AppColors.primary.withOpacity(0.1) : Colors.transparent,
+              border: Border.all(
+                color: isSelected ? AppColors.primary : Colors.grey.shade300,
+                width: isSelected ? 2 : 1,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  data['icon'] as IconData,
+                  color: isSelected ? AppColors.primary : Colors.grey.shade600,
+                  size: 32,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        data['name'] as String,
+                        style: AppTypography.bodyStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? AppColors.primary : Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        data['description'] as String,
+                        style: AppTypography.captionStyle(
+                          color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isSelected)
+                  Icon(Icons.check_circle, color: AppColors.primary, size: 24),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 }
