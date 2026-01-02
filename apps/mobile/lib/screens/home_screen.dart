@@ -21,11 +21,28 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('SAVO'),
         actions: [
-          // Logout button for testing
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) async {
-              if (value == 'logout') {
+          // Direct logout button (more visible for testing)
+          TextButton.icon(
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Sign Out'),
+                  content: const Text('Are you sure you want to sign out?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Sign Out'),
+                    ),
+                  ],
+                ),
+              );
+              
+              if (confirmed == true && context.mounted) {
                 await Supabase.instance.client.auth.signOut();
                 if (context.mounted) {
                   Navigator.of(context).pushAndRemoveUntil(
@@ -35,19 +52,13 @@ class HomeScreen extends StatelessWidget {
                 }
               }
             },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout),
-                    SizedBox(width: 8),
-                    Text('Sign Out'),
-                  ],
-                ),
-              ),
-            ],
+            icon: const Icon(Icons.logout),
+            label: const Text('Sign Out'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white70,
+            ),
           ),
+          const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {

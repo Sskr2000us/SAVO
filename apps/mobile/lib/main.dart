@@ -167,6 +167,9 @@ class AppStartupScreen extends StatefulWidget {
 }
 
 class _AppStartupScreenState extends State<AppStartupScreen> {
+  bool _isLoading = true;
+  String? _error;
+
   @override
   void initState() {
     super.initState();
@@ -176,12 +179,18 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   Future<void> _checkAuthAndOnboarding() async {
     try {
       // Add small delay to ensure Supabase is initialized
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 500));
       
       final session = Supabase.instance.client.auth.currentSession;
       
-      debugPrint('🔐 Auth check - Session exists: ${session != null}');
-      debugPrint('🔐 User ID: ${session?.user.id}');
+      // Debug logging for web console
+      debugPrint('===== SAVO AUTH CHECK =====');
+      debugPrint('🔐 Session exists: ${session != null}');
+      if (session != null) {
+        debugPrint('🔐 User ID: ${session.user.id}');
+        debugPrint('🔐 User Email: ${session.user.email}');
+      }
+      debugPrint('==========================');
       
       // No session -> start onboarding (which starts at LOGIN)
       if (session == null) {
@@ -255,11 +264,59 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     }
   }
 
+  void _retryAuth() {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    _checkAuthAndOnboarding();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
-        child: CircularProgressIndicator(),
+        child: _error != null
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Failed to initialize',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _retryAuth,
+                    child: const Text('Retry'),
+                  ),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pushReplacementNamed('/onboarding');
+                    },
+                    child: const Text('Go to Login'),
+                  ),
+                ],
+              )
+            : const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Initializing SAVO...'),
+                ],
+              ),
       ),
     );
   }
