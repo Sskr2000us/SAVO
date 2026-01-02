@@ -745,8 +745,11 @@ async def complete_onboarding(
     Sets onboarding_completed_at timestamp in household_profiles.
     Requires JWT Bearer token in Authorization header.
     """
-    try:        # Ensure user exists
-        await get_or_create_user(user_id)        completed_at = datetime.utcnow()
+    try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
+        completed_at = datetime.utcnow()
         await mark_onboarding_complete(user_id)
         
         # Log audit event
