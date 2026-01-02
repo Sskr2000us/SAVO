@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'screens/home_screen.dart';
 import 'screens/plan_screen.dart';
 import 'screens/cook_screen.dart';
 import 'screens/leftovers_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/landing_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
@@ -17,6 +20,11 @@ import 'config/app_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Remove # from URLs on web
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
   
   // Initialize Supabase with session persistence
   await Supabase.initialize(
@@ -85,6 +93,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
         theme: AppTheme.darkTheme,
         home: const AppStartupScreen(),
         routes: {
+          '/landing': (context) => const LandingScreen(),
           '/onboarding': (context) => const OnboardingCoordinator(),
           '/home': (context) => const MainNavigationShell(),
         },
@@ -222,8 +231,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
         if (mounted) {
           if (status['completed'] == true) {
-            // Onboarding complete -> go to home
-            Navigator.of(context).pushReplacementNamed('/home');
+            // Onboarding complete -> go to landing page
+            Navigator.of(context).pushReplacementNamed('/landing');
           } else {
             // Onboarding incomplete -> resume onboarding
             Navigator.of(context).pushReplacementNamed('/onboarding');
@@ -238,9 +247,9 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           
           if (mounted) {
             if (isComplete) {
-              // Local cache says complete - go to home
+              // Local cache says complete - go to landing page
               debugPrint('Using cached completion status (offline mode)');
-              Navigator.of(context).pushReplacementNamed('/home');
+              Navigator.of(context).pushReplacementNamed('/landing');
             } else {
               // Resume onboarding with cached progress
               debugPrint('Resuming onboarding from cache (offline mode)');

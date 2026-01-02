@@ -45,8 +45,8 @@ class _OnboardingCompleteScreenState extends State<OnboardingCompleteScreen> {
       }
 
       if (mounted) {
-        // Navigate to home screen (replace entire navigation stack)
-        Navigator.of(context).pushReplacementNamed('/home');
+        // Navigate to landing page (replace entire navigation stack)
+        Navigator.of(context).pushReplacementNamed('/landing');
       }
     } catch (e) {
       setState(() {
