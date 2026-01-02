@@ -187,11 +187,11 @@ class AppTheme {
       ),
 
       // Card
-      cardTheme: CardThemeData(
+      cardTheme: const CardTheme(
         color: AppColors.card,
         elevation: 0,
-        shadowColor: Colors.black.withValues(alpha: 0.35),
-        shape: const RoundedRectangleBorder(
+        shadowColor: Colors.black,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
         ),
       ),
