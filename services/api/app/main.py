@@ -1,3 +1,8 @@
+"""
+SAVO Backend API
+FastAPI application with Supabase integration
+Version: 2026-01-02 - UUID fix deployed
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
