@@ -211,17 +211,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       
-      // Delete existing members first
-      final existingMembers = await apiClient.get('/profile/family-members');
+      // Ensure household profile exists first
+      final householdResponse = await apiClient.get('/profile/household');
+      if (householdResponse?['exists'] != true) {
+        // Create household profile first if it doesn't exist
+        await _saveHouseholdProfile();
+      }
       
-      if (existingMembers?['members'] is List) {
-        for (var member in existingMembers['members']) {
-          await apiClient.delete('/profile/family-members/${member['id']}');
+      // Delete existing members first
+      try {
+        final existingMembers = await apiClient.get('/profile/family-members');
+        
+        if (existingMembers?['members'] is List) {
+          for (var member in existingMembers['members']) {
+            await apiClient.delete('/profile/family-members/${member['id']}');
+          }
         }
+      } catch (e) {
+        // Ignore errors when deleting (members might not exist yet)
+        debugPrint('No existing members to delete: $e');
       }
       
       // Add new family members
-      for (var member in _familyMembers) {
+      for (var i = 0; i < _familyMembers.length; i++) {
+        final member = _familyMembers[i];
+        
+        // Convert medical_dietary_needs to array if it's a Map
+        List<String> medicalNeeds = [];
+        if (member['medical_dietary_needs'] is List) {
+          medicalNeeds = List<String>.from(member['medical_dietary_needs']);
+        }
+        
         final memberData = {
           'name': member['name'] ?? 'Family Member',
           'age': member['age'] ?? 30,
@@ -229,9 +249,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'dietary_restrictions': member['dietary_restrictions'] ?? [],
           'allergens': member['allergens'] ?? [],
           'health_conditions': member['health_conditions'] ?? [],
+          'medical_dietary_needs': medicalNeeds,
           'spice_tolerance': member['spice_tolerance'] ?? 'medium',
           'food_preferences': member['food_preferences'] ?? [],
           'food_dislikes': member['food_dislikes'] ?? [],
+          'display_order': i,
         };
         
         await apiClient.post('/profile/family-members', memberData);
@@ -247,12 +269,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
+        // Show detailed error message
+        final errorMessage = e.toString().contains('Exception: ')
+            ? e.toString().replaceFirst('Exception: ', '')
+            : e.toString();
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save family members: $e'),
+            content: Text('Failed to save family members: $errorMessage'),
             backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 5),
           ),
         );
+        
+        debugPrint('Full error saving family members: $e');
       }
     } finally {
       setState(() => _isSaving = false);
@@ -277,7 +307,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'dietary_restrictions': <String>[],
         'allergens': <String>[],
         'health_conditions': <String>[],
-        'medical_dietary_needs': {},
+        'medical_dietary_needs': <String>[],
         'spice_tolerance': 'medium',
         'food_preferences': <String>[],
         'food_dislikes': <String>[],

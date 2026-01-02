@@ -53,15 +53,33 @@ class ApiClient {
     final allHeaders = {'Content-Type': 'application/json'};
     allHeaders.addAll(_mergeHeaders(headers));
     
-    final response = await http.post(
-      Uri.parse('$baseUrl$endpoint'),
-      headers: allHeaders,
-      body: json.encode(body),
-    );
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return json.decode(response.body);
-    } else {
-      throw Exception('Failed to post data: ${response.statusCode}');
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl$endpoint'),
+        headers: allHeaders,
+        body: json.encode(body),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return json.decode(response.body);
+      } else {
+        // Try to parse error message from response body
+        String errorDetail = 'HTTP ${response.statusCode}';
+        try {
+          final errorBody = json.decode(response.body);
+          if (errorBody['detail'] != null) {
+            errorDetail = errorBody['detail'].toString();
+          }
+        } catch (_) {
+          // If can't parse, use raw body
+          if (response.body.isNotEmpty) {
+            errorDetail = response.body;
+          }
+        }
+        throw Exception('Failed to POST $endpoint: $errorDetail');
+      }
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Network error: $e');
     }
   }
 
