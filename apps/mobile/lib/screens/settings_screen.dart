@@ -360,32 +360,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 children: [
-                  // Quick Actions
-                  _buildQuickAction(
-                    icon: Icons.inventory_2,
-                    title: 'Manage Inventory',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const InventoryScreen()),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  _buildQuickAction(
-                    icon: Icons.devices,
-                    title: 'Active Sessions',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ActiveSessionsScreen()),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  _buildQuickAction(
-                    icon: Icons.logout,
-                    title: 'Sign Out',
-                    onTap: _handleSignOut,
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-
                   // Regional Settings Section
                   _buildSectionHeader('Regional & Cultural Settings'),
                   SavoCard(

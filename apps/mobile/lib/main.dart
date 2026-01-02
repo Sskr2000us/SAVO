@@ -7,7 +7,7 @@ import 'screens/home_screen.dart';
 import 'screens/plan_screen.dart';
 import 'screens/cook_screen.dart';
 import 'screens/leftovers_screen.dart';
-import 'screens/settings_screen.dart';
+import 'screens/account_settings_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
@@ -119,7 +119,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     PlanScreen(),
     CookScreen(),
     LeftoversScreen(),
-    SettingsScreen(),
+    AccountSettingsScreen(),
   ];
 
   void _onItemTapped(int index) {
