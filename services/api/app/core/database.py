@@ -177,13 +177,18 @@ async def get_family_members(user_id: str) -> List[Dict[str, Any]]:
 
 
 async def create_family_member(user_id: str, member_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Create new family member"""
+    """Create new family member with composite key based on user_id + name"""
     try:
         household = await get_household_profile(user_id)
         if not household:
             raise ValueError("Household profile not found")
         
         member_data["household_id"] = household["id"]
+        
+        # Generate composite ID: user_id + sanitized name
+        member_name = member_data.get("name", "").lower().strip().replace(" ", "_")
+        composite_id = f"{user_id}_{member_name}"
+        member_data["id"] = composite_id
         
         # Determine age category
         age = member_data.get("age", 0)
