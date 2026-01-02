@@ -69,6 +69,10 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         )
     
     try:
+        # Decode token header to see what algorithm is being used
+        unverified_header = jwt.get_unverified_header(token)
+        logger.info(f"JWT header: {unverified_header}")
+        
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
