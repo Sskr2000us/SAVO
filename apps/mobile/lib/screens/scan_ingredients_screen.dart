@@ -122,12 +122,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           'storage_location': json['storage'] ?? 'pantry',  // Match database field name
           'source': 'scan',  // Mark as scanned item
           'scan_confidence': (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null,
-        },
-          headers: {
-            'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-            'X-User-Email': 'demo@savo.app',
-          },
-        );
+        });
       }
 
       if (!mounted) return;

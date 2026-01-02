@@ -30,12 +30,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       // Use database endpoint with user header
-      final response = await apiClient.get('/inventory-db/items',
-        headers: {
-          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-          'X-User-Email': 'demo@savo.app',
-        },
-      );
+      final response = await apiClient.get('/inventory-db/items');
 
       if (response is Map && response['items'] is List) {
         setState(() {
@@ -66,12 +61,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       // Use database endpoint with user header
-      await apiClient.delete('/inventory-db/items/$inventoryId',
-        headers: {
-          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-          'X-User-Email': 'demo@savo.app',
-        },
-      );
+      await apiClient.delete('/inventory-db/items/${item.id}');
       _loadInventory();
     } catch (e) {
       if (mounted) {
@@ -142,12 +132,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               try {
                 final apiClient = Provider.of<ApiClient>(context, listen: false);
                 // Use database endpoint with user header
-                await apiClient.post('/inventory-db/items', item,
-                  headers: {
-                    'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-                    'X-User-Email': 'demo@savo.app',
-                  },
-                );
+                await apiClient.post('/inventory-db/items', item);
                 Navigator.pop(context);
                 _loadInventory();
               } catch (e) {

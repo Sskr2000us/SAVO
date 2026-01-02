@@ -102,19 +102,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       
       // Load household profile from database
-      final householdResponse = await apiClient.get('/profile/household',
-        headers: {
-          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-          'X-User-Email': 'demo@savo.app',
-        },
-      );
+      final householdResponse = await apiClient.get('/profile/household');
       
       // Load family members from database
-      final membersResponse = await apiClient.get('/profile/family-members',
-        headers: {
-          'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-        },
-      );
+      final membersResponse = await apiClient.get('/profile/family-members');
       
       setState(() {
         // Load household profile
@@ -167,13 +158,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final headers = {
-        'X-User-Id': '00000000-0000-0000-0000-000000000001',  // TODO: Get from auth
-        'X-User-Email': 'demo@savo.app',
-      };
       
       // Check if household exists
-      final existsResponse = await apiClient.get('/profile/household', headers: headers);
+      final existsResponse = await apiClient.get('/profile/household');
       final householdExists = existsResponse?['exists'] == true;
       
       // Prepare household data
@@ -223,13 +210,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final headers = {
-        'X-User-Id': '00000000-0000-0000-0000-000000000001',
-        'X-User-Email': 'demo@savo.app',
-      };
       
       // Delete existing members first
-      final existingMembers = await apiClient.get('/profile/family-members', headers: headers);
+      final existingMembers = await apiClient.get('/profile/family-members');
       
       if (existingMembers?['members'] is List) {
         for (var member in existingMembers['members']) {

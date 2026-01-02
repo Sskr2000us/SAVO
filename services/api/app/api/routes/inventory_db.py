@@ -3,7 +3,7 @@ Inventory Management API Routes with Database Integration
 Handles inventory CRUD, low stock alerts, and automatic deduction
 """
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from datetime import date, datetime
@@ -18,6 +18,7 @@ from app.core.database import (
     get_expiring_items,
     deduct_inventory_for_recipe
 )
+from app.middleware.auth import get_current_user
 
 router = APIRouter()  # Remove duplicate prefix - already set in main router
 
@@ -79,7 +80,7 @@ class InventoryDeductionRequest(BaseModel):
 
 @router.get("/items")
 async def list_inventory(
-    x_user_id: str = Header(..., description="User ID from auth"),
+    user_id: str = Depends(get_current_user),
     low_stock_only: bool = False,
     category: Optional[str] = None
 ):
@@ -92,9 +93,9 @@ async def list_inventory(
     """
     try:
         if category:
-            items = await get_inventory_by_category(x_user_id, category)
+            items = await get_inventory_by_category(user_id, category)
         else:
-            items = await get_inventory(x_user_id, include_low_stock_only=low_stock_only)
+            items = await get_inventory(user_id, include_low_stock_only=low_stock_only)
         
         return {
             "count": len(items),
@@ -108,7 +109,7 @@ async def list_inventory(
 @router.post("/items")
 async def add_item(
     item: InventoryItemCreate,
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Add new item to inventory.
@@ -123,7 +124,7 @@ async def add_item(
         if item_data.get("expiry_date"):
             item_data["expiry_date"] = item_data["expiry_date"].isoformat()
         
-        created_item = await add_inventory_item(x_user_id, item_data)
+        created_item = await add_inventory_item(user_id, item_data)
         
         return {
             "success": True,
@@ -139,7 +140,7 @@ async def add_item(
 async def update_item(
     item_id: str,
     item: InventoryItemUpdate,
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Update existing inventory item.
@@ -148,7 +149,7 @@ async def update_item(
     """
     try:
         # Verify item belongs to user
-        user_items = await get_inventory(x_user_id)
+        user_items = await get_inventory(user_id)
         item_ids = [i["id"] for i in user_items]
         
         if item_id not in item_ids:
@@ -184,14 +185,14 @@ async def update_item(
 @router.delete("/items/{item_id}")
 async def remove_item(
     item_id: str,
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Remove item from inventory.
     """
     try:
         # Verify item belongs to user
-        user_items = await get_inventory(x_user_id)
+        user_items = await get_inventory(user_id)
         item_ids = [i["id"] for i in user_items]
         
         if item_id not in item_ids:
@@ -219,14 +220,14 @@ async def remove_item(
 
 @router.get("/alerts/low-stock")
 async def get_low_stock_alerts(
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Get items that are running low (quantity <= threshold).
     Sorted by quantity ascending (most urgent first).
     """
     try:
-        items = await get_low_stock_items(x_user_id)
+        items = await get_low_stock_items(user_id)
         
         return {
             "alert_count": len(items),
@@ -240,7 +241,7 @@ async def get_low_stock_alerts(
 
 @router.get("/alerts/expiring")
 async def get_expiring_alerts(
-    x_user_id: str = Header(..., description="User ID from auth"),
+    user_id: str = Depends(get_current_user),
     days: int = 3
 ):
     """
@@ -257,7 +258,7 @@ async def get_expiring_alerts(
                 detail="Days must be between 1 and 30"
             )
         
-        items = await get_expiring_items(x_user_id, days)
+        items = await get_expiring_items(user_id, days)
         
         return {
             "alert_count": len(items),
@@ -273,16 +274,16 @@ async def get_expiring_alerts(
 
 @router.get("/summary")
 async def get_inventory_summary(
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Get comprehensive inventory summary with all alerts.
     """
     try:
         # Get all data in parallel
-        all_items = await get_inventory(x_user_id)
-        low_stock = await get_low_stock_items(x_user_id)
-        expiring = await get_expiring_items(x_user_id, days=3)
+        all_items = await get_inventory(user_id)
+        low_stock = await get_low_stock_items(user_id)
+        expiring = await get_expiring_items(user_id, days=3)
         
         # Calculate category breakdown
         categories = {}
@@ -326,7 +327,7 @@ async def get_inventory_summary(
 @router.post("/deduct")
 async def deduct_for_recipe(
     request: InventoryDeductionRequest,
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Automatically deduct inventory after user selects a recipe.
@@ -354,7 +355,7 @@ async def deduct_for_recipe(
     """
     try:
         result = await deduct_inventory_for_recipe(
-            user_id=x_user_id,
+            user_id=user_id,
             meal_plan_id=request.meal_plan_id,
             ingredients=request.ingredients
         )
@@ -368,7 +369,7 @@ async def deduct_for_recipe(
             }
         
         # Check for new low stock items after deduction
-        low_stock = await get_low_stock_items(x_user_id)
+        low_stock = await get_low_stock_items(user_id)
         
         return {
             "success": True,
@@ -389,7 +390,7 @@ async def manual_inventory_adjustment(
     item_id: str,
     quantity_change: float,
     reason: str = "manual_adjustment",
-    x_user_id: str = Header(..., description="User ID from auth")
+    user_id: str = Depends(get_current_user)
 ):
     """
     Manually adjust inventory quantity (for corrections, waste, etc).
@@ -401,7 +402,7 @@ async def manual_inventory_adjustment(
     """
     try:
         # Get current item
-        user_items = await get_inventory(x_user_id)
+        user_items = await get_inventory(user_id)
         item = next((i for i in user_items if i["id"] == item_id), None)
         
         if not item:
