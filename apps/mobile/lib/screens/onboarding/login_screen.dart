@@ -49,10 +49,29 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
 
     try {
       // Sign in
-      await authService.signInWithPassword(
+      final response = await authService.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+
+      // Check if email is confirmed
+      if (response.user != null && response.user!.emailConfirmedAt == null) {
+        setState(() {
+          _error = 'Please confirm your email first. Check your inbox for the confirmation link.';
+          _isLoading = false;
+        });
+        await authService.signOut();
+        return;
+      }
+
+      // Verify we have a valid session
+      if (!authService.isAuthenticated) {
+        setState(() {
+          _error = 'Failed to create session. Please try again.';
+          _isLoading = false;
+        });
+        return;
+      }
 
       // Get onboarding status (returns resume step for existing/new users)
       final status = await profileService.getOnboardingStatus();
