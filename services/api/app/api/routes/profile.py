@@ -50,6 +50,7 @@ class HouseholdProfileCreate(BaseModel):
     
     nutrition_targets: Optional[dict] = Field(default=None, description="Daily nutrition targets")
     skill_level: int = Field(default=2, ge=1, le=5, description="Cooking skill level (1-5)")
+    dinner_courses: int = Field(default=2, ge=1, le=5, description="Number of dinner courses (1-5)")
 
 
 class HouseholdProfileUpdate(BaseModel):
@@ -70,6 +71,7 @@ class HouseholdProfileUpdate(BaseModel):
     
     nutrition_targets: Optional[dict] = None
     skill_level: Optional[int] = Field(None, ge=1, le=5)
+    dinner_courses: Optional[int] = Field(None, ge=1, le=5)
 
 
 class FamilyMemberCreate(BaseModel):

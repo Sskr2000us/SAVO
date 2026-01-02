@@ -139,8 +139,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _dinnerStyle = dinnerPrefs[0] ?? 'family_meal';
           }
           
-          // Load skill level
+          // Load skill level and dinner courses
           _skillLevel = profile['skill_level'] ?? 2;
+          _dinnerCourses = profile['dinner_courses'] ?? 2;
         }
         
         // Load family members
@@ -182,6 +183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'lunch_preferences': [_lunchStyle],
         'dinner_preferences': [_dinnerStyle],
         'skill_level': _skillLevel,
+        'dinner_courses': _dinnerCourses,
       };
       
       // Create or update household profile in database
