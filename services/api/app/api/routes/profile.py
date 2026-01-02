@@ -213,6 +213,8 @@ async def update_household(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
         # Check if profile exists
         existing = await get_household_profile(user_id)
         if not existing:
@@ -296,6 +298,9 @@ async def add_family_member(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Check if household exists
         household = await get_household_profile(user_id)
         if not household:
@@ -333,6 +338,9 @@ async def update_family_member_endpoint(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Verify member belongs to user (via household)
         members = await get_family_members(user_id)
         existing_member = next((m for m in members if m["id"] == member_id), None)
@@ -392,6 +400,9 @@ async def remove_family_member(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Verify member belongs to user
         members = await get_family_members(user_id)
         member_ids = [m["id"] for m in members]
@@ -457,6 +468,9 @@ async def update_allergens(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Verify member belongs to user
         members = await get_family_members(user_id)
         member = next((m for m in members if m["id"] == data.member_id), None)
@@ -517,6 +531,9 @@ async def update_dietary(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Verify member belongs to user
         members = await get_family_members(user_id)
         member = next((m for m in members if m["id"] == data.member_id), None)
@@ -575,8 +592,8 @@ async def update_preferences(
     Update household preferences (cuisines, spice tolerance, pantry).
     Requires JWT Bearer token in Authorization header.
     """
-    try:
-        # Get existing profile for audit
+    try:        # Ensure user exists
+        await get_or_create_user(user_id)        # Get existing profile for audit
         existing = await get_household_profile(user_id)
         if not existing:
             raise HTTPException(
@@ -651,6 +668,9 @@ async def update_language(
     Requires JWT Bearer token in Authorization header.
     """
     try:
+        # Ensure user exists
+        await get_or_create_user(user_id)
+        
         # Get existing profile for audit
         existing = await get_household_profile(user_id)
         old_language = existing.get("primary_language") if existing else None
@@ -725,8 +745,8 @@ async def complete_onboarding(
     Sets onboarding_completed_at timestamp in household_profiles.
     Requires JWT Bearer token in Authorization header.
     """
-    try:
-        completed_at = datetime.utcnow()
+    try:        # Ensure user exists
+        await get_or_create_user(user_id)        completed_at = datetime.utcnow()
         await mark_onboarding_complete(user_id)
         
         # Log audit event
