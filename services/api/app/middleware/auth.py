@@ -69,21 +69,19 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         )
     
     try:
-        # Decode token header to see what algorithm is being used
+        # First decode WITHOUT verification to see the algorithm
+        unverified = jwt.decode(token, options={"verify_signature": False})
         unverified_header = jwt.get_unverified_header(token)
-        logger.info(f"JWT header: {unverified_header}")
+        alg = unverified_header.get("alg", "unknown")
         
+        logger.info(f"JWT algorithm: {alg}, header: {unverified_header}")
+        
+        # Now decode with verification, supporting multiple algorithms
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={
-                "verify_signature": True,
-                "verify_exp": True,
-                "verify_nbf": True,
-                "verify_iat": True,
-                "require": ["exp", "sub"]
-            }
+            algorithms=["HS256", "HS384", "HS512", "RS256"],  # Support both HMAC and RSA
+            options={"verify_signature": True}
         )
         
         user_id: str = payload.get("sub")
