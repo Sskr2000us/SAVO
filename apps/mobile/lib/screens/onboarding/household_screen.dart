@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/profile_state.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
+import '../../widgets/onboarding_app_bar.dart';
 import 'onboarding_coordinator.dart';
 
 class OnboardingHouseholdScreen extends StatefulWidget {
@@ -117,19 +119,86 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
     }
   }
 
+  Future<void> _handleSaveAndExit() async {
+    // Allow exit even with no data
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileService = ProfileService(apiClient);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+
+      // Only save if there are members
+      if (_members.isNotEmpty) {
+        // Create household and members
+        if (!profileState.hasHouseholdProfile()) {
+          await profileService.createHouseholdProfile();
+        }
+
+        for (var member in _members) {
+          if (member['id'] == null && member['name']?.toString().trim().isNotEmpty == true) {
+            await profileService.createFamilyMember(
+              name: member['name'],
+              age: member['age'] ?? 30,
+              allergens: [],
+              dietaryRestrictions: [],
+            );
+          }
+        }
+
+        // Save progress
+        final userId = profileState.userId;
+        if (userId != null) {
+          await OnboardingStorage.saveLastStep('HOUSEHOLD', userId);
+        }
+      }
+
+      if (mounted) {
+        // Navigate to home - user can resume onboarding later
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    } catch (e) {
+      setState(() {
+        _error = 'Failed to save: ${e.toString()}';
+        _isLoading = false;
+      });
+      
+      // Even if save fails, allow exit to home
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    }
+  }
+      }
+
+      // Save progress
+      final userId = profileState.userId;
+      if (userId != null) {
+        await OnboardingStorage.saveLastStep('HOUSEHOLD', userId);
+      }
+
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    } catch (e) {
+      setState(() {
+        _error = 'Failed to save: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Your Household'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              // TODO: Save and exit
-            },
-            child: const Text('Save & Exit'),
-          ),
-        ],
+      appBar: OnboardingAppBar(
+        title: 'Your Household',
+        onSaveAndExit: _handleSaveAndExit,
+        isLoading: _isLoading,
+        showBack: Navigator.canPop(context),
       ),
       body: Column(
         children: [

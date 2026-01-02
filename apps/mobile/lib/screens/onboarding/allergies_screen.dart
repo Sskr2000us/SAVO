@@ -4,6 +4,7 @@ import '../../models/profile_state.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
+import '../../widgets/onboarding_app_bar.dart';
 import 'onboarding_coordinator.dart';
 
 class OnboardingAllergiesScreen extends StatefulWidget {
@@ -112,11 +113,54 @@ class _OnboardingAllergiesScreenState extends State<OnboardingAllergiesScreen> {
     }
   }
 
+  Future<void> _handleSaveAndExit() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileService = ProfileService(apiClient);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+
+      // Save allergens if members exist
+      final members = profileState.members;
+      if (members.isNotEmpty) {
+        for (var member in members) {
+          await profileService.updateAllergens(
+            memberId: member['id'],
+            allergens: _selectedAllergens.toList(),
+            reason: 'Partial onboarding save',
+          );
+        }
+
+        // Save progress
+        final userId = profileState.userId;
+        if (userId != null) {
+          await OnboardingStorage.saveLastStep('ALLERGIES', userId);
+        }
+      }
+
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    } catch (e) {
+      // Even if save fails, allow exit
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Allergies'),
+      appBar: OnboardingAppBar(
+        title: 'Allergies',
+        onSaveAndExit: _handleSaveAndExit,
+        isLoading: _isLoading,
+        showBack: Navigator.canPop(context),
       ),
       body: Column(
         children: [
