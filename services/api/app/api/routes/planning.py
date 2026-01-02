@@ -32,6 +32,16 @@ from app.core.safety_constraints import (
     SAVOGoldenRule,
     validate_profile_completeness
 )
+from app.core.ingredient_combinations import (
+    analyze_ingredients,
+    generate_combination_recipe_prompt,
+    IngredientCombinationEngine
+)
+from app.core.meal_courses import (
+    plan_full_course_meal,
+    generate_meal_prompt,
+    MealStyle
+)
 
 router = APIRouter()
 
@@ -534,3 +544,334 @@ async def post_weekly(req: WeeklyPlanRequest):
     
     result = await plan_weekly(context)
     return MenuPlanResponse(**result)
+
+
+# ============================================
+# Multi-Ingredient Combination Endpoint
+# ============================================
+
+@router.post("/recipes/combination")
+async def generate_combination_recipe(
+    ingredients: List[str],
+    user_id: str,
+    cuisine: Optional[str] = None,
+    meal_type: Optional[str] = "dinner"
+):
+    """
+    Generate a recipe using multiple ingredients intelligently.
+    
+    Analyzes ingredient synergies, balance, and generates a cohesive recipe.
+    
+    Args:
+        ingredients: List of ingredient names to use
+        user_id: User UUID for profile and safety constraints
+        cuisine: Optional cuisine preference
+        meal_type: Type of meal (breakfast, lunch, dinner, snack)
+    
+    Returns:
+        {
+            "analysis": {ingredient combination analysis},
+            "recipe": {generated recipe},
+            "safety_validation": {validation results}
+        }
+    """
+    from app.services.llm import get_llm_client
+    import json
+    
+    if not ingredients or len(ingredients) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must provide at least 1 ingredient"
+        )
+    
+    if len(ingredients) > 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 10 ingredients allowed"
+        )
+    
+    # Get user profile
+    storage = get_storage()
+    profile = await storage.get_user_profile(user_id)
+    
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User profile not found"
+        )
+    
+    # Validate profile completeness (Golden Rule)
+    is_complete, missing = validate_profile_completeness(profile)
+    if not is_complete:
+        return {
+            "error": "Profile incomplete",
+            "message": "Please complete your profile before generating recipes",
+            "missing_fields": missing,
+            "onboarding_required": True
+        }
+    
+    # Analyze ingredient combination
+    try:
+        analysis = analyze_ingredients(ingredients, profile)
+    except Exception as e:
+        logger.error(f"Ingredient analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to analyze ingredient combination"
+        )
+    
+    # Check if combination is viable
+    if not analysis.get("is_viable"):
+        return {
+            "success": False,
+            "analysis": analysis,
+            "message": "Ingredient combination has limitations",
+            "suggestion": "Consider adding: " + ", ".join(analysis.get("suggested_additions", [])[:3])
+        }
+    
+    # Check for safety issues
+    if analysis.get("safety_issues"):
+        return {
+            "success": False,
+            "analysis": analysis,
+            "message": "Safety constraints prevent using these ingredients",
+            "safety_issues": analysis["safety_issues"]
+        }
+    
+    # Generate AI prompt
+    prompt, _ = generate_combination_recipe_prompt(ingredients, profile)
+    
+    if not prompt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not generate recipe prompt for this combination"
+        )
+    
+    # Call LLM
+    try:
+        llm = get_llm_client()
+        llm_response = await llm.generate(
+            prompt=prompt,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        # Parse recipe (assuming JSON response)
+        recipe = json.loads(llm_response)
+        
+    except Exception as e:
+        logger.error(f"LLM generation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate recipe"
+        )
+    
+    # Validate recipe safety
+    is_safe, violations = await validate_recipe_safety(recipe, profile)
+    
+    if not is_safe:
+        logger.error(f"Recipe safety violation: {violations}")
+        return {
+            "success": False,
+            "error": "Generated recipe violated safety constraints",
+            "violations": violations,
+            "retry_allowed": True
+        }
+    
+    # Success
+    return {
+        "success": True,
+        "analysis": analysis,
+        "recipe": recipe,
+        "safety_validation": {
+            "is_safe": is_safe,
+            "violations": []
+        },
+        "metadata": {
+            "ingredients_used": ingredients,
+            "cuisine": recipe.get("cuisine", cuisine),
+            "meal_type": meal_type
+        }
+    }
+
+
+# ============================================
+# Full Course Meal Endpoint
+# ============================================
+
+@router.post("/recipes/full-course")
+async def generate_full_course_meal(
+    meal_style: str,
+    cuisine: str,
+    user_id: str,
+    ingredients_available: Optional[List[str]] = None,
+    context: Optional[str] = None
+):
+    """
+    Generate a complete multi-course meal.
+    
+    Creates appetizer, main, dessert (or other course combinations)
+    with cultural coherence and flavor progression.
+    
+    Args:
+        meal_style: "casual", "standard", "formal", "italian", "indian", "chinese", "japanese"
+        cuisine: Primary cuisine for the meal
+        user_id: User UUID for profile and safety constraints
+        ingredients_available: Optional ingredients to incorporate
+        context: Additional user context (e.g., "anniversary dinner", "quick weeknight")
+    
+    Returns:
+        {
+            "meal_plan": {complete meal with all courses},
+            "courses": [{recipe for each course}],
+            "prep_strategy": {cooking order and timing}
+        }
+    """
+    from app.services.llm import get_llm_client
+    import json
+    
+    # Validate meal style
+    valid_styles = ["casual", "standard", "formal", "italian", "french", "indian", "chinese", "japanese"]
+    if meal_style.lower() not in valid_styles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid meal_style. Must be one of: {', '.join(valid_styles)}"
+        )
+    
+    # Get user profile
+    storage = get_storage()
+    profile = await storage.get_user_profile(user_id)
+    
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User profile not found"
+        )
+    
+    # Validate profile completeness
+    is_complete, missing = validate_profile_completeness(profile)
+    if not is_complete:
+        return {
+            "error": "Profile incomplete",
+            "message": "Please complete your profile before generating recipes",
+            "missing_fields": missing,
+            "onboarding_required": True
+        }
+    
+    # Plan meal
+    try:
+        meal_plan = plan_full_course_meal(
+            meal_style=meal_style.lower(),
+            cuisine=cuisine,
+            profile=profile,
+            ingredients=ingredients_available
+        )
+    except Exception as e:
+        logger.error(f"Meal planning failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to plan meal"
+        )
+    
+    # Generate recipes for each course
+    courses_generated = []
+    llm = get_llm_client()
+    
+    for course_data in meal_plan["courses"]:
+        try:
+            # Generate recipe using course-specific prompt
+            llm_response = await llm.generate(
+                prompt=course_data["prompt"],
+                temperature=0.7,
+                max_tokens=2000
+            )
+            
+            # Parse recipe
+            recipe = json.loads(llm_response)
+            
+            # Validate safety
+            is_safe, violations = await validate_recipe_safety(recipe, profile)
+            
+            if not is_safe:
+                logger.warning(f"Course {course_data['course_type']} failed safety: {violations}")
+                # Try to regenerate once
+                continue
+            
+            courses_generated.append({
+                "course_type": course_data["course_type"],
+                "recipe": recipe,
+                "portion_size": course_data["portion_size"],
+                "required": course_data["required"]
+            })
+            
+        except Exception as e:
+            logger.error(f"Course generation failed for {course_data['course_type']}: {e}")
+            # If required course fails, entire meal fails
+            if course_data["required"]:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to generate required {course_data['course_type']}"
+                )
+    
+    if not courses_generated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate any courses"
+        )
+    
+    # Build prep strategy
+    prep_strategy = _build_prep_strategy(courses_generated, meal_plan)
+    
+    return {
+        "success": True,
+        "meal_plan": {
+            "meal_style": meal_plan["meal_style"],
+            "cuisine": meal_plan["cuisine"],
+            "total_courses": len(courses_generated),
+            "estimated_total_time": meal_plan["estimated_total_time"],
+            "servings": meal_plan["servings"],
+            "coherence_score": meal_plan["coherence_score"],
+            "flavor_progression": meal_plan["flavor_progression"]
+        },
+        "courses": courses_generated,
+        "prep_strategy": prep_strategy,
+        "metadata": {
+            "generated_at": datetime.utcnow().isoformat(),
+            "user_id": user_id
+        }
+    }
+
+
+def _build_prep_strategy(courses: List[Dict], meal_plan: Dict) -> Dict:
+    """Build cooking strategy for multi-course meal"""
+    
+    # Sort courses by cooking time (longest first)
+    sorted_courses = sorted(
+        courses,
+        key=lambda c: c["recipe"].get("cook_time", 30),
+        reverse=True
+    )
+    
+    prep_order = []
+    for idx, course in enumerate(sorted_courses, 1):
+        prep_order.append({
+            "step": idx,
+            "course": course["course_type"],
+            "action": f"Prepare {course['course_type']}",
+            "timing_note": f"Start this {course['recipe'].get('prep_time', 15)} minutes before serving"
+        })
+    
+    return {
+        "prep_order": prep_order,
+        "parallel_cooking": "Start longest-cooking items first, prepare quick items last",
+        "make_ahead": [
+            c["course_type"] for c in courses 
+            if c["recipe"].get("can_make_ahead", False)
+        ],
+        "serving_sequence": [c["course_type"] for c in courses],
+        "total_active_time": sum(c["recipe"].get("prep_time", 15) for c in courses) // 2  # Assume 50% parallel
+    }
+
+
+# Import List type for type hints
+from typing import List, Optional
