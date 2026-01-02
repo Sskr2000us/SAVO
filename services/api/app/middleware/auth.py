@@ -71,8 +71,15 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False}  # Supabase doesn't use aud claim
+            algorithms=["HS256", "HS384", "HS512"],  # Allow all HMAC algorithms
+            options={
+                "verify_aud": False,  # Supabase doesn't use aud claim
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iat": True,
+                "verify_iss": False,  # Don't verify issuer
+            }
         )
         
         user_id: str = payload.get("sub")
