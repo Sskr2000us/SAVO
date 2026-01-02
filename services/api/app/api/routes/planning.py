@@ -26,6 +26,12 @@ from app.core.storage import get_storage
 from app.core.orchestrator import plan_daily, plan_party, plan_weekly
 from app.core.orchestration_rules import build_orchestration_context
 from app.core.cuisine_metadata import get_cuisine_by_id, CUISINE_METADATA
+from app.core.safety_constraints import (
+    build_complete_safety_context,
+    validate_recipe_safety,
+    SAVOGoldenRule,
+    validate_profile_completeness
+)
 
 router = APIRouter()
 
@@ -294,6 +300,32 @@ async def post_daily(req: DailyPlanRequest):
     storage = get_storage()
     config = storage.get_config()
     
+    # GOLDEN RULE: Check profile completeness and safety constraints
+    if config and config.household_profile:
+        profile_dict = {
+            "household": config.household_profile.model_dump() if hasattr(config.household_profile, "model_dump") else {},
+            "members": [m.model_dump() if hasattr(m, "model_dump") else m for m in config.household_profile.members] if hasattr(config.household_profile, "members") else []
+        }
+        
+        golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
+        if not golden_check["can_proceed"]:
+            return MenuPlanResponse(
+                status="needs_clarification",
+                needs_clarification_questions=[golden_check["message"]],
+                error_message=golden_check.get("message", "Profile incomplete"),
+                selected_cuisine="unknown",
+                menu_headers=[],
+                menus=[],
+                variety_log={"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
+                nutrition_summary={"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
+                waste_summary={
+                    "expiring_items_used": [],
+                    "waste_reduction_score": 0,
+                    "waste_avoided_value_estimate": {"currency": "USD", "value": 0}
+                },
+                shopping_suggestions=[]
+            )
+    
     context = _build_planning_context(req, "daily")
     context["time_available_minutes"] = req.time_available_minutes
     context["servings"] = req.servings
@@ -388,12 +420,32 @@ async def post_daily(req: DailyPlanRequest):
         elif req.meal_type == "dinner" or (req.meal_time and _is_dinner_time(req.meal_time, gs.meal_times)):
             context["meal_preferences"] = gs.dinner_preferences
     
+    # Add complete safety context to prompt
+    if config and config.household_profile:
+        profile_dict = {
+            "household": config.household_profile.model_dump() if hasattr(config.household_profile, "model_dump") else {},
+            "members": [m.model_dump() if hasattr(m, "model_dump") else m for m in config.household_profile.members] if hasattr(config.household_profile, "members") else []
+        }
+        safety_context = build_complete_safety_context(profile_dict)
+        context["safety_constraints"] = safety_context
+    
     # Generate meal plan
     result = await plan_daily(context)
     
     # Intelligence Layer 4: Post-process recipes with health scores, skill fit, and badges
+    # CRITICAL: Validate recipe safety before serving
     if result.get("recipes") and isinstance(result["recipes"], list):
+        validated_recipes = []
         for recipe in result["recipes"]:
+            # Validate safety first
+            if config and config.household_profile:
+                is_safe, violations = validate_recipe_safety(recipe, profile_dict)
+                if not is_safe:
+                    # Log violation and skip recipe
+                    import logging
+                    logging.error(f"Recipe safety violation: {recipe.get('name', 'Unknown')} - {violations}")
+                    continue
+            
             _enhance_recipe_with_intelligence(
                 recipe=recipe,
                 nutrition_profile=nutrition_profile,
