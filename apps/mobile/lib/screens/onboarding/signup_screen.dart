@@ -52,10 +52,24 @@ class _OnboardingSignupScreenState extends State<OnboardingSignupScreen> {
 
     try {
       // Create account
-      await authService.signUp(
+      final signupResponse = await authService.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+
+      // Check if email confirmation is required
+      if (signupResponse.session == null) {
+        // Email confirmation required - sign in to create session
+        await authService.signInWithPassword(
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+        );
+      }
+
+      // Verify we have a session now
+      if (!authService.isAuthenticated) {
+        throw Exception('Failed to create session after signup. Please check your email for confirmation.');
+      }
 
       // For new users, skip profile fetch (no data exists yet)
       // Just get onboarding status which handles new users gracefully
