@@ -357,7 +357,7 @@ CREATE TRIGGER auto_add_to_pantry_trigger
 -- SECTION 6: Create Materialized View for Pantry Inventory Summary
 -- ============================================================================
 
-CREATE MATERIALIZED VIEW pantry_inventory_summary AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS pantry_inventory_summary AS
 SELECT 
     user_id,
     COUNT(*) as total_items,
@@ -372,8 +372,7 @@ SELECT
     SUM(CASE WHEN unit = 'grams' THEN quantity ELSE 0 END) as total_grams,
     SUM(CASE WHEN unit = 'ml' THEN quantity ELSE 0 END) as total_ml,
     COUNT(*) FILTER (WHERE status = 'available') as available_items,
-    COUNT(*) FILTER (WHERE status = 'low') as low_items,
-    MAX(updated_at) as last_updated
+    COUNT(*) FILTER (WHERE status = 'low') as low_items
 FROM user_pantry
 GROUP BY user_id;
 
