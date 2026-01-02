@@ -53,6 +53,11 @@ class SupabaseDB:
 db = SupabaseDB()
 
 
+def get_db_client() -> Client:
+    """Get the Supabase client instance for direct database operations"""
+    return db.client
+
+
 # ============================================================================
 # USER PROFILE OPERATIONS
 # ============================================================================
