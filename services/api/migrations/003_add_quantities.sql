@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_quantity_units_display_order ON quantity_units(di
 
 CREATE TABLE IF NOT EXISTS standard_serving_sizes (
     id SERIAL PRIMARY KEY,
-    ingredient_name VARCHAR(255) NOT NULL,
+    ingredient_name VARCHAR(255) UNIQUE NOT NULL,
     category VARCHAR(100),  -- 'protein', 'vegetable', 'carb', 'dairy'
     serving_size DECIMAL(10,2) NOT NULL,  -- per person
     unit VARCHAR(50) NOT NULL,
