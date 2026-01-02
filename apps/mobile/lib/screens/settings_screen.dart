@@ -1212,7 +1212,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Text(
                         data['name'] as String,
-                        style: AppTypography.bodyStyle(
+                        style: TextStyle(
+                          fontSize: 16,
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                           color: isSelected ? AppColors.primary : Colors.black87,
                         ),
