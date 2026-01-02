@@ -6,18 +6,48 @@
 -- SECTION 1: Add Quantity Columns to Existing Tables
 -- ============================================================================
 
--- Add quantity tracking to user_pantry
-ALTER TABLE user_pantry 
-ADD COLUMN quantity DECIMAL(10,2),
-ADD COLUMN unit VARCHAR(50),  -- 'grams', 'ml', 'pieces', 'cups', 'tbsp', 'tsp'
-ADD COLUMN estimated BOOLEAN DEFAULT false,  -- true if auto-estimated, false if user-entered
-ADD COLUMN quantity_confidence DECIMAL(3,2);  -- 0.0-1.0 for auto-estimates
+-- Add quantity tracking to user_pantry (idempotent - safe to re-run)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='user_pantry' AND column_name='quantity') THEN
+        ALTER TABLE user_pantry ADD COLUMN quantity DECIMAL(10,2);
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='user_pantry' AND column_name='unit') THEN
+        ALTER TABLE user_pantry ADD COLUMN unit VARCHAR(50);
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='user_pantry' AND column_name='estimated') THEN
+        ALTER TABLE user_pantry ADD COLUMN estimated BOOLEAN DEFAULT false;
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='user_pantry' AND column_name='quantity_confidence') THEN
+        ALTER TABLE user_pantry ADD COLUMN quantity_confidence DECIMAL(3,2);
+    END IF;
+END $$;
 
--- Add detected quantities to detected_ingredients
-ALTER TABLE detected_ingredients
-ADD COLUMN detected_quantity DECIMAL(10,2),
-ADD COLUMN detected_unit VARCHAR(50),
-ADD COLUMN quantity_confidence DECIMAL(3,2);
+-- Add detected quantities to detected_ingredients (idempotent)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='detected_ingredients' AND column_name='detected_quantity') THEN
+        ALTER TABLE detected_ingredients ADD COLUMN detected_quantity DECIMAL(10,2);
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='detected_ingredients' AND column_name='detected_unit') THEN
+        ALTER TABLE detected_ingredients ADD COLUMN detected_unit VARCHAR(50);
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='detected_ingredients' AND column_name='quantity_confidence') THEN
+        ALTER TABLE detected_ingredients ADD COLUMN quantity_confidence DECIMAL(3,2);
+    END IF;
+END $$;
 
 -- Add comments
 COMMENT ON COLUMN user_pantry.quantity IS 'Amount of ingredient available';
@@ -33,7 +63,7 @@ COMMENT ON COLUMN detected_ingredients.quantity_confidence IS 'Confidence score 
 -- SECTION 2: Create Quantity Units Reference Table
 -- ============================================================================
 
-CREATE TABLE quantity_units (
+CREATE TABLE IF NOT EXISTS quantity_units (
     id SERIAL PRIMARY KEY,
     unit_name VARCHAR(50) UNIQUE NOT NULL,
     category VARCHAR(20) NOT NULL,  -- 'weight', 'volume', 'count'
@@ -47,7 +77,7 @@ CREATE TABLE quantity_units (
 -- Add comment
 COMMENT ON TABLE quantity_units IS 'Reference table for supported units and conversions';
 
--- Insert common units
+-- Insert common units (idempotent - safe to re-run)
 INSERT INTO quantity_units (unit_name, category, base_unit, conversion_factor, display_name, display_order) VALUES
 -- Weight units (base: grams)
 ('grams', 'weight', 'grams', 1.0, 'g', 1),
@@ -74,17 +104,18 @@ INSERT INTO quantity_units (unit_name, category, base_unit, conversion_factor, d
 ('slices', 'count', 'pieces', 1.0, 'slices', 18),
 ('leaves', 'count', 'pieces', 1.0, 'leaves', 19),
 ('cans', 'count', 'pieces', 1.0, 'cans', 20),
-('packages', 'count', 'pieces', 1.0, 'pkgs', 21);
+('packages', 'count', 'pieces', 1.0, 'pkgs', 21)
+ON CONFLICT (unit_name) DO NOTHING;
 
 -- Create index for fast lookups
-CREATE INDEX idx_quantity_units_category ON quantity_units(category);
-CREATE INDEX idx_quantity_units_display_order ON quantity_units(display_order);
+CREATE INDEX IF NOT EXISTS idx_quantity_units_category ON quantity_units(category);
+CREATE INDEX IF NOT EXISTS idx_quantity_units_display_order ON quantity_units(display_order);
 
 -- ============================================================================
 -- SECTION 3: Create Standard Serving Sizes Reference Table
 -- ============================================================================
 
-CREATE TABLE standard_serving_sizes (
+CREATE TABLE IF NOT EXISTS standard_serving_sizes (
     id SERIAL PRIMARY KEY,
     ingredient_name VARCHAR(255) NOT NULL,
     category VARCHAR(100),  -- 'protein', 'vegetable', 'carb', 'dairy'
@@ -98,7 +129,7 @@ CREATE TABLE standard_serving_sizes (
 -- Add comment
 COMMENT ON TABLE standard_serving_sizes IS 'Standard serving sizes per person for common ingredients';
 
--- Insert standard serving sizes (per person)
+-- Insert standard serving sizes (per person) - idempotent
 INSERT INTO standard_serving_sizes (ingredient_name, category, serving_size, unit, notes) VALUES
 -- Proteins
 ('chicken', 'protein', 150, 'grams', 'Boneless chicken breast/thigh'),
@@ -150,11 +181,12 @@ INSERT INTO standard_serving_sizes (ingredient_name, category, serving_size, uni
 ('lentils', 'protein', 60, 'grams', 'Dry weight lentils'),
 ('chickpeas', 'protein', 60, 'grams', 'Dry weight chickpeas'),
 ('black_beans', 'protein', 60, 'grams', 'Dry weight beans'),
-('kidney_beans', 'protein', 60, 'grams', 'Dry weight beans');
+('kidney_beans', 'protein', 60, 'grams', 'Dry weight beans')
+ON CONFLICT (ingredient_name) DO NOTHING;
 
 -- Create indexes
-CREATE INDEX idx_standard_serving_ingredient ON standard_serving_sizes(ingredient_name);
-CREATE INDEX idx_standard_serving_category ON standard_serving_sizes(category);
+CREATE INDEX IF NOT EXISTS idx_standard_serving_ingredient ON standard_serving_sizes(ingredient_name);
+CREATE INDEX IF NOT EXISTS idx_standard_serving_category ON standard_serving_sizes(category);
 
 -- ============================================================================
 -- SECTION 4: Helper Functions for Quantity Operations
