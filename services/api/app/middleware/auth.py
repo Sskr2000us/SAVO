@@ -4,7 +4,8 @@ Validates Supabase JWT tokens and extracts user_id
 """
 
 from fastapi import Header, HTTPException, status, Depends
-from jose import jwt, JWTError
+import jwt
+from jwt.exceptions import InvalidTokenError
 import os
 import logging
 from typing import Optional
@@ -71,14 +72,13 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
-            algorithms=["HS256", "HS384", "HS512"],  # Allow all HMAC algorithms
+            algorithms=["HS256"],
             options={
-                "verify_aud": False,  # Supabase doesn't use aud claim
                 "verify_signature": True,
                 "verify_exp": True,
                 "verify_nbf": True,
                 "verify_iat": True,
-                "verify_iss": False,  # Don't verify issuer
+                "require": ["exp", "sub"]
             }
         )
         
@@ -92,7 +92,7 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         logger.debug(f"Authenticated user: {user_id}")
         return user_id
         
-    except JWTError as e:
+    except InvalidTokenError as e:
         logger.error(f"JWT validation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
