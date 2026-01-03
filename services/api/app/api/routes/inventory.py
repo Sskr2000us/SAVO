@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 import base64
+import re
+import uuid
 
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
 
@@ -86,7 +88,87 @@ async def post_normalize(req: NormalizeInventoryRequest):
         "measurement_system": req.measurement_system,
         "output_language": req.output_language,
     }
-    return await normalize_inventory(context)
+
+    def _fallback_normalize(raw_items: list[dict]) -> dict:
+        def _slug(text: str) -> str:
+            text = (text or "").strip().lower()
+            text = re.sub(r"[^a-z0-9\s-]", "", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            return (text.replace(" ", "-") or "unknown")
+
+        def _parse_qty_unit(quantity_estimate: str | None) -> tuple[float, str]:
+            if not quantity_estimate:
+                return 1.0, "pcs"
+            q = quantity_estimate.strip().lower()
+            m = re.search(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)", q)
+            if not m:
+                return 1.0, "pcs"
+            try:
+                qty = float(m.group(1))
+            except ValueError:
+                qty = 1.0
+            unit = m.group(2)
+            return max(qty, 0.0), unit
+
+        def _storage(storage_hint: str | None) -> str:
+            if storage_hint in ("pantry", "fridge", "freezer"):
+                return storage_hint
+            return "pantry"
+
+        def _freshness_days(storage: str) -> int:
+            if storage == "fridge":
+                return 7
+            if storage == "freezer":
+                return 90
+            return 30
+
+        normalized_inventory: list[dict] = []
+        for raw in raw_items or []:
+            display_name = (raw.get("display_name") or "").strip()
+            if not display_name:
+                continue
+
+            qty, unit = _parse_qty_unit(raw.get("quantity_estimate"))
+            storage_val = _storage(raw.get("storage_hint"))
+            canonical_name = re.sub(r"\s+", " ", display_name).strip().lower()
+            inv_id = str(uuid.uuid4())
+            canonical_id = _slug(canonical_name)
+            conf = raw.get("confidence")
+            confidence = float(conf) if isinstance(conf, (int, float)) else 0.6
+
+            normalized_inventory.append(
+                {
+                    "inventory_id": inv_id,
+                    "canonical_ingredient_id": canonical_id,
+                    "canonical_name": canonical_name,
+                    "display_name": display_name,
+                    "quantity": qty,
+                    "unit": unit,
+                    "state": "raw",
+                    "storage": storage_val,
+                    "freshness_days_remaining": _freshness_days(storage_val),
+                    "confidence": max(0.0, min(confidence, 1.0)),
+                }
+            )
+
+        return {
+            "normalized_inventory": normalized_inventory,
+            "staples_policy_applied": {
+                "enabled": False,
+                "staples_included": [],
+                "staples_excluded": [],
+            },
+        }
+
+    try:
+        result = await normalize_inventory(context)
+        # If orchestration returns a non-conforming payload (e.g., status/error object), fail closed
+        # to a valid normalization response so the frontend can proceed.
+        if not isinstance(result, dict) or "normalized_inventory" not in result:
+            return _fallback_normalize(req.raw_items)
+        return result
+    except Exception:
+        return _fallback_normalize(req.raw_items)
 
 
 @router.post("/scan", response_model=ScanIngredientsResponse)
