@@ -41,6 +41,9 @@ class ApiClient {
     final response = await http.get(
       Uri.parse('$baseUrl$endpoint'),
       headers: _mergeHeaders(headers),
+    ).timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw Exception('Request timed out. Please check your connection and try again.'),
     );
     if (response.statusCode == 200) {
       return json.decode(response.body);
@@ -53,11 +56,22 @@ class ApiClient {
     final allHeaders = {'Content-Type': 'application/json'};
     allHeaders.addAll(_mergeHeaders(headers));
     
+    // LLM requests (planning endpoints) need longer timeout
+    final timeout = endpoint.contains('/plan/') ? 120 : 30;
+    
     try {
       final response = await http.post(
         Uri.parse('$baseUrl$endpoint'),
         headers: allHeaders,
         body: json.encode(body),
+      ).timeout(
+        Duration(seconds: timeout),
+        onTimeout: () {
+          if (endpoint.contains('/plan/')) {
+            throw Exception('Recipe generation is taking longer than usual. This can happen with complex requirements. Please try again.');
+          }
+          throw Exception('Request timed out. Please check your connection and try again.');
+        },
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         return json.decode(response.body);
