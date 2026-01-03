@@ -92,6 +92,14 @@ class ApiClient {
         throw Exception('Failed to POST $endpoint: $errorDetail');
       }
     } catch (e) {
+      // Provide more context for network errors
+      if (e.toString().contains('Failed to fetch') || e.toString().contains('ClientException')) {
+        throw Exception('Cannot reach server at $baseUrl$endpoint. Please check:\n'
+            '1. Your internet connection\n'
+            '2. The backend server is running\n'
+            '3. CORS is properly configured\n'
+            'Original error: $e');
+      }
       if (e is Exception) rethrow;
       throw Exception('Network error: $e');
     }
