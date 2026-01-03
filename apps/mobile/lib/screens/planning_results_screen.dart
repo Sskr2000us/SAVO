@@ -298,12 +298,21 @@ class _RecipeCardState extends State<_RecipeCard> {
             children: [
               Container(
                 height: 100,
-                color: Colors.grey[300],
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      const Color(0xFFFF6B6B).withOpacity(0.7),
+                      const Color(0xFFFFB347).withOpacity(0.7),
+                    ],
+                  ),
+                ),
                 child: Center(
                   child: Icon(
-                    Icons.restaurant,
-                    size: 48,
-                    color: Colors.grey[600],
+                    Icons.restaurant_menu,
+                    size: 56,
+                    color: Colors.white.withOpacity(0.9),
                   ),
                 ),
               ),
