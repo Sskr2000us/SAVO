@@ -63,7 +63,15 @@ def create_app() -> FastAPI:
             "status": "ok",
             "llm_provider": settings.llm_provider,  # Legacy
             "reasoning_provider": settings.reasoning_provider,
-            "vision_provider": settings.vision_provider
+            "vision_provider": settings.vision_provider,
+            "cors": {
+                "allow_origins": cors_origins,
+                "allow_credentials": allow_credentials,
+            },
+            "build": {
+                "git_commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT"),
+                "service_id": os.getenv("RENDER_SERVICE_ID"),
+            },
         }
 
     return app
