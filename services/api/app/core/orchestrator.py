@@ -30,6 +30,16 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
     if not isinstance(selected_cuisine, str) or not selected_cuisine.strip():
         result["selected_cuisine"] = "unknown"
 
+    # If the LLM reports a non-ok status but omits error_message, synthesize one.
+    # This prevents the client from falling back to a generic "Planning failed".
+    status = result.get("status")
+    if status in ["needs_clarification", "error"] and not result.get("error_message"):
+        q = result.get("needs_clarification_questions")
+        if isinstance(q, list) and q and isinstance(q[0], str) and q[0].strip():
+            result["error_message"] = q[0].strip()
+        else:
+            result["error_message"] = "Planning requires additional information."
+
     # Normalize common alias fields.
     if "questions" in result and "needs_clarification_questions" not in result:
         q = result.get("questions")

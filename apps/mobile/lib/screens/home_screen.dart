@@ -191,7 +191,27 @@ class HomeScreen extends StatelessWidget {
           ),
         );
       } else {
-        _showError(context, response['error_message'] ?? 'Planning failed');
+        String message = 'Planning failed';
+
+        final err = response['error_message'];
+        if (err is String && err.trim().isNotEmpty) {
+          message = err;
+        } else {
+          final q = response['needs_clarification_questions'];
+          if (q is List && q.isNotEmpty && q.first is String && (q.first as String).trim().isNotEmpty) {
+            message = (q.first as String).trim();
+          } else if (response['detail'] is String && (response['detail'] as String).trim().isNotEmpty) {
+            message = (response['detail'] as String).trim();
+          } else {
+            // Last resort: show status so it's debuggable.
+            final s = response['status'];
+            if (s is String && s.trim().isNotEmpty) {
+              message = 'Planning failed (status=$s)';
+            }
+          }
+        }
+
+        _showError(context, message);
       }
     } catch (e) {
       Navigator.pop(context);
