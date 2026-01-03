@@ -538,12 +538,14 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
             all_dietary_restrictions.extend(_coerce_list(member.get("dietary_restrictions")))
         
         # Create nutrition profile
-        nutrition_profile = UserNutritionProfile(
-            daily_targets=nutrition_targets if nutrition_targets else None,
-            health_conditions=list(set(all_health_conditions)),  # Unique conditions
-            dietary_preferences=list(set(all_dietary_restrictions)),
-            allergens=list(set(all_allergens))
-        )
+        profile_kwargs = {
+            "health_conditions": list(set(all_health_conditions)),  # Unique conditions
+            "dietary_preferences": list(set(all_dietary_restrictions)),
+            "allergens": list(set(all_allergens)),
+        }
+        if nutrition_targets:
+            profile_kwargs["daily_targets"] = nutrition_targets
+        nutrition_profile = UserNutritionProfile(**profile_kwargs)
         
         # Add to context for LLM
         context["nutrition_intelligence"] = {

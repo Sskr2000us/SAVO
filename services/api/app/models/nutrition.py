@@ -49,6 +49,10 @@ class UserNutritionProfile(BaseModel):
     """Complete nutrition profile for a user/family"""
     daily_targets: NutritionTargets = Field(default_factory=NutritionTargets)
     meal_level_targets: MealLevelTargets = Field(default_factory=MealLevelTargets)
+    allergens: List[str] = Field(
+        default=[],
+        description="Food allergens to avoid (e.g., peanuts, dairy)"
+    )
     health_conditions: List[str] = Field(
         default=[],
         description="diabetes, hypertension, high_cholesterol, etc."
