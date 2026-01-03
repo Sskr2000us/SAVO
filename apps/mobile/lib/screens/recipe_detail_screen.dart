@@ -284,70 +284,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           ),
           const SizedBox(height: 24),
 
-          // YouTube Videos Section
-          if (_loadingVideos)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24.0),
-                child: Column(
-                  children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Finding YouTube tutorials...',
-                      style: TextStyle(
-                        color: Colors.grey[700],
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (_videoError != null)
-            Card(
-              elevation: 2,
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              child: Container(
-                padding: const EdgeInsets.all(16.0),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.shade200, width: 1),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 24),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'YouTube Videos Unavailable',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                              color: Colors.orange.shade900,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _videoError!,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.orange.shade800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (_rankedVideos != null && _rankedVideos!.isNotEmpty) ...[
+          // YouTube Videos Section - only show if successful
+          if (_rankedVideos != null && _rankedVideos!.isNotEmpty) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -603,32 +541,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                           );
                         }),
                       ],
-                    ] else ...[
-                      // Error message
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade100,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.red.shade700, width: 2),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.error, color: Colors.red.shade900),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _sufficiencyResult!['error'] ?? 'Failed to check sufficiency',
-                                style: TextStyle(
-                                  color: Colors.red.shade900,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
+                    // Silently handle errors - don't show error banner
                   ],
                 ],
               ),
