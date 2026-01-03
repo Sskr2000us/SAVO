@@ -314,15 +314,27 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       );
 
       print('🎥 Ranking ${candidates.length} videos...');
-      final response = await apiClient.post('/youtube/rank', request.toJson());
-      final rankResponse = YouTubeRankResponse.fromJson(response);
+      try {
+        final response = await apiClient.post('/youtube/rank', request.toJson());
+        final rankResponse = YouTubeRankResponse.fromJson(response);
 
-      print('🎥 Successfully ranked ${rankResponse.rankedVideos.length} videos');
+        print('🎥 Successfully ranked ${rankResponse.rankedVideos.length} videos');
 
-      setState(() {
-        _rankedVideos = rankResponse.rankedVideos;
-        _loadingVideos = false;
-      });
+        setState(() {
+          _rankedVideos = rankResponse.rankedVideos;
+          _loadingVideos = false;
+        });
+      } catch (e) {
+        print('🎥 Ranking failed, falling back to keyword match: $e');
+        setState(() {
+          _rankedVideos = _fallbackRankFromCandidates(
+            candidates,
+            widget.recipe.getLocalizedName('en'),
+          );
+          _videoError = 'Showing YouTube results (ranking unavailable)';
+          _loadingVideos = false;
+        });
+      }
     } catch (e, stackTrace) {
       print('🎥 ERROR loading YouTube videos: $e');
       print('🎥 Stack trace: $stackTrace');
@@ -331,6 +343,69 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         _loadingVideos = false;
       });
     }
+  }
+
+  List<RankedVideo> _fallbackRankFromCandidates(
+    List<YouTubeVideoCandidate> candidates,
+    String recipeName,
+  ) {
+    String normalize(String v) {
+      return v
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+    }
+
+    Set<String> tokens(String v) {
+      final n = normalize(v);
+      return n
+          .split(' ')
+          .where((t) => t.length > 1)
+          .toSet();
+    }
+
+    final q = tokens(recipeName);
+    double matchScore(String title) {
+      final t = tokens(title);
+      if (q.isEmpty || t.isEmpty) return 0.0;
+      return q.intersection(t).length / q.length;
+    }
+
+    double trustScore(String channel, String title) {
+      final text = (channel + ' ' + title).toLowerCase();
+      var score = 0.5;
+      if (text.contains('official') || text.contains('kitchen') || text.contains('chef')) {
+        score += 0.15;
+      }
+      if (text.contains('shorts') || text.contains('asmr') || text.contains('mukbang')) {
+        score -= 0.15;
+      }
+      if (score < 0) score = 0;
+      if (score > 1) score = 1;
+      return score;
+    }
+
+    final ranked = candidates
+        .map(
+          (c) => RankedVideo(
+            videoId: c.videoId,
+            title: c.title,
+            channel: c.channel,
+            trustScore: trustScore(c.channel, c.title),
+            matchScore: matchScore(c.title),
+            reasons: const ['Fallback ranking (keyword match)'],
+          ),
+        )
+        .toList();
+
+    ranked.sort((a, b) {
+      final ms = b.matchScore.compareTo(a.matchScore);
+      if (ms != 0) return ms;
+      return b.trustScore.compareTo(a.trustScore);
+    });
+
+    return ranked;
   }
 
   List<String> _extractTechniques(List<RecipeStep> steps) {
@@ -597,7 +672,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Text(
-                'No YouTube videos available for this recipe',
+                _videoError?.trim().isNotEmpty == true
+                    ? _videoError!.trim()
+                    : 'No YouTube videos available for this recipe',
                 style: TextStyle(
                   color: Colors.grey[600],
                   fontStyle: FontStyle.italic,
