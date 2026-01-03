@@ -5,6 +5,7 @@ Version: 2026-01-02 - UUID fix deployed
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 from app.api.router import api_router
 from app.core.settings import settings
@@ -17,11 +18,14 @@ def create_app() -> FastAPI:
         description="SAVO backend orchestrator (FastAPI)",
     )
 
-    # Enable CORS for Flutter web app
+    # Enable CORS for browser clients (Flutter web / Vercel)
+    # NOTE: Using allow_credentials=True with allow_origins=['*'] is rejected by browsers.
+    cors_env = (os.getenv("CORS_ALLOWED_ORIGIN") or "").strip()
+    cors_origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow all origins in development
-        allow_credentials=True,
+        allow_origins=cors_origins,
+        allow_credentials=False,
         allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, OPTIONS)
         allow_headers=["*"],  # Allow all headers
     )
