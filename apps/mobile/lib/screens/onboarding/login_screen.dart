@@ -4,6 +4,7 @@ import '../../models/profile_state.dart';
 import '../../services/auth_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
+import '../../services/session_security_service.dart';
 import '../../services/onboarding_storage.dart';
 import 'onboarding_coordinator.dart';
 import 'signup_screen.dart';
@@ -71,6 +72,28 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
           _isLoading = false;
         });
         return;
+      }
+
+      // Track login for security monitoring (device limit enforcement)
+      try {
+        final securityService = SessionSecurityService(apiClient);
+        final trackResult = await securityService.trackLogin();
+        debugPrint('✅ Session tracked: ${trackResult['location']} - ${trackResult['active_devices']} devices');
+      } on ApiException catch (e) {
+        if (e.statusCode == 403) {
+          // Device limit exceeded - sign out and show error
+          await authService.signOut();
+          setState(() {
+            _error = 'Device limit reached. You can only use 2 devices at once. Go to Settings → Device Security on another device to sign out.';
+            _isLoading = false;
+          });
+          return;
+        }
+        // Non-critical tracking errors - continue
+        debugPrint('⚠️ Session tracking warning: ${e.message}');
+      } catch (e) {
+        // Non-critical tracking errors - continue
+        debugPrint('⚠️ Session tracking failed: $e');
       }
 
       // Get onboarding status (returns resume step for existing/new users)
@@ -160,6 +183,28 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
         email: _emailController.text.trim(),
         token: _otpController.text.trim(),
       );
+
+      // Track login for security monitoring (device limit enforcement)
+      try {
+        final securityService = SessionSecurityService(apiClient);
+        final trackResult = await securityService.trackLogin();
+        debugPrint('✅ Session tracked: ${trackResult['location']} - ${trackResult['active_devices']} devices');
+      } on ApiException catch (e) {
+        if (e.statusCode == 403) {
+          // Device limit exceeded - sign out and show error
+          await authService.signOut();
+          setState(() {
+            _error = 'Device limit reached. You can only use 2 devices at once. Sign out other devices first.';
+            _isLoading = false;
+          });
+          return;
+        }
+        // Non-critical tracking errors - continue
+        debugPrint('⚠️ Session tracking warning: ${e.message}');
+      } catch (e) {
+        // Non-critical tracking errors - continue
+        debugPrint('⚠️ Session tracking failed: $e');
+      }
 
       // Get onboarding status (returns resume step for existing/new users)
       final status = await profileService.getOnboardingStatus();
