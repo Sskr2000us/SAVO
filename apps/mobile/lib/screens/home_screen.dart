@@ -18,6 +18,23 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Check authentication on every build
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      // Redirect to login if no session
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          Navigator.of(context).pushReplacementNamed('/login');
+        }
+      });
+      // Return loading screen while redirecting
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    
     return Scaffold(
       appBar: AppBar(
         title: const Text('SAVO'),
@@ -153,6 +170,14 @@ class HomeScreen extends StatelessWidget {
   }
 
   Future<void> _planDaily(BuildContext context) async {
+    // Check authentication first
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      _showError(context, 'Please log in to access this feature');
+      Navigator.of(context).pushReplacementNamed('/login');
+      return;
+    }
+    
     final apiClient = Provider.of<ApiClient>(context, listen: false);
     final profileState = Provider.of<ProfileState>(context, listen: false);
     
