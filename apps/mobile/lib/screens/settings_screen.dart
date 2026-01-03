@@ -34,6 +34,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _lunchStyle = 'balanced';
   String _dinnerStyle = 'family_meal';
   int _dinnerCourses = 2;
+
+  // Cuisine preferences (min 1, max 5)
+  List<String> _favoriteCuisines = const ['Italian', 'American'];
+  List<String> _availableCuisines = const [
+    'Italian',
+    'Indian',
+    'Mexican',
+    'Chinese',
+    'Japanese',
+    'French',
+    'Mediterranean',
+    'Thai',
+    'American',
+    'Middle Eastern',
+  ];
   
   // Cooking skill level
   int _skillLevel = 2; // 1=Beginner, 2=Basic, 3=Intermediate, 4=Multi-step, 5=Advanced
@@ -106,6 +121,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
       
       // Load family members from database
       final membersResponse = await apiClient.get('/profile/family-members');
+
+      // Load cuisine options (best-effort)
+      try {
+        final cuisinesResponse = await apiClient.get('/cuisines');
+        final List<dynamic>? cuisineList = cuisinesResponse is Map && cuisinesResponse['cuisines'] is List
+            ? cuisinesResponse['cuisines'] as List
+            : (cuisinesResponse is List ? cuisinesResponse : null);
+
+        if (cuisineList != null) {
+          final names = cuisineList
+              .whereType<Map>()
+              .map((c) => c['name'])
+              .whereType<String>()
+              .where((s) => s.trim().isNotEmpty)
+              .toSet()
+              .toList();
+          if (names.isNotEmpty) {
+            names.sort();
+            _availableCuisines = names;
+          }
+        }
+      } catch (_) {
+        // Ignore cuisine list load errors; fallback list is fine.
+      }
       
       setState(() {
         // Load household profile
@@ -113,6 +152,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final profile = householdResponse['profile'] as Map<String, dynamic>;
           _region = profile['region'] ?? 'US';
           _culture = profile['culture'] ?? 'western';
+
+          final fav = profile['favorite_cuisines'] as List?;
+          if (fav != null) {
+            final parsed = fav.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+            if (parsed.isNotEmpty) {
+              // Enforce max 5.
+              _favoriteCuisines = parsed.take(5).toList();
+            }
+          }
           
           final mealTimes = profile['meal_times'] as Map<String, dynamic>?;
           if (mealTimes != null) {
@@ -162,6 +210,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      if (_favoriteCuisines.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please select at least 1 cuisine (max 5).'),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+        return;
+      }
       
       // Check if household exists
       final existsResponse = await apiClient.get('/profile/household');
@@ -179,6 +239,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'breakfast_preferences': [_breakfastStyle],
         'lunch_preferences': [_lunchStyle],
         'dinner_preferences': [_dinnerStyle],
+        'favorite_cuisines': _favoriteCuisines,
         'skill_level': _skillLevel,
         'dinner_courses': _dinnerCourses,
       };
@@ -385,6 +446,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: _saveHouseholdProfile,
                             icon: const Icon(Icons.save),
                             label: const Text('Save Regional Settings'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Cuisine Preferences Section
+                  _buildSectionHeader('Cuisine Preferences'),
+                  SavoCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Select 1–5 cuisines you prefer. These will be sent to planning requests.',
+                          style: AppTypography.captionStyle(color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _availableCuisines.map((cuisine) {
+                            final selected = _favoriteCuisines.contains(cuisine);
+                            return FilterChip(
+                              label: Text(cuisine),
+                              selected: selected,
+                              onSelected: (value) {
+                                setState(() {
+                                  if (value) {
+                                    if (_favoriteCuisines.length >= 5) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('You can select up to 5 cuisines.'),
+                                          backgroundColor: AppColors.danger,
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    _favoriteCuisines = [..._favoriteCuisines, cuisine];
+                                  } else {
+                                    if (_favoriteCuisines.length <= 1) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Please keep at least 1 cuisine selected.'),
+                                          backgroundColor: AppColors.danger,
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    _favoriteCuisines = _favoriteCuisines.where((c) => c != cuisine).toList();
+                                  }
+                                });
+                              },
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Cuisine Preferences'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.primary,
                               padding: const EdgeInsets.symmetric(vertical: 12),

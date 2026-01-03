@@ -187,7 +187,7 @@ class AppTheme {
       ),
 
       // Card
-      cardTheme: const CardTheme(
+      cardTheme: const CardThemeData(
         color: AppColors.card,
         elevation: 0,
         shadowColor: Colors.black,

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/api_client.dart';
 import '../models/planning.dart';
+import '../models/profile_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import 'planning_results_screen.dart';
@@ -153,6 +154,7 @@ class HomeScreen extends StatelessWidget {
 
   Future<void> _planDaily(BuildContext context) async {
     final apiClient = Provider.of<ApiClient>(context, listen: false);
+    final profileState = Provider.of<ProfileState>(context, listen: false);
     
     showDialog(
       context: context,
@@ -162,10 +164,18 @@ class HomeScreen extends StatelessWidget {
 
     try {
       print('DEBUG: Sending daily plan request with time=60, servings=4');
-      final response = await apiClient.post('/plan/daily', {
+      final body = <String, dynamic>{
         'time_available_minutes': 60,
         'servings': 4,
-      });
+      };
+
+      // Pass preferred cuisines (min 1, max 5 configured in Settings).
+      final preferred = profileState.favoriteCuisines;
+      if (preferred.isNotEmpty) {
+        body['cuisine_preferences'] = preferred;
+      }
+
+      final response = await apiClient.post('/plan/daily', body);
       print('DEBUG: Received response: ${response.toString().substring(0, 100)}');
       Navigator.pop(context); // Close loading
 

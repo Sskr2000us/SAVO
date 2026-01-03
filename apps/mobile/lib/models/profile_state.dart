@@ -37,6 +37,9 @@ class ProfileState extends ChangeNotifier {
   String? get preferredLanguage => household?['preferred_language'];
   String? get measurementSystem => household?['measurement_system'];
   bool? get basicSpicesAvailable => household?['basic_spices_available'];
+
+  List<String> get favoriteCuisines =>
+      List<String>.from(household?['favorite_cuisines'] ?? const <String>[]);
   
   List<String> get declaredAllergens => 
       List<String>.from(allergens?['declared_allergens'] ?? []);
