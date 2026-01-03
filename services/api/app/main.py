@@ -3,8 +3,10 @@ SAVO Backend API
 FastAPI application with Supabase integration
 Version: 2026-01-02 - UUID fix deployed
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
 import os
 import re
 
@@ -61,6 +63,36 @@ def create_app() -> FastAPI:
         allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, OPTIONS)
         allow_headers=["*"],  # Allow all headers
     )
+
+    # Add exception handler to ensure CORS headers are included in error responses
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        origin = request.headers.get("origin")
+        headers = {}
+        
+        # Add CORS headers to error responses
+        if origin:
+            # Check if origin is allowed
+            allowed = False
+            if origin in cors_origins:
+                allowed = True
+            elif cors_origin_regex:
+                try:
+                    if re.match(cors_origin_regex, origin):
+                        allowed = True
+                except Exception:
+                    pass
+            
+            if allowed:
+                headers["Access-Control-Allow-Origin"] = origin
+                if allow_credentials:
+                    headers["Access-Control-Allow-Credentials"] = "true"
+        
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=headers,
+        )
 
     app.include_router(api_router)
 
