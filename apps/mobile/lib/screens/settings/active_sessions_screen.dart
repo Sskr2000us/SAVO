@@ -163,7 +163,7 @@ class _ActiveSessionsScreenState extends State<ActiveSessionsScreen> {
                       Expanded(
                         child: Text(
                           'Security Check',
-                          style: AppTypography.h3Style().copyWith(
+                          style: AppTypography.h2Style().copyWith(
                             fontWeight: FontWeight.bold,
                           ),
                         ),
