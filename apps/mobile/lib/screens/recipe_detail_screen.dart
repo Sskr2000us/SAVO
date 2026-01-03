@@ -48,6 +48,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       // Extract techniques from recipe steps
       final techniques = _extractTechniques(widget.recipe.steps);
 
+      print('🎥 Searching YouTube for: ${widget.recipe.getLocalizedName('en')}');
+
       // Search YouTube for real videos using our API
       final searchResponse = await apiClient.post('/youtube/search', {
         'recipe_name': widget.recipe.getLocalizedName('en'),
@@ -55,9 +57,13 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         'max_results': 5,
       });
 
+      print('🎥 Search response: $searchResponse');
+
       final candidates = (searchResponse['candidates'] as List?)
           ?.map((c) => YouTubeVideoCandidate.fromJson(c as Map<String, dynamic>))
           .toList() ?? [];
+
+      print('🎥 Found ${candidates.length} video candidates');
 
       // If no results from YouTube API, skip video section
       if (candidates.isEmpty) {
@@ -66,6 +72,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           _loadingVideos = false;
           _videoError = 'No YouTube videos found for "${widget.recipe.getLocalizedName('en')}"';
         });
+        print('🎥 No videos found');
         return;
       }
 
@@ -78,14 +85,19 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         outputLanguage: 'en',
       );
 
+      print('🎥 Ranking ${candidates.length} videos...');
       final response = await apiClient.post('/youtube/rank', request.toJson());
       final rankResponse = YouTubeRankResponse.fromJson(response);
+
+      print('🎥 Successfully ranked ${rankResponse.rankedVideos.length} videos');
 
       setState(() {
         _rankedVideos = rankResponse.rankedVideos;
         _loadingVideos = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('🎥 ERROR loading YouTube videos: $e');
+      print('🎥 Stack trace: $stackTrace');
       setState(() {
         _videoError = e.toString();
         _loadingVideos = false;
@@ -274,29 +286,62 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
           // YouTube Videos Section
           if (_loadingVideos)
-            const Center(
+            Center(
               child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 24.0),
+                padding: const EdgeInsets.symmetric(vertical: 24.0),
                 child: Column(
                   children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 12),
-                    Text('Finding YouTube tutorials...'),
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Finding YouTube tutorials...',
+                      style: TextStyle(
+                        color: Colors.grey[700],
+                        fontSize: 14,
+                      ),
+                    ),
                   ],
                 ),
               ),
             )
           else if (_videoError != null)
             Card(
-              color: Colors.orange[50],
-              child: Padding(
+              elevation: 2,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              child: Container(
                 padding: const EdgeInsets.all(16.0),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade200, width: 1),
+                ),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.warning, color: Colors.orange),
+                    Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 24),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text('Could not load videos: $_videoError'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'YouTube Videos Unavailable',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _videoError!,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade800,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
