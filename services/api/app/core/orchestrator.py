@@ -24,6 +24,12 @@ def _get_menu_plan_recipe_options_min_items(schema: Dict[str, Any]) -> int:
 
 def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Repair common LLM omissions so schema validation is less fragile."""
+    # Ensure required scalar fields have the correct type.
+    # LLM occasionally returns null for required strings like selected_cuisine.
+    selected_cuisine = result.get("selected_cuisine")
+    if not isinstance(selected_cuisine, str) or not selected_cuisine.strip():
+        result["selected_cuisine"] = "unknown"
+
     # Normalize common alias fields.
     if "questions" in result and "needs_clarification_questions" not in result:
         q = result.get("questions")
