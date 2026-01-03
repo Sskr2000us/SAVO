@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
-import '../theme/app_theme.dart';
 import 'settings_screen.dart';
 import 'inventory_screen.dart';
+import 'recipe_import_screen.dart';
+import 'shopping_list_screen.dart';
 import 'settings/device_security_screen.dart';
 
 /// Account and app settings screen
@@ -95,6 +96,40 @@ class AccountSettingsScreen extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const InventoryScreen()),
+              );
+            },
+          ),
+
+          const SizedBox(height: 12),
+          _buildSettingCard(
+            context: context,
+            icon: Icons.local_grocery_store,
+            iconColor: Colors.indigo,
+            title: 'Shopping List',
+            subtitle: 'Items to buy (from recipes)',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ShoppingListScreen()),
+              );
+            },
+          ),
+
+          const SizedBox(height: 32),
+
+          // Recipes Section
+          _buildSectionHeader('Recipes'),
+          const SizedBox(height: 12),
+          _buildSettingCard(
+            context: context,
+            icon: Icons.download,
+            iconColor: Colors.green,
+            title: 'Import Recipe',
+            subtitle: 'From URL, text, or photo',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RecipeImportScreen()),
               );
             },
           ),
