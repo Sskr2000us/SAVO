@@ -215,6 +215,14 @@ class HomeScreen extends StatelessWidget {
 
     try {
       print('DEBUG: Sending daily plan request with time=60, servings=4');
+
+      // Best-effort warm-up to reduce Render cold-start fetch failures on web.
+      try {
+        await apiClient.get('/health');
+      } catch (_) {
+        // Ignore warm-up failures; the main request may still succeed.
+      }
+
       final body = <String, dynamic>{
         'time_available_minutes': 60,
         'servings': 4,
