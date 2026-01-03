@@ -98,8 +98,8 @@ async def get_active_sessions(
         sessions = await security_service.get_active_sessions(user_id)
         
         # Get max devices for user
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         user_result = supabase.table('users').select('max_devices').eq('id', user_id).execute()
         max_devices = user_result.data[0].get('max_devices', 2) if user_result.data else 2
         
@@ -209,8 +209,8 @@ async def get_security_events(
     - unresolved_count: Number of events requiring user action
     """
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         # Validate limit
         limit = min(limit, 200)
@@ -255,8 +255,8 @@ async def resolve_security_event(
     """Mark a security event as resolved"""
     try:
         from datetime import datetime
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         result = supabase.table('security_events').update({
             'resolved_at': datetime.utcnow().isoformat()
@@ -289,8 +289,8 @@ async def get_trusted_devices(
 ) -> Dict[str, Any]:
     """Get list of trusted devices for user"""
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         result = supabase.table('trusted_devices').select('*').eq(
             'user_id', user_id
@@ -318,8 +318,8 @@ async def trust_device(
     """Add a device to trusted devices list"""
     try:
         from datetime import datetime
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         # Get device info from active sessions
         session_result = supabase.table('user_sessions').select('*').eq(
@@ -381,8 +381,8 @@ async def untrust_device(
 ):
     """Remove a device from trusted devices list"""
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         result = supabase.table('trusted_devices').update({
             'is_active': False
@@ -424,8 +424,8 @@ async def get_security_dashboard(
     - security_score: Overall security score (0-100)
     """
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         # Get active sessions count
         sessions_result = supabase.rpc(

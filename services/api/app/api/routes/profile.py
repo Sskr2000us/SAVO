@@ -838,8 +838,8 @@ async def track_session_login(
     Requires JWT Bearer token in Authorization header.
     """
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         # Update user's last login info
         result = supabase.table("users").update({
@@ -872,8 +872,8 @@ async def get_session_info(
     Requires JWT Bearer token in Authorization header.
     """
     try:
-        from app.core.database import get_supabase_client
-        supabase = get_supabase_client()
+        from app.core.database import get_db_client
+        supabase = get_db_client()
         
         # Get user's session info
         result = supabase.table("users").select(

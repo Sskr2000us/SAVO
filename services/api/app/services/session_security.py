@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from fastapi import Request, HTTPException, status
 import httpx
-from app.core.database import get_supabase_client
+from app.core.database import get_db_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class SessionSecurityService:
     """Handles device fingerprinting, session tracking, and security enforcement"""
     
     def __init__(self):
-        self.supabase = get_supabase_client()
+        self.supabase = get_db_client()
     
     async def track_login(
         self,
