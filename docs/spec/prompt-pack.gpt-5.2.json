@@ -177,6 +177,7 @@
                             "new_ingredients_optional",
                             "steps",
                             "nutrition_per_serving",
+                            "health_benefits",
                             "health_fit",
                             "leftover_forecast",
                             "preservation_guidance",
@@ -279,6 +280,18 @@
                                 }
                               },
                               "additionalProperties": false
+                            },
+                            "health_benefits": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["ingredient", "benefit"],
+                                "properties": {
+                                  "ingredient": { "type": "string" },
+                                  "benefit": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                              }
                             },
                             "health_fit": {
                               "type": "object",

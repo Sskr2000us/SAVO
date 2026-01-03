@@ -93,6 +93,7 @@ class Recipe {
   final List<RecipeIngredient> ingredientsUsed;
   final List<RecipeStep> steps;
   final Map<String, dynamic> nutritionPerServing;
+  final List<Map<String, String>>? healthBenefits;
   final Map<String, dynamic> leftoverForecast;
 
   Recipe({
@@ -105,6 +106,7 @@ class Recipe {
     required this.ingredientsUsed,
     required this.steps,
     required this.nutritionPerServing,
+    this.healthBenefits,
     required this.leftoverForecast,
   });
 
@@ -125,6 +127,9 @@ class Recipe {
               .toList() ??
           [],
       nutritionPerServing: json['nutrition_per_serving'] ?? {},
+      healthBenefits: (json['health_benefits'] as List?)
+              ?.map((b) => Map<String, String>.from(b as Map))
+              .toList(),
       leftoverForecast: json['leftover_forecast'] ?? {},
     );
   }
