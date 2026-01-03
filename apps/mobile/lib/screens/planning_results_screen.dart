@@ -339,23 +339,23 @@ class _RecipeCardState extends State<_RecipeCard> {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(Icons.timer, size: 14, color: Colors.grey[600]),
+                        const Icon(Icons.timer, size: 14, color: Colors.white70),
                         const SizedBox(width: 4),
                         Text(
                           '${widget.recipe.estimatedTimes.totalMinutes} min',
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 12,
-                            color: Colors.grey[600],
+                            color: Colors.white70,
                           ),
                         ),
                         const SizedBox(width: 12),
-                        Icon(Icons.signal_cellular_alt, size: 14, color: Colors.grey[600]),
+                        const Icon(Icons.signal_cellular_alt, size: 14, color: Colors.white70),
                         const SizedBox(width: 4),
                         Text(
                           widget.recipe.difficulty,
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 12,
-                            color: Colors.grey[600],
+                            color: Colors.white70,
                           ),
                         ),
                       ],

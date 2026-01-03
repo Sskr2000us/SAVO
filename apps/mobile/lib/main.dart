@@ -220,7 +220,13 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       final userId = session.user.id;
 
       try {
-        final status = await profileService.getOnboardingStatus();
+        // Add timeout to prevent infinite hang
+        final status = await profileService.getOnboardingStatus().timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw Exception('Server timeout - check your internet connection and backend status');
+          },
+        );
         profileState.updateOnboardingStatus(status);
 
         // Load profile data if exists
