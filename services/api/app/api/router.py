@@ -14,6 +14,7 @@ from app.api.routes.profile import router as profile_router
 from app.api.routes.inventory_db import router as inventory_db_router
 from app.api.routes.scanning import router as scanning_router
 from app.api.routes.security import router as security_router
+from app.api.routes.debug import router as debug_router
 
 api_router = APIRouter()
 
@@ -31,3 +32,4 @@ api_router.include_router(profile_router, tags=["profile"])
 api_router.include_router(inventory_db_router, prefix="/inventory-db", tags=["inventory-db"])
 api_router.include_router(scanning_router, tags=["scanning"])
 api_router.include_router(security_router, tags=["security"])
+api_router.include_router(debug_router, prefix="/debug", tags=["debug"])
