@@ -22,10 +22,17 @@ def create_app() -> FastAPI:
     # NOTE: Using allow_credentials=True with allow_origins=['*'] is rejected by browsers.
     cors_env = (os.getenv("CORS_ALLOWED_ORIGIN") or "").strip()
     cors_origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
+
+    # Some browser clients (including some Flutter web configurations) use fetch credentials.
+    # Support credentials when origins are explicit; fall back to non-credentialed wildcard mode.
+    allow_credentials = False
+    if cors_origins and cors_origins != ["*"]:
+        allow_credentials = True
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=False,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, OPTIONS)
         allow_headers=["*"],  # Allow all headers
     )
