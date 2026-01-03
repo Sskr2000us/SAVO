@@ -117,3 +117,13 @@ class MenuPlanResponse(BaseModel):
             if has_weekly and not self.planning_window:
                 raise ValueError("planning_window is required when menu_type is weekly_day")
         return self
+
+    @model_validator(mode='after')
+    def validate_needs_clarification_has_details(self) -> 'MenuPlanResponse':
+        """Ensure needs_clarification status provides clarification details"""
+        if self.status == "needs_clarification":
+            if not self.needs_clarification_questions and not self.error_message:
+                raise ValueError(
+                    "status=needs_clarification requires either needs_clarification_questions or error_message"
+                )
+        return self
