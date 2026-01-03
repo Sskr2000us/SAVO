@@ -24,6 +24,12 @@ def _get_menu_plan_recipe_options_min_items(schema: Dict[str, Any]) -> int:
 
 def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Repair common LLM omissions so schema validation is less fragile."""
+    # Normalize common alias fields.
+    if "questions" in result and "needs_clarification_questions" not in result:
+        q = result.get("questions")
+        result["needs_clarification_questions"] = q if isinstance(q, list) else []
+        result.pop("questions", None)
+
     min_items = _get_menu_plan_recipe_options_min_items(schema)
     if min_items <= 0:
         return result
@@ -65,6 +71,77 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
                 recipe_options.append(cloned)
 
     return result
+
+
+def _schema_is_object(schema: Dict[str, Any]) -> bool:
+    t = schema.get("type")
+    if t == "object":
+        return True
+    if isinstance(t, list) and "object" in t:
+        return True
+    return False
+
+
+def _schema_is_array(schema: Dict[str, Any]) -> bool:
+    t = schema.get("type")
+    if t == "array":
+        return True
+    if isinstance(t, list) and "array" in t:
+        return True
+    return False
+
+
+def _prune_additional_properties(instance: Any, schema: Dict[str, Any]) -> Any:
+    """Remove unexpected fields when schema sets additionalProperties=false.
+
+    This is a best-effort sanitizer for LLM outputs; it is not a full JSON Schema implementation.
+    """
+    if instance is None or not isinstance(schema, dict):
+        return instance
+
+    # Handle arrays
+    if isinstance(instance, list) and _schema_is_array(schema):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for i in range(len(instance)):
+                instance[i] = _prune_additional_properties(instance[i], item_schema)
+        return instance
+
+    # Handle objects
+    if isinstance(instance, dict) and _schema_is_object(schema):
+        props = schema.get("properties") or {}
+        pattern_props = schema.get("patternProperties") or {}
+        additional = schema.get("additionalProperties", True)
+
+        # Prune unexpected keys when additionalProperties is false
+        if additional is False and isinstance(props, dict):
+            allowed = set(props.keys())
+            keys = list(instance.keys())
+            for k in keys:
+                if k in allowed:
+                    continue
+                matched_pattern = False
+                if isinstance(pattern_props, dict) and pattern_props:
+                    for pattern in pattern_props.keys():
+                        try:
+                            import re
+
+                            if re.match(pattern, str(k)):
+                                matched_pattern = True
+                                break
+                        except Exception:
+                            continue
+                if not matched_pattern:
+                    instance.pop(k, None)
+
+        # Recurse into known properties
+        if isinstance(props, dict):
+            for k, sub_schema in props.items():
+                if k in instance and isinstance(sub_schema, dict):
+                    instance[k] = _prune_additional_properties(instance[k], sub_schema)
+        return instance
+
+    return instance
 
 
 def _build_messages(*, task_name: str, context: Dict[str, Any]) -> list[dict[str, str]]:
@@ -138,6 +215,7 @@ async def _try_provider(
             # Repair common issues before strict schema validation.
             if output_schema_name == "MENU_PLAN_SCHEMA" and isinstance(result, dict):
                 result = _repair_menu_plan_result(result, schema)
+                result = _prune_additional_properties(result, schema)
             
             # Validate against schema
             validate_json(result, schema)
@@ -191,6 +269,7 @@ async def _try_provider(
                     f"CORRECTION REQUIRED: Your previous response had schema validation errors: {last_error}. "
                     f"Please generate a valid response that strictly matches the JSON schema. "
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
+                    f"Do NOT include unexpected fields like 'questions'. Use needs_clarification_questions only. "
                     f"For each recipe: youtube_references=[]; new_ingredients_optional=[]; steps length 1-2 with tips=[]; "
                     f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
