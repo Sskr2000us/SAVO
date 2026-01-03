@@ -40,7 +40,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "llm_provider": settings.llm_provider}
+        return {
+            "status": "ok",
+            "llm_provider": settings.llm_provider,  # Legacy
+            "reasoning_provider": settings.reasoning_provider,
+            "vision_provider": settings.vision_provider
+        }
 
     return app
 
