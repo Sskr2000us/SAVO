@@ -416,9 +416,9 @@ class _HeroCardState extends State<HeroCard>
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              AppColors.primary,
-              AppColors.primary.withOpacity(0.8),
-              AppColors.secondary.withOpacity(0.6),
+              AppColors.primary.withOpacity(0.9),
+              AppColors.primary.withOpacity(0.85),
+              AppColors.secondary.withOpacity(0.8),
             ],
           ),
           boxShadow: AppShadows.float,
@@ -454,6 +454,13 @@ class _HeroCardState extends State<HeroCard>
                       style: AppTypography.displayStyle().copyWith(
                         color: Colors.white,
                         fontWeight: AppTypography.bold,
+                        shadows: [
+                          Shadow(
+                            offset: Offset(0, 1),
+                            blurRadius: 3,
+                            color: Colors.black.withOpacity(0.3),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: AppSpacing.sm),
@@ -462,8 +469,15 @@ class _HeroCardState extends State<HeroCard>
                     Text(
                       widget.subtitle,
                       style: AppTypography.h2Style().copyWith(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white,
                         fontWeight: AppTypography.regular,
+                        shadows: [
+                          Shadow(
+                            offset: Offset(0, 1),
+                            blurRadius: 3,
+                            color: Colors.black.withOpacity(0.3),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: AppSpacing.lg),
