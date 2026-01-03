@@ -22,7 +22,7 @@ class SessionSecurityService {
       
       final response = await _apiClient.post(
         '/security/track-login',
-        data: {
+        {
           'session_token': session.accessToken,
         },
       );
@@ -84,7 +84,7 @@ class SessionSecurityService {
     try {
       final response = await _apiClient.post(
         '/security/sessions/revoke',
-        data: {'session_id': sessionId},
+        {'session_id': sessionId},
       );
       
       return response['success'] == true;
@@ -104,7 +104,7 @@ class SessionSecurityService {
       
       final response = await _apiClient.post(
         '/security/sessions/revoke-others',
-        data: {
+        {
           'session_token': session.accessToken,
         },
       );
@@ -128,18 +128,13 @@ class SessionSecurityService {
     String? severity,
   }) async {
     try {
-      final queryParams = <String, dynamic>{
-        'limit': limit,
-      };
-      
+      // Build query string manually
+      String endpoint = '/security/events?limit=$limit';
       if (severity != null) {
-        queryParams['severity'] = severity;
+        endpoint += '&severity=$severity';
       }
       
-      final response = await _apiClient.get(
-        '/security/events',
-        queryParameters: queryParams,
-      );
+      final response = await _apiClient.get(endpoint);
       
       if (response['success'] == true) {
         final events = response['events'] as List<dynamic>;
@@ -194,7 +189,7 @@ class SessionSecurityService {
       
       final response = await _apiClient.post(
         '/security/trusted-devices',
-        data: {
+        {
           'device_fingerprint': fingerprint,
           'device_name': deviceName,
         },
@@ -210,11 +205,11 @@ class SessionSecurityService {
   /// Remove device from trusted list
   Future<bool> untrustDevice(String deviceId) async {
     try {
-      final response = await _apiClient.delete(
+      await _apiClient.delete(
         '/security/trusted-devices/$deviceId',
       );
       
-      return response['success'] == true;
+      return true;
     } catch (e) {
       debugPrint('Error untrusting device: $e');
       return false;
