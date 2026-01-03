@@ -67,7 +67,7 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
               ? Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'No shopping list yet. Open a recipe and tap “Check if I have enough” to generate one.',
+                    'No shopping list yet. Generate one from a plan (“Shopping List”) or from a recipe (“Check if I have enough”).',
                     style: TextStyle(color: Colors.grey.shade600),
                   ),
                 )

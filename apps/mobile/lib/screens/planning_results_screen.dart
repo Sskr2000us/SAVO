@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
+import '../services/scanning_service.dart';
 import '../models/planning.dart';
 import '../models/cuisine.dart';
 import 'recipe_detail_screen.dart';
+import 'shopping_list_screen.dart';
 
 class PlanningResultsScreen extends StatefulWidget {
   final MenuPlanResponse menuPlan;
@@ -23,6 +27,9 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   List<Cuisine> _cuisines = [];
   bool _loadingCuisines = true;
   String? _selectedCuisine;
+  bool _buildingShoppingList = false;
+
+  static const _shoppingListPrefsKey = 'savo.shopping_list.latest';
 
   @override
   void initState() {
@@ -44,6 +51,115 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
       }
     } catch (e) {
       setState(() => _loadingCuisines = false);
+    }
+  }
+
+  int _extractServings(Menu menu) {
+    if (menu.servings.isEmpty) return 1;
+    final total = menu.servings['total'];
+    if (total is int && total > 0) return total;
+    if (total is num && total > 0) return total.toInt();
+
+    int sum = 0;
+    for (final v in menu.servings.values) {
+      if (v is int) sum += v;
+      if (v is num) sum += v.toInt();
+    }
+    return sum > 0 ? sum : 1;
+  }
+
+  Future<void> _persistShoppingList(List<dynamic> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_shoppingListPrefsKey, json.encode(items));
+  }
+
+  List<Map<String, dynamic>> _mergeShoppingListItems(List<Map<String, dynamic>> raw) {
+    final Map<String, Map<String, dynamic>> merged = {};
+    for (final item in raw) {
+      final name = (item['canonical_name'] ?? item['ingredient'] ?? item['name'] ?? '').toString().trim();
+      final unit = (item['unit'] ?? '').toString().trim();
+      final amount = item['amount'] ?? item['quantity'];
+      final key = '${name.toLowerCase()}|${unit.toLowerCase()}';
+
+      final num? qty = amount is num ? amount : num.tryParse(amount?.toString() ?? '');
+      if (!merged.containsKey(key)) {
+        merged[key] = {
+          'canonical_name': name.isEmpty ? 'Item' : name,
+          'amount': qty ?? amount,
+          'unit': unit,
+        };
+      } else {
+        final existing = merged[key]!;
+        final existingAmount = existing['amount'];
+        final num? existingQty = existingAmount is num ? existingAmount : num.tryParse(existingAmount?.toString() ?? '');
+        if (existingQty != null && qty != null) {
+          existing['amount'] = existingQty + qty;
+        }
+      }
+    }
+    return merged.values.toList();
+  }
+
+  Future<void> _createShoppingListFromPlan() async {
+    if (_buildingShoppingList) return;
+
+    setState(() => _buildingShoppingList = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final scanningService = ScanningService();
+
+      final List<Map<String, dynamic>> combined = [];
+      int successes = 0;
+
+      for (final menu in widget.menuPlan.menus) {
+        final servings = _extractServings(menu);
+        for (final course in menu.courses) {
+          if (course.recipeOptions.isEmpty) continue;
+          final recipe = course.recipeOptions.first;
+          final result = await scanningService.checkSufficiency(
+            recipeId: recipe.recipeId,
+            servings: servings,
+            apiClient: apiClient,
+          );
+          if (result['success'] == true) {
+            successes += 1;
+            final list = result['shopping_list'];
+            if (list is List) {
+              for (final item in list) {
+                if (item is Map) {
+                  combined.add(Map<String, dynamic>.from(item));
+                } else {
+                  combined.add({'canonical_name': item.toString()});
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!mounted) return;
+      if (successes == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not build shopping list for this plan.')),
+        );
+        return;
+      }
+
+      final merged = _mergeShoppingListItems(combined);
+      await _persistShoppingList(merged);
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ShoppingListScreen()),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create shopping list: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _buildingShoppingList = false);
     }
   }
 
@@ -138,22 +254,43 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                   ),
                 ],
               ),
-              child: FilledButton(
-                onPressed: () {
-                  // Navigate to first recipe in cook mode
-                  if (widget.menuPlan.menus.isNotEmpty &&
-                      widget.menuPlan.menus.first.courses.isNotEmpty &&
-                      widget.menuPlan.menus.first.courses.first.recipeOptions.isNotEmpty) {
-                    final firstRecipe = widget.menuPlan.menus.first.courses.first.recipeOptions.first;
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => RecipeDetailScreen(recipe: firstRecipe),
-                      ),
-                    );
-                  }
-                },
-                child: const Text('Start Cooking'),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonal(
+                      onPressed: _buildingShoppingList ? null : _createShoppingListFromPlan,
+                      child: _buildingShoppingList
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Shopping List'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _buildingShoppingList
+                          ? null
+                          : () {
+                              // Navigate to first recipe in cook mode
+                              if (widget.menuPlan.menus.isNotEmpty &&
+                                  widget.menuPlan.menus.first.courses.isNotEmpty &&
+                                  widget.menuPlan.menus.first.courses.first.recipeOptions.isNotEmpty) {
+                                final firstRecipe = widget.menuPlan.menus.first.courses.first.recipeOptions.first;
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => RecipeDetailScreen(recipe: firstRecipe),
+                                  ),
+                                );
+                              }
+                            },
+                      child: const Text('Start Cooking'),
+                    ),
+                  ),
+                ],
               ),
             )
           : null,
