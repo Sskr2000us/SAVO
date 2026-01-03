@@ -284,22 +284,40 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           ),
           const SizedBox(height: 24),
 
-          // YouTube Videos Section - only show if successful
-          if (_rankedVideos != null && _rankedVideos!.isNotEmpty) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'YouTube Tutorials',
-                  style: Theme.of(context).textTheme.titleLarge,
+          // YouTube Videos Section
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'YouTube Tutorials',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              Icon(Icons.ondemand_video, color: Colors.red[600]),
+            ],
+          ),
+          const SizedBox(height: 12),
+          
+          if (_loadingVideos)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_rankedVideos != null && _rankedVideos!.isNotEmpty)
+            ...(_rankedVideos!.take(3).map((video) => _buildVideoCard(video)))
+          else
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text(
+                'No YouTube videos available for this recipe',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontStyle: FontStyle.italic,
                 ),
-                Icon(Icons.ondemand_video, color: Colors.red[600]),
-              ],
+              ),
             ),
-            const SizedBox(height: 12),
-            ...(_rankedVideos!.take(3).map((video) => _buildVideoCard(video))),
-            const SizedBox(height: 24),
-          ],
+          const SizedBox(height: 24),
 
           // Serving Calculator Section
           Card(
