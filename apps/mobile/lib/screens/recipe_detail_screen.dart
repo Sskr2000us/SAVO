@@ -587,6 +587,103 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           
           const SizedBox(height: 24),
 
+          // Nutrition Information Section
+          if (widget.recipe.nutritionPerServing.isNotEmpty) ...[
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.pie_chart, color: Color(0xFF2196F3)),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Nutrition Per Serving',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        if (widget.recipe.nutritionPerServing['calories_kcal'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.local_fire_department,
+                            label: 'Calories',
+                            value: '${widget.recipe.nutritionPerServing['calories_kcal']} kcal',
+                            color: Colors.orange,
+                          ),
+                        if (widget.recipe.nutritionPerServing['protein_g'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.fitness_center,
+                            label: 'Protein',
+                            value: '${widget.recipe.nutritionPerServing['protein_g']}g',
+                            color: Colors.red,
+                          ),
+                        if (widget.recipe.nutritionPerServing['carbohydrates_g'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.bakery_dining,
+                            label: 'Carbs',
+                            value: '${widget.recipe.nutritionPerServing['carbohydrates_g']}g',
+                            color: Colors.amber,
+                          ),
+                        if (widget.recipe.nutritionPerServing['fat_g'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.water_drop,
+                            label: 'Fat',
+                            value: '${widget.recipe.nutritionPerServing['fat_g']}g',
+                            color: Colors.yellow[700]!,
+                          ),
+                        if (widget.recipe.nutritionPerServing['fiber_g'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.grass,
+                            label: 'Fiber',
+                            value: '${widget.recipe.nutritionPerServing['fiber_g']}g',
+                            color: Colors.green,
+                          ),
+                        if (widget.recipe.nutritionPerServing['calcium_mg'] != null)
+                          _buildNutrientChip(
+                            icon: Icons.bone,
+                            label: 'Calcium',
+                            value: '${widget.recipe.nutritionPerServing['calcium_mg']}mg',
+                            color: Colors.grey,
+                          ),
+                      ],
+                    ),
+                    
+                    // Additional micronutrients in expandable section
+                    if (_hasAdditionalMicronutrients()) ...[
+                      const SizedBox(height: 12),
+                      ExpansionTile(
+                        title: const Text('More Details', style: TextStyle(fontSize: 14)),
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: const EdgeInsets.only(top: 8),
+                        children: [
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: _buildAdditionalMicronutrients(),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+
           // Ingredients
           Text(
             'Ingredients',
@@ -964,5 +1061,109 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildNutrientChip({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 6),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.grey[700],
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _hasAdditionalMicronutrients() {
+    final nutrition = widget.recipe.nutritionPerServing;
+    return nutrition['iron_mg'] != null ||
+        nutrition['vitamin_c_mg'] != null ||
+        nutrition['vitamin_a_iu'] != null ||
+        nutrition['potassium_mg'] != null ||
+        nutrition['sodium_mg'] != null;
+  }
+
+  List<Widget> _buildAdditionalMicronutrients() {
+    final List<Widget> widgets = [];
+    final nutrition = widget.recipe.nutritionPerServing;
+
+    if (nutrition['iron_mg'] != null) {
+      widgets.add(_buildNutrientChip(
+        icon: Icons.bloodtype,
+        label: 'Iron',
+        value: '${nutrition['iron_mg']}mg',
+        color: Colors.brown,
+      ));
+    }
+
+    if (nutrition['vitamin_c_mg'] != null) {
+      widgets.add(_buildNutrientChip(
+        icon: Icons.lightbulb,
+        label: 'Vitamin C',
+        value: '${nutrition['vitamin_c_mg']}mg',
+        color: Colors.orange[300]!,
+      ));
+    }
+
+    if (nutrition['vitamin_a_iu'] != null) {
+      widgets.add(_buildNutrientChip(
+        icon: Icons.visibility,
+        label: 'Vitamin A',
+        value: '${nutrition['vitamin_a_iu']} IU',
+        color: Colors.deepOrange,
+      ));
+    }
+
+    if (nutrition['potassium_mg'] != null) {
+      widgets.add(_buildNutrientChip(
+        icon: Icons.favorite,
+        label: 'Potassium',
+        value: '${nutrition['potassium_mg']}mg',
+        color: Colors.pink,
+      ));
+    }
+
+    if (nutrition['sodium_mg'] != null) {
+      widgets.add(_buildNutrientChip(
+        icon: Icons.salt_sharp,
+        label: 'Sodium',
+        value: '${nutrition['sodium_mg']}mg',
+        color: Colors.blueGrey,
+      ));
+    }
+
+    return widgets;
   }
 }
