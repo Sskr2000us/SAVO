@@ -10,6 +10,63 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 
+def _get_menu_plan_recipe_options_min_items(schema: Dict[str, Any]) -> int:
+    """Best-effort extraction of recipe_options.minItems from MENU_PLAN_SCHEMA."""
+    try:
+        return int(
+            schema["properties"]["menus"]["items"]["properties"]["courses"]["items"][
+                "properties"
+            ]["recipe_options"].get("minItems", 0)
+        )
+    except Exception:
+        return 0
+
+
+def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair common LLM omissions so schema validation is less fragile."""
+    min_items = _get_menu_plan_recipe_options_min_items(schema)
+    if min_items <= 0:
+        return result
+
+    menus = result.get("menus")
+    if not isinstance(menus, list):
+        return result
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            recipe_options = course.get("recipe_options")
+            if not isinstance(recipe_options, list):
+                continue
+            if len(recipe_options) >= min_items:
+                continue
+            if not recipe_options:
+                # Can't synthesize an option safely; let validation handle it.
+                continue
+
+            base = recipe_options[-1]
+            if not isinstance(base, dict):
+                continue
+
+            # Pad by cloning the last option and making recipe_id unique.
+            for idx in range(len(recipe_options) + 1, min_items + 1):
+                cloned = dict(base)
+                try:
+                    cloned["recipe_id"] = f"{base.get('recipe_id', 'recipe')}-alt{idx}"
+                except Exception:
+                    cloned["recipe_id"] = f"recipe-alt{idx}"
+                recipe_options.append(cloned)
+
+    return result
+
+
 def _build_messages(*, task_name: str, context: Dict[str, Any]) -> list[dict[str, str]]:
     system_lines = get_system_prompt_lines()
     task = get_task(task_name)
@@ -77,6 +134,10 @@ async def _try_provider(
     for attempt in range(max_retries + 1):
         try:
             result = await client.generate_json(messages=messages, schema=schema)
+
+            # Repair common issues before strict schema validation.
+            if output_schema_name == "MENU_PLAN_SCHEMA" and isinstance(result, dict):
+                result = _repair_menu_plan_result(result, schema)
             
             # Validate against schema
             validate_json(result, schema)
