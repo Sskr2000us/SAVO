@@ -8,6 +8,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from pydantic import ValidationError
 
 from app.models.inventory import (
     InventoryItem,
@@ -162,11 +163,18 @@ async def post_normalize(req: NormalizeInventoryRequest):
 
     try:
         result = await normalize_inventory(context)
-        # If orchestration returns a non-conforming payload (e.g., status/error object), fail closed
-        # to a valid normalization response so the frontend can proceed.
-        if not isinstance(result, dict) or "normalized_inventory" not in result:
+        if not isinstance(result, dict):
             return _fallback_normalize(req.raw_items)
-        return result
+
+        # Validate payload matches response model; if not, fail closed to fallback.
+        try:
+            validator = getattr(NormalizeInventoryResponse, "model_validate", None)
+            if callable(validator):
+                return validator(result)
+            return NormalizeInventoryResponse.parse_obj(result)
+        except ValidationError:
+            return _fallback_normalize(req.raw_items)
+
     except Exception:
         return _fallback_normalize(req.raw_items)
 
