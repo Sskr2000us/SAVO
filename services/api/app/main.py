@@ -21,7 +21,15 @@ def create_app() -> FastAPI:
     # Enable CORS for browser clients (Flutter web / Vercel)
     # NOTE: Using allow_credentials=True with allow_origins=['*'] is rejected by browsers.
     cors_env = (os.getenv("CORS_ALLOWED_ORIGIN") or "").strip()
-    cors_origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
+    if cors_env:
+        cors_origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()]
+    else:
+        # Safe defaults for common deployments.
+        cors_origins = [
+            "https://savo-web.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:5173",
+        ]
 
     # Some browser clients (including some Flutter web configurations) use fetch credentials.
     # Support credentials when origins are explicit; fall back to non-credentialed wildcard mode.
