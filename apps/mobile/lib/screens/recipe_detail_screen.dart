@@ -653,7 +653,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                           ),
                         if (widget.recipe.nutritionPerServing['calcium_mg'] != null)
                           _buildNutrientChip(
-                            icon: Icons.bone,
+                            icon: Icons.medical_services,
                             label: 'Calcium',
                             value: '${widget.recipe.nutritionPerServing['calcium_mg']}mg',
                             color: Colors.grey,
@@ -1237,7 +1237,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     if (nutrition['sodium_mg'] != null) {
       widgets.add(_buildNutrientChip(
-        icon: Icons.salt_sharp,
+        icon: Icons.grain,
         label: 'Sodium',
         value: '${nutrition['sodium_mg']}mg',
         color: Colors.blueGrey,
