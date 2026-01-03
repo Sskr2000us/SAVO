@@ -1,9 +1,9 @@
-"""
-Planning endpoints - daily/party/weekly meal planning
-"""
-from datetime import datetime
-from typing import Dict, List, Optional
-from fastapi import APIRouter, HTTPException, status
+"""Planning endpoints - daily/party/weekly meal planning."""
+
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models.planning import (
     DailyPlanRequest,
@@ -27,6 +27,8 @@ from app.core.storage import get_storage
 from app.core.orchestrator import plan_daily, plan_party, plan_weekly
 from app.core.orchestration_rules import build_orchestration_context
 from app.core.cuisine_metadata import get_cuisine_by_id, CUISINE_METADATA
+from app.core.database import get_full_profile, get_inventory, get_recipe_history
+from app.middleware.auth import get_current_user
 from app.core.safety_constraints import (
     build_complete_safety_context,
     validate_recipe_safety,
@@ -43,8 +45,128 @@ from app.core.meal_courses import (
     generate_meal_prompt,
     MealStyle
 )
+from app.models.inventory import InventoryItem
 
 router = APIRouter()
+
+
+def _coerce_list(value: Any) -> list:
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        # Accept "YYYY-MM-DD" or datetime-ish strings
+        try:
+            return date.fromisoformat(raw[:10])
+        except Exception:
+            return None
+    return None
+
+
+def _freshness_days_remaining(expiry_date_value: Any) -> Optional[int]:
+    expiry = _parse_iso_date(expiry_date_value)
+    if expiry is None:
+        return None
+    delta = (expiry - date.today()).days
+    return max(0, delta)
+
+
+def _db_inventory_to_models(db_items: List[Dict[str, Any]]) -> List[InventoryItem]:
+    mapped: List[InventoryItem] = []
+    for item in db_items or []:
+        if not isinstance(item, dict):
+            continue
+
+        raw_state = (item.get("item_state") or item.get("state") or "raw")
+        state = "raw"
+        if isinstance(raw_state, str):
+            s = raw_state.strip().lower()
+            if s in {"raw", "cooked", "leftover", "frozen"}:
+                state = s
+            elif s == "prepared":
+                state = "cooked"
+
+        raw_storage = (item.get("storage_location") or item.get("storage") or "pantry")
+        storage = "pantry"
+        if isinstance(raw_storage, str):
+            st = raw_storage.strip().lower()
+            if st in {"pantry", "fridge", "freezer"}:
+                storage = "fridge" if st == "fridge" else st
+            elif st == "counter":
+                storage = "pantry"
+
+        inventory_id = item.get("id") or item.get("inventory_id")
+        canonical_name = item.get("canonical_name")
+        display_name = item.get("display_name") or canonical_name
+        quantity = item.get("quantity")
+        unit = item.get("unit")
+
+        if not inventory_id or not canonical_name or quantity is None or not unit:
+            continue
+
+        mapped.append(
+            InventoryItem(
+                inventory_id=str(inventory_id),
+                canonical_name=str(canonical_name),
+                display_name=str(display_name) if display_name is not None else None,
+                quantity=float(quantity),
+                unit=str(unit),
+                state=state,  # type: ignore[arg-type]
+                storage=("freezer" if storage == "freezer" else ("fridge" if storage == "fridge" else "pantry")),
+                freshness_days_remaining=_freshness_days_remaining(item.get("expiry_date")),
+                notes=item.get("notes"),
+            )
+        )
+    return mapped
+
+
+def _member_for_app_config(member: Dict[str, Any]) -> Dict[str, Any]:
+    # Shape this like app.models.config.FamilyMember (dict form)
+    member_id = member.get("id") or member.get("member_id") or "unknown"
+    age = member.get("age")
+    try:
+        age_int = int(age) if age is not None else 30
+    except Exception:
+        age_int = 30
+
+    age_category = member.get("age_category")
+    if not isinstance(age_category, str) or age_category not in {"child", "teen", "adult", "senior"}:
+        if age_int < 13:
+            age_category = "child"
+        elif age_int < 18:
+            age_category = "teen"
+        elif age_int < 65:
+            age_category = "adult"
+        else:
+            age_category = "senior"
+
+    return {
+        "member_id": str(member_id),
+        "name": str(member.get("name") or member.get("member_name") or "Family Member"),
+        "age": age_int,
+        "age_category": age_category,
+        "dietary_restrictions": [str(x) for x in _coerce_list(member.get("dietary_restrictions")) if x is not None],
+        "allergens": [str(x) for x in _coerce_list(member.get("allergens")) if x is not None],
+        "health_conditions": [str(x) for x in _coerce_list(member.get("health_conditions")) if x is not None],
+        "medical_dietary_needs": member.get("medical_dietary_needs") or {},
+        "food_preferences": [str(x) for x in _coerce_list(member.get("food_preferences")) if x is not None],
+        "food_dislikes": [str(x) for x in _coerce_list(member.get("food_dislikes")) if x is not None],
+        "spice_tolerance": str(member.get("spice_tolerance") or "medium"),
+    }
 
 
 def _inventory_for_llm(*, storage_inventory, request_inventory) -> list[dict]:
@@ -228,13 +350,18 @@ def _build_planning_context(
     request,
     plan_type: str,
     party_settings=None,
-    weekly_context=None
+    weekly_context=None,
+    *,
+    config_override=None,
+    inventory_override=None,
+    history_override=None,
+    app_configuration_override: Optional[Dict[str, Any]] = None,
 ):
     """Build complete context for LLM including config, inventory, orchestration rules, and intelligence layers"""
     storage = get_storage()
-    config = storage.get_config()
-    inventory = storage.list_inventory()
-    history = storage.get_recent_history()
+    config = config_override or storage.get_config()
+    inventory = inventory_override if inventory_override is not None else storage.list_inventory()
+    history = history_override if history_override is not None else storage.get_recent_history()
     
     # Get selected cuisine or rank cuisines intelligently
     cuisine = request.selected_cuisine or "auto"
@@ -288,7 +415,7 @@ def _build_planning_context(
     inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
 
     context = {
-        "app_configuration": config.model_dump(mode='json'),
+        "app_configuration": app_configuration_override or config.model_dump(mode='json'),
         "session_request": request.model_dump(mode='json'),
         "inventory": inventory_items,
         "cuisine_metadata": CUISINE_METADATA,
@@ -306,38 +433,86 @@ def _build_planning_context(
 
 
 @router.post("/daily", response_model=MenuPlanResponse)
-async def post_daily(req: DailyPlanRequest):
+async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_user)):
     """Generate daily meal plan with full family profile and product intelligence"""
     storage = get_storage()
     config = storage.get_config()
+
+    # Pull DB-backed profile (source of truth)
+    try:
+        full_profile = await get_full_profile(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load user profile: {str(e)}")
+
+    household = full_profile.get("household") or full_profile.get("profile") or {}
+    members = full_profile.get("members") or []
+    normalized_members: List[Dict[str, Any]] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        # Ensure allergens key exists (Golden Rule requires explicit declaration)
+        if "allergens" not in m:
+            m = {**m, "allergens": []}
+        normalized_members.append(m)
+    profile_dict = {"household": household, "members": normalized_members}
     
     # GOLDEN RULE: Check profile completeness and safety constraints
-    if config and config.household_profile:
-        profile_dict = {
-            "household": config.household_profile.model_dump() if hasattr(config.household_profile, "model_dump") else {},
-            "members": [m.model_dump() if hasattr(m, "model_dump") else m for m in config.household_profile.members] if hasattr(config.household_profile, "members") else []
-        }
-        
-        golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
-        if not golden_check["can_proceed"]:
-            return MenuPlanResponse(
-                status="needs_clarification",
-                needs_clarification_questions=[golden_check["message"]],
-                error_message=golden_check.get("message", "Profile incomplete"),
-                selected_cuisine="unknown",
-                menu_headers=[],
-                menus=[],
-                variety_log={"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
-                nutrition_summary={"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
-                waste_summary={
-                    "expiring_items_used": [],
-                    "waste_reduction_score": 0,
-                    "waste_avoided_value_estimate": {"currency": "USD", "value": 0}
-                },
-                shopping_suggestions=[]
-            )
+    golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
+    if not golden_check["can_proceed"]:
+        return MenuPlanResponse(
+            status="needs_clarification",
+            needs_clarification_questions=[golden_check["message"]],
+            error_message=golden_check.get("message", "Profile incomplete"),
+            selected_cuisine="unknown",
+            menu_headers=[],
+            menus=[],
+            variety_log={"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
+            nutrition_summary={"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
+            waste_summary={
+                "expiring_items_used": [],
+                "waste_reduction_score": 0,
+                "waste_avoided_value_estimate": {"currency": "USD", "value": 0},
+            },
+            shopping_suggestions=[],
+        )
+
+    # Prefer DB inventory/history for real planning
+    try:
+        db_inventory = await get_inventory(user_id)
+    except Exception:
+        db_inventory = []
+    try:
+        db_history = await get_recipe_history(user_id, limit=50)
+    except Exception:
+        db_history = []
+
+    inventory_models = _db_inventory_to_models(db_inventory)
+
+    # Inject DB-backed household/members into APP_CONFIGURATION for LLM safety compliance
+    app_config_dict = config.model_dump(mode="json")
+    nutrition_targets = household.get("nutrition_targets") or household.get("nutritionTargets") or {}
+    if not isinstance(nutrition_targets, dict):
+        nutrition_targets = {}
+    app_config_dict["household_profile"] = {
+        "members": [_member_for_app_config(m) for m in normalized_members],
+        "nutrition_targets": nutrition_targets,
+    }
+
+    # Also include the raw DB profile in context (debuggable + future-proof)
+    app_config_dict["db_profile"] = {
+        "household": household,
+        "members": normalized_members,
+        "allergens": full_profile.get("allergens"),
+        "dietary": full_profile.get("dietary"),
+    }
     
-    context = _build_planning_context(req, "daily")
+    context = _build_planning_context(
+        req,
+        "daily",
+        inventory_override=inventory_models,
+        history_override=db_history,
+        app_configuration_override=app_config_dict,
+    )
     context["time_available_minutes"] = req.time_available_minutes
     context["servings"] = req.servings
     
@@ -351,23 +526,20 @@ async def post_daily(req: DailyPlanRequest):
     
     # Intelligence Layer 2: Build Nutrition Profile from family members
     nutrition_profile = None
-    if config and config.household_profile and config.household_profile.members:
+    if normalized_members:
         # Aggregate health conditions and dietary needs
         all_health_conditions = []
         all_allergens = []
         all_dietary_restrictions = []
         
-        for member in config.household_profile.members:
-            if member.health_conditions:
-                all_health_conditions.extend(member.health_conditions)
-            if member.allergens:
-                all_allergens.extend(member.allergens)
-            if member.dietary_restrictions:
-                all_dietary_restrictions.extend(member.dietary_restrictions)
+        for member in normalized_members:
+            all_health_conditions.extend(_coerce_list(member.get("health_conditions")))
+            all_allergens.extend(_coerce_list(member.get("allergens")))
+            all_dietary_restrictions.extend(_coerce_list(member.get("dietary_restrictions")))
         
         # Create nutrition profile
         nutrition_profile = UserNutritionProfile(
-            daily_targets=config.household_profile.nutrition_targets if hasattr(config.household_profile, "nutrition_targets") else None,
+            daily_targets=nutrition_targets if nutrition_targets else None,
             health_conditions=list(set(all_health_conditions)),  # Unique conditions
             dietary_preferences=list(set(all_dietary_restrictions)),
             allergens=list(set(all_allergens))
@@ -381,34 +553,24 @@ async def post_daily(req: DailyPlanRequest):
             "message": "Please respect these health conditions and allergens in recipe selection and preparation."
         }
         
-        context["family_members"] = [
-            {
-                "name": m.name,
-                "age": m.age,
-                "age_category": m.age_category,
-                "dietary_restrictions": m.dietary_restrictions,
-                "allergens": m.allergens,
-                "health_conditions": m.health_conditions,
-                "medical_dietary_needs": m.medical_dietary_needs,
-                "food_preferences": m.food_preferences,
-                "food_dislikes": m.food_dislikes,
-                "spice_tolerance": m.spice_tolerance
-            }
-            for m in config.household_profile.members
-        ]
+        context["family_members"] = [_member_for_app_config(m) for m in normalized_members]
         
         # Add nutrition targets
-        if hasattr(config.household_profile, "nutrition_targets") and config.household_profile.nutrition_targets:
-            context["nutrition_targets"] = config.household_profile.nutrition_targets.model_dump()
+        if nutrition_targets:
+            context["nutrition_targets"] = nutrition_targets
     
     # Intelligence Layer 3: Add skill progression context
     user_skill_level = 2  # Default
     user_confidence = 0.7  # Default
-    if config and config.household_profile:
-        if hasattr(config.household_profile, "skill_level"):
-            user_skill_level = config.household_profile.skill_level or 2
-        if hasattr(config.household_profile, "confidence_score"):
-            user_confidence = config.household_profile.confidence_score or 0.7
+    if isinstance(household, dict):
+        try:
+            user_skill_level = int(household.get("skill_level") or household.get("skillLevel") or user_skill_level)
+        except Exception:
+            pass
+        try:
+            user_confidence = float(household.get("confidence_score") or household.get("confidenceScore") or user_confidence)
+        except Exception:
+            pass
     
     context["skill_intelligence"] = {
         "user_level": user_skill_level,
@@ -432,13 +594,8 @@ async def post_daily(req: DailyPlanRequest):
             context["meal_preferences"] = gs.dinner_preferences
     
     # Add complete safety context to prompt
-    if config and config.household_profile:
-        profile_dict = {
-            "household": config.household_profile.model_dump() if hasattr(config.household_profile, "model_dump") else {},
-            "members": [m.model_dump() if hasattr(m, "model_dump") else m for m in config.household_profile.members] if hasattr(config.household_profile, "members") else []
-        }
-        safety_context = build_complete_safety_context(profile_dict)
-        context["safety_constraints"] = safety_context
+    safety_context = build_complete_safety_context(profile_dict)
+    context["safety_constraints"] = safety_context
     
     # Generate meal plan
     result = await plan_daily(context)
@@ -449,13 +606,12 @@ async def post_daily(req: DailyPlanRequest):
         validated_recipes = []
         for recipe in result["recipes"]:
             # Validate safety first
-            if config and config.household_profile:
-                is_safe, violations = validate_recipe_safety(recipe, profile_dict)
-                if not is_safe:
-                    # Log violation and skip recipe
-                    import logging
-                    logging.error(f"Recipe safety violation: {recipe.get('name', 'Unknown')} - {violations}")
-                    continue
+            is_safe, violations = validate_recipe_safety(recipe, profile_dict)
+            if not is_safe:
+                # Log violation and skip recipe
+                import logging
+                logging.error(f"Recipe safety violation: {recipe.get('name', 'Unknown')} - {violations}")
+                continue
             
             _enhance_recipe_with_intelligence(
                 recipe=recipe,
