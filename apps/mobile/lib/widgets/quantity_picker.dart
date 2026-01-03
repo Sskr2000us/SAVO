@@ -116,6 +116,34 @@ class _QuantityPickerState extends State<QuantityPicker> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final borderColor = theme.dividerColor;
+    final enabledBackground = colorScheme.surface;
+    final disabledBackground = colorScheme.surface.withOpacity(0.6);
+    final enabledTextColor = colorScheme.onSurface;
+    final disabledTextColor = theme.disabledColor;
+
+    final quantityTextStyle = theme.textTheme.bodyLarge?.copyWith(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: widget.enabled ? enabledTextColor : disabledTextColor,
+        ) ??
+        TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: widget.enabled ? enabledTextColor : disabledTextColor,
+        );
+
+    final unitTextStyle = theme.textTheme.bodyMedium?.copyWith(
+          fontSize: 14,
+          color: widget.enabled ? enabledTextColor : disabledTextColor,
+        ) ??
+        TextStyle(
+          fontSize: 14,
+          color: widget.enabled ? enabledTextColor : disabledTextColor,
+        );
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -134,9 +162,9 @@ class _QuantityPickerState extends State<QuantityPicker> {
             width: 70,
             height: 40,
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: borderColor),
               borderRadius: BorderRadius.circular(8),
-              color: widget.enabled ? Colors.white : Colors.grey.shade100,
+              color: widget.enabled ? enabledBackground : disabledBackground,
             ),
             child: TextField(
               controller: _textController,
@@ -146,10 +174,7 @@ class _QuantityPickerState extends State<QuantityPicker> {
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
               ],
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
+              style: quantityTextStyle,
               decoration: const InputDecoration(
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
@@ -172,9 +197,9 @@ class _QuantityPickerState extends State<QuantityPicker> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: borderColor),
               borderRadius: BorderRadius.circular(8),
-              color: widget.enabled ? Colors.white : Colors.grey.shade100,
+              color: widget.enabled ? enabledBackground : disabledBackground,
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
@@ -184,7 +209,7 @@ class _QuantityPickerState extends State<QuantityPicker> {
                     value: unit,
                     child: Text(
                       unit,
-                      style: const TextStyle(fontSize: 14),
+                      style: unitTextStyle,
                     ),
                   );
                 }).toList(),
@@ -197,6 +222,10 @@ class _QuantityPickerState extends State<QuantityPicker> {
                   }
                 } : null,
                 icon: const Icon(Icons.arrow_drop_down, size: 20),
+                iconEnabledColor: enabledTextColor,
+                iconDisabledColor: disabledTextColor,
+                style: unitTextStyle,
+                dropdownColor: enabledBackground,
                 isDense: true,
               ),
             ),
