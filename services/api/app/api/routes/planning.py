@@ -462,17 +462,15 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
     if not golden_check["can_proceed"]:
-        # Emit a structured, low-sensitivity log to help diagnose "200 but failed" cases.
+        # Render/Uvicorn often defaults to WARNING+ in production; keep this visible.
         # Do not log the full profile (PII/health-related fields may exist).
-        logger.info(
-            "Golden Rule blocked /plan/daily",
-            extra={
-                "user_id": user_id,
-                "action": golden_check.get("action"),
-                "missing_fields": golden_check.get("missing_fields"),
-                "message": golden_check.get("message"),
-                "members_count": len(normalized_members),
-            },
+        logger.warning(
+            "Golden Rule blocked /plan/daily user_id=%s action=%s missing_fields=%s members_count=%s message=%s",
+            user_id,
+            golden_check.get("action"),
+            golden_check.get("missing_fields"),
+            len(normalized_members),
+            golden_check.get("message"),
         )
         return MenuPlanResponse(
             status="needs_clarification",
@@ -615,7 +613,26 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
     context["safety_constraints"] = safety_context
     
     # Generate meal plan
-    result = await plan_daily(context)
+    try:
+        result = await plan_daily(context)
+    except Exception:
+        logger.exception("plan_daily crashed user_id=%s", user_id)
+        raise
+
+    status_val = result.get("status")
+    if status_val and status_val != "ok":
+        questions = result.get("needs_clarification_questions")
+        first_q = None
+        if isinstance(questions, list) and questions:
+            first_q = questions[0]
+        logger.warning(
+            "plan_daily returned non-ok status user_id=%s status=%s selected_cuisine=%s error_message=%s first_question=%s",
+            user_id,
+            status_val,
+            result.get("selected_cuisine"),
+            result.get("error_message"),
+            first_q,
+        )
     
     # Intelligence Layer 4: Post-process recipes with health scores, skill fit, and badges
     # CRITICAL: Validate recipe safety before serving
