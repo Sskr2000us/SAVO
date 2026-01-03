@@ -89,7 +89,7 @@ class _WhyThisRecipeCardState extends State<WhyThisRecipeCard>
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F5F5),
+        color: const Color(0xFF37474F),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -108,6 +108,7 @@ class _WhyThisRecipeCardState extends State<WhyThisRecipeCard>
                     'Why this recipe?',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w500,
+                          color: Colors.white,
                         ),
                   ),
                   RotationTransition(
@@ -115,6 +116,7 @@ class _WhyThisRecipeCardState extends State<WhyThisRecipeCard>
                     child: const Icon(
                       Icons.keyboard_arrow_down,
                       size: 24,
+                      color: Colors.white,
                     ),
                   ),
                 ],
@@ -184,13 +186,14 @@ class _WhyThisRecipeCardState extends State<WhyThisRecipeCard>
                 section.title,
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
                       fontWeight: FontWeight.w500,
+                      color: Colors.white,
                     ),
               ),
               const SizedBox(height: 4),
               Text(
                 section.content,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.black54,
+                      color: Colors.white70,
                     ),
               ),
             ],

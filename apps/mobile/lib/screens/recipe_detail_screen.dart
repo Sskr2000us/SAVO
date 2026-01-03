@@ -210,10 +210,12 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     });
 
     try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
       final scanningService = ScanningService();
       final result = await scanningService.checkSufficiency(
         recipeId: widget.recipe.recipeId,
         servings: _targetServings,
+        apiClient: apiClient,
       );
 
       setState(() {
@@ -561,18 +563,21 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.red.shade50,
+                          color: Colors.red.shade100,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.red),
+                          border: Border.all(color: Colors.red.shade700, width: 2),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.error, color: Colors.red),
+                            Icon(Icons.error, color: Colors.red.shade900),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Text(
                                 _sufficiencyResult!['error'] ?? 'Failed to check sufficiency',
-                                style: TextStyle(color: Colors.red.shade900),
+                                style: TextStyle(
+                                  color: Colors.red.shade900,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ],

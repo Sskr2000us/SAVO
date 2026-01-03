@@ -410,30 +410,18 @@ class ScanningService {
     }
   }
 
+  // Add apiClient parameter for proper auth handling
   Future<Map<String, dynamic>> checkSufficiency({
     required String recipeId,
     required int servings,
+    required dynamic apiClient,
   }) async {
     try {
-      // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
-
-      if (token == null) {
-        return {
-          'success': false,
-          'error': 'Not authenticated. Please log in.',
-        };
-      }
-
-      // Send request
+      // Use ApiClient which handles auth automatically
       final uri = Uri.parse('$baseUrl/api/scanning/check-sufficiency');
       final response = await http.post(
         uri,
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
+        headers: await apiClient.getHeaders(),
         body: json.encode({
           'recipe_id': recipeId,
           'servings': servings,
