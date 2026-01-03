@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ScanningService {
   final String baseUrl = const String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'https://savo-ynp1.onrender.com',
   );
 
   Future<Map<String, dynamic>> analyzeImage({
