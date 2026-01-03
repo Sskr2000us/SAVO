@@ -1,6 +1,7 @@
 """Planning endpoints - daily/party/weekly meal planning."""
 
 from datetime import date, datetime
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -48,6 +49,8 @@ from app.core.meal_courses import (
 from app.models.inventory import InventoryItem
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_list(value: Any) -> list:
@@ -459,6 +462,18 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
     if not golden_check["can_proceed"]:
+        # Emit a structured, low-sensitivity log to help diagnose "200 but failed" cases.
+        # Do not log the full profile (PII/health-related fields may exist).
+        logger.info(
+            "Golden Rule blocked /plan/daily",
+            extra={
+                "user_id": user_id,
+                "action": golden_check.get("action"),
+                "missing_fields": golden_check.get("missing_fields"),
+                "message": golden_check.get("message"),
+                "members_count": len(normalized_members),
+            },
+        )
         return MenuPlanResponse(
             status="needs_clarification",
             needs_clarification_questions=[golden_check["message"]],

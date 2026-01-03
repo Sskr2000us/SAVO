@@ -432,21 +432,30 @@ def validate_profile_completeness(profile: Dict[str, Any]) -> Tuple[bool, List[s
     """
     missing = []
     
-    # Check critical fields
-    if not profile.get("household"):
-        missing.append("household profile")
-    
-    if not profile.get("members") or len(profile["members"]) == 0:
+    # Safety-critical fields: members + explicit allergen declarations.
+    # Household-level preferences (language, cuisine prefs, nutrition targets, etc.)
+    # should not block safety gating by themselves.
+
+    members = profile.get("members")
+    if not isinstance(members, list) or len(members) == 0:
         missing.append("family members")
     
     # Allergens are REQUIRED to be explicitly declared (even if empty)
-    allergens_declared = False
-    for member in profile.get("members", []):
-        if "allergens" in member:
-            allergens_declared = True
+    # Require this for every member so we don't accidentally proceed when some
+    # members have unknown allergen status.
+    allergens_declared_for_all = True
+    for member in members or []:
+        if not isinstance(member, dict):
+            continue
+        if "allergens" not in member:
+            allergens_declared_for_all = False
             break
-    
-    if not allergens_declared:
+        # Treat null/empty string as not explicitly declared
+        if member.get("allergens") is None:
+            allergens_declared_for_all = False
+            break
+
+    if (members and len(members) > 0) and not allergens_declared_for_all:
         missing.append("allergen declarations (required for safety)")
     
     is_complete = len(missing) == 0
