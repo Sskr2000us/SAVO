@@ -6,6 +6,7 @@ Version: 2026-01-02 - UUID fix deployed
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import re
 
 from app.api.router import api_router
 from app.core.settings import settings
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     # Enable CORS for browser clients (Flutter web / Vercel)
     # NOTE: Using allow_credentials=True with allow_origins=['*'] is rejected by browsers.
     cors_env = (os.getenv("CORS_ALLOWED_ORIGIN") or "").strip()
+    cors_origin_regex_env = (os.getenv("CORS_ALLOWED_ORIGIN_REGEX") or "").strip()
     if cors_env:
         cors_origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()]
     else:
@@ -31,6 +33,20 @@ def create_app() -> FastAPI:
             "http://localhost:5173",
         ]
 
+    # Allow Vercel preview deployments by regex (e.g., savo-web-git-branch-xyz.vercel.app)
+    # This complements explicit allow_origins and helps avoid origin mismatch CORS blocks.
+    cors_origin_regex: str | None = None
+    if cors_origin_regex_env:
+        cors_origin_regex = cors_origin_regex_env
+    else:
+        cors_origin_regex = r"^https://savo-web(?:-[a-z0-9-]+)?\.vercel\.app$"
+
+    # Validate regex early; if invalid, disable rather than crashing.
+    try:
+        re.compile(cors_origin_regex)
+    except Exception:
+        cors_origin_regex = None
+
     # Some browser clients (including some Flutter web configurations) use fetch credentials.
     # Support credentials when origins are explicit; fall back to non-credentialed wildcard mode.
     allow_credentials = False
@@ -40,6 +56,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
+        allow_origin_regex=cors_origin_regex,
         allow_credentials=allow_credentials,
         allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, OPTIONS)
         allow_headers=["*"],  # Allow all headers
@@ -66,6 +83,7 @@ def create_app() -> FastAPI:
             "vision_provider": settings.vision_provider,
             "cors": {
                 "allow_origins": cors_origins,
+                "allow_origin_regex": cors_origin_regex,
                 "allow_credentials": allow_credentials,
             },
             "build": {
