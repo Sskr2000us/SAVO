@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -201,6 +202,8 @@ class AppStartupScreen extends StatefulWidget {
 class _AppStartupScreenState extends State<AppStartupScreen> {
   bool _isLoading = true;
   String? _error;
+  String _phase = 'Starting';
+  Timer? _startupWatchdog;
 
   Future<void> _refreshMarketConfig() async {
     try {
@@ -215,12 +218,36 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   @override
   void initState() {
     super.initState();
+    _startupWatchdog = Timer(const Duration(seconds: 20), () {
+      if (!mounted) return;
+      if (_error != null) return;
+
+      setState(() {
+        _isLoading = false;
+        _error = 'Startup timed out while: $_phase.\n\n'
+            'Try: hard refresh (Ctrl+Shift+R), open /login directly, or wake the backend.';
+      });
+    });
     _checkAuthAndOnboarding();
+  }
+
+  @override
+  void dispose() {
+    _startupWatchdog?.cancel();
+    super.dispose();
+  }
+
+  void _setPhase(String phase) {
+    if (!mounted) return;
+    setState(() {
+      _phase = phase;
+    });
   }
 
   Future<void> _checkAuthAndOnboarding() async {
     try {
       // Add small delay to ensure Supabase is initialized
+      _setPhase('Initializing auth');
       await Future.delayed(const Duration(milliseconds: 500));
       
       final session = Supabase.instance.client.auth.currentSession;
@@ -238,6 +265,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       if (session == null) {
         debugPrint('🔐 No session found - navigating to login');
         if (mounted) {
+          _setPhase('No session (redirecting to login)');
           Navigator.of(context).pushReplacementNamed('/login');
         }
         return;
@@ -245,6 +273,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
       // Has session -> check onboarding status from server
       debugPrint('🔐 Session found - checking onboarding status');
+      _setPhase('Checking onboarding status');
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final profileService = ProfileService(apiClient);
       final profileState = Provider.of<ProfileState>(context, listen: false);
@@ -262,12 +291,14 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
         // Load profile data if exists
         try {
+          _setPhase('Loading profile');
           final profile = await profileService.getFullProfile();
           profileState.updateProfileData(profile);
         } catch (e) {
           debugPrint('No profile yet: $e');
         }
 
+        _setPhase('Loading market config');
         await _refreshMarketConfig();
 
         if (mounted) {
@@ -281,6 +312,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         }
       } catch (serverError) {
         debugPrint('Error checking server onboarding status: $serverError');
+        _setPhase('Server unavailable (offline fallback)');
         
         // Fallback to local storage (offline mode)
         try {
@@ -308,8 +340,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     } catch (e) {
       debugPrint('Error checking auth/onboarding: $e');
       if (mounted) {
-        // Error -> go to login
-        Navigator.of(context).pushReplacementNamed('/login');
+        setState(() {
+          _isLoading = false;
+          _error = e.toString();
+        });
       }
     }
   }
@@ -359,12 +393,18 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
                   ),
                 ],
               )
-            : const Column(
+            : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Initializing SAVO...'),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  const Text('Initializing SAVO...'),
+                  const SizedBox(height: 8),
+                  Text(
+                    _phase,
+                    style: Theme.of(context).textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
                 ],
               ),
       ),
