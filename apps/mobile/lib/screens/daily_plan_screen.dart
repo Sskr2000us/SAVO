@@ -154,6 +154,44 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
     return '$y-$m-$d';
   }
 
+  Future<void> _deleteTodayPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove plan'),
+        content: const Text('Remove the saved daily plan so you can generate a new one?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      // Scope to today's date when possible.
+      await apiClient.delete('/plan/latest?plan_type=daily&plan_date=${_todayIsoDate()}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Daily plan removed.')),
+      );
+      await _loadLatest();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove plan: $e')),
+      );
+    }
+  }
+
   Future<void> _generateDailyPlan() async {
     if (_generating) return;
     setState(() {
@@ -257,6 +295,13 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Daily Plan'),
+        actions: [
+          IconButton(
+            tooltip: 'Remove plan',
+            onPressed: (_latest == null || _generating) ? null : _deleteTodayPlan,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
       ),
       body: Column(
         children: [
