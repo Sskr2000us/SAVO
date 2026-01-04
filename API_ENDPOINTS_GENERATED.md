@@ -1,0 +1,101 @@
+# API Endpoints (Generated)
+
+Generated from FastAPI route files at 2026-01-04 03:15:03Z.
+
+- Source of truth: services/api/app/api/router.py + services/api/app/api/routes/*.py
+- Note: This is static parsing (best-effort); confirm behavior in the app where needed.
+
+## Endpoints
+
+| Method | Path | Auth | Source |
+| --- | --- | --- | --- |
+| GET | /admin/market/feature-flags | auth | services/api/app/api/routes/market.py:admin_router |
+| PUT | /admin/market/feature-flags | auth | services/api/app/api/routes/market.py:admin_router |
+| GET | /admin/market/retailers | auth | services/api/app/api/routes/market.py:admin_router |
+| PUT | /admin/market/retailers | auth | services/api/app/api/routes/market.py:admin_router |
+| POST | /api/scanning/analyze-image | auth | services/api/app/api/routes/scanning.py:router |
+| POST | /api/scanning/check-sufficiency | auth | services/api/app/api/routes/scanning.py:router |
+| POST | /api/scanning/confirm-ingredients | auth | services/api/app/api/routes/scanning.py:router |
+| POST | /api/scanning/feedback | auth | services/api/app/api/routes/scanning.py:router |
+| GET | /api/scanning/history | auth | services/api/app/api/routes/scanning.py:router |
+| POST | /api/scanning/manual | auth | services/api/app/api/routes/scanning.py:router |
+| GET | /api/scanning/pantry | auth | services/api/app/api/routes/scanning.py:router |
+| DELETE | /api/scanning/pantry/{ingredient_name} | auth | services/api/app/api/routes/scanning.py:router |
+| GET | /config | public | services/api/app/api/routes/config.py:router |
+| PUT | /config | public | services/api/app/api/routes/config.py:router |
+| GET | /cuisines | public | services/api/app/api/routes/cuisines.py:router |
+| GET | /debug/profile-check | auth | services/api/app/api/routes/debug.py:router |
+| POST | /history/recipes | public | services/api/app/api/routes/history.py:router |
+| POST | /image | public | services/api/app/api/routes/recipes.py:router |
+| GET | /image/{recipe_name} | public | services/api/app/api/routes/recipes.py:router |
+| POST | /import | auth | services/api/app/api/routes/recipes.py:router |
+| POST | /import/image | auth | services/api/app/api/routes/recipes.py:router |
+| GET | /inventory-db/alerts/expiring | auth | services/api/app/api/routes/inventory_db.py:router |
+| GET | /inventory-db/alerts/low-stock | auth | services/api/app/api/routes/inventory_db.py:router |
+| POST | /inventory-db/deduct | auth | services/api/app/api/routes/inventory_db.py:router |
+| GET | /inventory-db/items | auth | services/api/app/api/routes/inventory_db.py:router |
+| POST | /inventory-db/items | auth | services/api/app/api/routes/inventory_db.py:router |
+| DELETE | /inventory-db/items/{item_id} | auth | services/api/app/api/routes/inventory_db.py:router |
+| PATCH | /inventory-db/items/{item_id} | auth | services/api/app/api/routes/inventory_db.py:router |
+| POST | /inventory-db/manual-adjustment | auth | services/api/app/api/routes/inventory_db.py:router |
+| GET | /inventory-db/summary | auth | services/api/app/api/routes/inventory_db.py:router |
+| POST | /inventory/normalize | public | services/api/app/api/routes/inventory.py:router |
+| POST | /inventory/scan | public | services/api/app/api/routes/inventory.py:router |
+| DELETE | /inventory/{inventory_id} | public | services/api/app/api/routes/inventory.py:router |
+| GET | /inventory/{inventory_id} | public | services/api/app/api/routes/inventory.py:router |
+| PUT | /inventory/{inventory_id} | public | services/api/app/api/routes/inventory.py:router |
+| GET | /market/config | auth | services/api/app/api/routes/market.py:router |
+| POST | /nutrition/badges | public | services/api/app/api/routes/nutrition.py:router |
+| POST | /nutrition/evaluate | public | services/api/app/api/routes/nutrition.py:router |
+| GET | /nutrition/focus-options | public | services/api/app/api/routes/nutrition.py:router |
+| GET | /nutrition/health-conditions | public | services/api/app/api/routes/nutrition.py:router |
+| POST | /plan/daily | auth | services/api/app/api/routes/planning.py:router |
+| POST | /plan/party | public | services/api/app/api/routes/planning.py:router |
+| POST | /plan/recipes/combination | public | services/api/app/api/routes/planning.py:router |
+| POST | /plan/recipes/full-course | public | services/api/app/api/routes/planning.py:router |
+| POST | /plan/weekly | public | services/api/app/api/routes/planning.py:router |
+| PATCH | /profile/allergens | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/audit | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/complete | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/dietary | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/family-members | auth | services/api/app/api/routes/profile.py:router |
+| POST | /profile/family-members | auth | services/api/app/api/routes/profile.py:router |
+| DELETE | /profile/family-members/{member_id} | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/family-members/{member_id} | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/full | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/household | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/household | auth | services/api/app/api/routes/profile.py:router |
+| POST | /profile/household | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/language | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/onboarding-status | auth | services/api/app/api/routes/profile.py:router |
+| PATCH | /profile/preferences | auth | services/api/app/api/routes/profile.py:router |
+| GET | /profile/session/info | auth | services/api/app/api/routes/profile.py:router |
+| POST | /profile/session/track | auth | services/api/app/api/routes/profile.py:router |
+| GET | /r/{share_id} | public | services/api/app/api/routes/recipes.py:public_router |
+| POST | /recipes/image | public | services/api/app/api/routes/recipes.py:router |
+| GET | /recipes/image/{recipe_name} | public | services/api/app/api/routes/recipes.py:router |
+| POST | /recipes/import | auth | services/api/app/api/routes/recipes.py:router |
+| POST | /recipes/import/image | auth | services/api/app/api/routes/recipes.py:router |
+| GET | /recipes/r/{share_id} | public | services/api/app/api/routes/recipes.py:public_router |
+| POST | /recipes/share | auth | services/api/app/api/routes/recipes.py:router |
+| DELETE | /recipes/shared/{share_id} | auth | services/api/app/api/routes/recipes.py:router |
+| GET | /recipes/shared/{share_id} | public | services/api/app/api/routes/recipes.py:router |
+| GET | /security/dashboard | auth | services/api/app/api/routes/security.py:router |
+| GET | /security/events | auth | services/api/app/api/routes/security.py:router |
+| POST | /security/events/{event_id}/resolve | auth | services/api/app/api/routes/security.py:router |
+| GET | /security/sessions | auth | services/api/app/api/routes/security.py:router |
+| POST | /security/sessions/revoke | auth | services/api/app/api/routes/security.py:router |
+| POST | /security/sessions/revoke-others | auth | services/api/app/api/routes/security.py:router |
+| POST | /security/track-login | auth | services/api/app/api/routes/security.py:router |
+| GET | /security/trusted-devices | auth | services/api/app/api/routes/security.py:router |
+| POST | /security/trusted-devices | auth | services/api/app/api/routes/security.py:router |
+| DELETE | /security/trusted-devices/{device_id} | auth | services/api/app/api/routes/security.py:router |
+| POST | /share | auth | services/api/app/api/routes/recipes.py:router |
+| DELETE | /shared/{share_id} | auth | services/api/app/api/routes/recipes.py:router |
+| GET | /shared/{share_id} | public | services/api/app/api/routes/recipes.py:router |
+| GET | /training/stats | public | services/api/app/api/routes/training.py:router |
+| POST | /training/submit | public | services/api/app/api/routes/training.py:router |
+| POST | /training/upload-image | public | services/api/app/api/routes/training.py:router |
+| POST | /youtube/rank | public | services/api/app/api/routes/youtube.py:router |
+| POST | /youtube/search | public | services/api/app/api/routes/youtube_search.py:router |
+| POST | /youtube/summary | public | services/api/app/api/routes/youtube.py:router |

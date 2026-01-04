@@ -384,19 +384,19 @@ async def revoke_shared_recipe(
 async def shared_recipe_page(share_id: str):
     """Simple shareable recipe page (public HTML)."""
 
-        try:
-                data = await get_shared_recipe(share_id)
-                recipe = data.get("recipe") or {}
-        except HTTPException as e:
-                title = "Shared Recipe"
-                if e.status_code == 410:
-                        message = "This shared recipe link has expired."
-                elif e.status_code == 404:
-                        message = "This shared recipe link was not found."
-                else:
-                        message = "Could not load this shared recipe."
+    try:
+        data = await get_shared_recipe(share_id)
+        recipe = data.get("recipe") or {}
+    except HTTPException as e:
+        title = "Shared Recipe"
+        if e.status_code == 410:
+            message = "This shared recipe link has expired."
+        elif e.status_code == 404:
+            message = "This shared recipe link was not found."
+        else:
+            message = "Could not load this shared recipe."
 
-                body = f"""<!doctype html>
+        body = f"""<!doctype html>
 <html lang=\"en\">
 <head>
     <meta charset=\"utf-8\" />
@@ -419,7 +419,8 @@ async def shared_recipe_page(share_id: str):
     </div>
 </body>
 </html>"""
-                return HTMLResponse(content=body, status_code=e.status_code)
+
+    return HTMLResponse(content=body, status_code=e.status_code)
 
     def esc(v: Any) -> str:
         return _html.escape(str(v or ""))
