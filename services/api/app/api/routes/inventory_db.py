@@ -16,7 +16,9 @@ from app.core.database import (
     delete_inventory_item,
     get_low_stock_items,
     get_expiring_items,
-    deduct_inventory_for_recipe
+    deduct_inventory_for_recipe,
+    activate_inventory_items_for_location,
+    activate_inventory_items_for_scan_set,
 )
 from app.middleware.auth import get_current_user
 
@@ -91,6 +93,15 @@ class InventoryDeductionRequest(BaseModel):
     """Request model for deducting inventory after recipe selection"""
     meal_plan_id: str = Field(..., description="Meal plan ID")
     ingredients: List[dict] = Field(..., description="List of {name, quantity, unit}")
+
+
+class ActivateLocationRequest(BaseModel):
+    storage_location: str = Field(..., description="pantry|fridge|freezer|counter")
+
+
+class ActivateScanSetRequest(BaseModel):
+    scan_id: str
+    mode: str = Field(default="replace", description="replace|merge")
 
 
 # ============================================================================
@@ -173,7 +184,7 @@ async def update_item(
     """
     try:
         # Verify item belongs to user
-        user_items = await get_inventory(user_id)
+        user_items = await get_inventory(user_id, include_inactive=True)
         item_ids = [i["id"] for i in user_items]
         
         if item_id not in item_ids:
@@ -216,7 +227,7 @@ async def remove_item(
     """
     try:
         # Verify item belongs to user
-        user_items = await get_inventory(user_id)
+        user_items = await get_inventory(user_id, include_inactive=True)
         item_ids = [i["id"] for i in user_items]
         
         if item_id not in item_ids:
@@ -234,6 +245,44 @@ async def remove_item(
         
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bulk/activate-location")
+async def bulk_activate_location(
+    request: ActivateLocationRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Mark all items in a storage location as current."""
+    try:
+        result = await activate_inventory_items_for_location(user_id, request.storage_location)
+        return {"success": True, **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bulk/activate-scan-set")
+async def bulk_activate_scan_set(
+    request: ActivateScanSetRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Bulk-activate a previous scan set.
+
+    - mode=replace: switches the current scan-sourced set in that location(s)
+    - mode=merge: adds this scan set without deactivating others
+    """
+    try:
+        result = await activate_inventory_items_for_scan_set(
+            user_id=user_id,
+            scan_id=request.scan_id,
+            mode=request.mode,
+        )
+        return {"success": True, **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

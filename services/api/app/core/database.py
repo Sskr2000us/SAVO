@@ -12,7 +12,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from app.core.media_storage import to_signed_url
+# NOTE: Do not import app.core.media_storage at module import time.
+# media_storage imports get_db_client from this module; importing it here creates
+# a circular import that breaks startup (e.g., on Render).
 
 
 class SupabaseDB:
@@ -268,6 +270,8 @@ async def get_inventory(
     from previous scan sets that were marked inactive.
     """
     try:
+        from app.core.media_storage import to_signed_url
+
         query = db.client.table("inventory_items").select("*").eq("user_id", user_id)
 
         if not include_inactive:
@@ -294,6 +298,8 @@ async def get_inventory_by_category(
 ) -> List[Dict[str, Any]]:
     """Get inventory items by category."""
     try:
+        from app.core.media_storage import to_signed_url
+
         query = (
             db.client.table("inventory_items")
             .select("*")
@@ -318,6 +324,8 @@ async def get_inventory_by_category(
 async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[str, Any]:
     """Add new inventory item"""
     try:
+        from app.core.media_storage import to_signed_url
+
         item_data["user_id"] = user_id
         
         # Set default low stock threshold if not provided
@@ -337,6 +345,8 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
 async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update existing inventory item"""
     try:
+        from app.core.media_storage import to_signed_url
+
         result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
         updated = result.data[0] if result.data else None
         if isinstance(updated, dict) and updated.get("image_url"):
@@ -353,6 +363,97 @@ async def delete_inventory_item(item_id: str) -> None:
         db.client.table("inventory_items").delete().eq("id", item_id).execute()
     except APIError as e:
         logger.error(f"Error deleting inventory item: {e}")
+        raise
+
+
+async def activate_inventory_items_for_location(
+    user_id: str,
+    storage_location: str,
+) -> Dict[str, Any]:
+    """Mark all items in a storage location as current.
+
+    This is a bulk convenience action for users who want to use everything in a
+    given location for planning.
+    """
+    try:
+        result = (
+            db.client.table("inventory_items")
+            .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
+            .eq("user_id", user_id)
+            .eq("storage_location", storage_location)
+            .execute()
+        )
+        return {"updated_count": len(result.data or []), "storage_location": storage_location}
+    except APIError as e:
+        logger.error(f"Error bulk-activating inventory for location: {e}")
+        raise
+
+
+async def activate_inventory_items_for_scan_set(
+    user_id: str,
+    scan_id: str,
+    mode: str = "replace",
+) -> Dict[str, Any]:
+    """Bulk-activate items belonging to a previous scan set.
+
+    Modes:
+    - replace: activates this scan set and deactivates other scan-sourced items
+      in the same storage location(s) (keeps manual items unchanged).
+    - merge: activates this scan set without deactivating anything else.
+    """
+    if mode not in {"replace", "merge"}:
+        raise ValueError("mode must be 'replace' or 'merge'")
+
+    try:
+        # Find which storage locations this scan set touches.
+        scan_items_result = (
+            db.client.table("inventory_items")
+            .select("storage_location")
+            .eq("user_id", user_id)
+            .eq("last_seen_scan_id", scan_id)
+            .execute()
+        )
+        scan_items = scan_items_result.data or []
+        storage_locations = sorted(
+            {
+                item.get("storage_location")
+                for item in scan_items
+                if isinstance(item, dict) and item.get("storage_location")
+            }
+        )
+
+        if not storage_locations:
+            return {"updated_count": 0, "scan_id": scan_id, "mode": mode, "storage_locations": []}
+
+        if mode == "replace":
+            # Deactivate other scan-sourced items in the same location(s).
+            (
+                db.client.table("inventory_items")
+                .update({"is_current": False})
+                .eq("user_id", user_id)
+                .eq("source", "scan")
+                .in_("storage_location", storage_locations)
+                .neq("last_seen_scan_id", scan_id)
+                .execute()
+            )
+
+        # Activate items from this scan set.
+        activated = (
+            db.client.table("inventory_items")
+            .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
+            .eq("user_id", user_id)
+            .eq("last_seen_scan_id", scan_id)
+            .execute()
+        )
+
+        return {
+            "updated_count": len(activated.data or []),
+            "scan_id": scan_id,
+            "mode": mode,
+            "storage_locations": storage_locations,
+        }
+    except APIError as e:
+        logger.error(f"Error bulk-activating inventory for scan set: {e}")
         raise
 
 
