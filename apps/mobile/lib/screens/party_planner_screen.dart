@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../models/planning.dart';
+import '../models/cuisine.dart';
 import 'planning_results_screen.dart';
 
 class PartyPlannerScreen extends StatefulWidget {
@@ -19,6 +20,15 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
   int _adult18Plus = 10;
   bool _planning = false;
 
+  List<Cuisine> _cuisines = const [];
+  bool _loadingCuisines = true;
+  String _selectedCuisine = 'auto';
+
+  int _countAppetizers = 2;
+  int _countMains = 2;
+  int _countSides = 2;
+  int _countDesserts = 1;
+
   static const Map<String, String> _planningGoalLabels = {
     'balanced': 'Balanced',
     'fastest': 'Fastest',
@@ -33,6 +43,36 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
   bool _useLeftovers = true;
 
   String? _validationError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCuisines();
+  }
+
+  Future<void> _loadCuisines() async {
+    setState(() => _loadingCuisines = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final response = await apiClient.get('/cuisines');
+      if (!mounted) return;
+
+      if (response is List) {
+        setState(() {
+          _cuisines = response
+              .whereType<Map>()
+              .map((m) => Cuisine.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+          _loadingCuisines = false;
+        });
+        return;
+      }
+    } catch (_) {
+      // ignore
+    }
+    if (!mounted) return;
+    setState(() => _loadingCuisines = false);
+  }
 
   void _validateAgeGroups() {
     final sum = _child0To12 + _teen13To17 + _adult18Plus;
@@ -72,6 +112,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
         final profileState = Provider.of<ProfileState>(context, listen: false);
       final body = <String, dynamic>{
+        'selected_cuisine': _selectedCuisine,
         'party_settings': {
           'guest_count': _guestCount,
           'age_group_counts': {
@@ -79,6 +120,12 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
             'teen_13_17': _teen13To17,
             'adult_18_plus': _adult18Plus,
           },
+        },
+        'party_course_counts': {
+          'appetizers': _countAppetizers,
+          'mains': _countMains,
+          'sides': _countSides,
+          'desserts': _countDesserts,
         },
       };
 
@@ -151,11 +198,82 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
       appBar: AppBar(
         title: const Text('Party Planner'),
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cuisine',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    _loadingCuisines
+                        ? const LinearProgressIndicator()
+                        : DropdownButtonFormField<String>(
+                            value: _selectedCuisine,
+                            decoration: const InputDecoration(
+                              labelText: 'Cuisine type',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: [
+                              const DropdownMenuItem(
+                                value: 'auto',
+                                child: Text('Auto'),
+                              ),
+                              ..._cuisines
+                                  .where((c) => c.partyEnabled)
+                                  .map(
+                                    (c) => DropdownMenuItem<String>(
+                                      value: c.cuisineId,
+                                      child: Text(c.name),
+                                    ),
+                                  ),
+                            ],
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedCuisine = value);
+                            },
+                          ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Courses',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    _CourseCountStepper(
+                      label: 'Appetizers',
+                      value: _countAppetizers,
+                      onChanged: (v) => setState(() => _countAppetizers = v),
+                    ),
+                    const SizedBox(height: 8),
+                    _CourseCountStepper(
+                      label: 'Mains',
+                      value: _countMains,
+                      onChanged: (v) => setState(() => _countMains = v),
+                    ),
+                    const SizedBox(height: 8),
+                    _CourseCountStepper(
+                      label: 'Sides',
+                      value: _countSides,
+                      onChanged: (v) => setState(() => _countSides = v),
+                    ),
+                    const SizedBox(height: 8),
+                    _CourseCountStepper(
+                      label: 'Desserts',
+                      value: _countDesserts,
+                      onChanged: (v) => setState(() => _countDesserts = v),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -334,7 +452,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                   ),
                 ),
               ),
-            const Spacer(),
+            const SizedBox(height: 16),
             FilledButton(
               onPressed: (_planning || _validationError != null) ? null : _planParty,
               child: _planning
@@ -351,6 +469,43 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CourseCountStepper extends StatelessWidget {
+  final String label;
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _CourseCountStepper({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: Text(label)),
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline),
+          onPressed: value > 0 ? () => onChanged(value - 1) : null,
+        ),
+        Container(
+          width: 40,
+          alignment: Alignment.center,
+          child: Text(
+            '$value',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add_circle_outline),
+          onPressed: value < 6 ? () => onChanged(value + 1) : null,
+        ),
+      ],
     );
   }
 }

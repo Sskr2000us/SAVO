@@ -45,6 +45,21 @@ class PartySettings(BaseModel):
         return self
 
 
+class PartyCourseCounts(BaseModel):
+    """How many distinct dishes to generate per party course category."""
+    appetizers: int = Field(default=2, ge=0, le=6)
+    mains: int = Field(default=2, ge=0, le=6)
+    sides: int = Field(default=2, ge=0, le=6)
+    desserts: int = Field(default=1, ge=0, le=6)
+
+    @model_validator(mode='after')
+    def validate_at_least_one_course(self) -> 'PartyCourseCounts':
+        total = self.appetizers + self.mains + self.sides + self.desserts
+        if total <= 0:
+            raise ValueError("At least one course item must be requested")
+        return self
+
+
 class SessionRequest(BaseModel):
     """Base session request fields common to all planning types"""
     selected_cuisine: Optional[str] = Field(None, description="Cuisine selection, 'auto' for automatic")
@@ -136,6 +151,10 @@ class DailyPlanRequest(SessionRequest):
 class PartyPlanRequest(SessionRequest):
     """Request for party meal planning with age-aware constraints"""
     party_settings: PartySettings = Field(..., description="Party settings including guest count and age distribution")
+    party_course_counts: Optional[PartyCourseCounts] = Field(
+        None,
+        description="Optional counts for how many distinct dishes to generate per course category",
+    )
 
 
 class WeeklyPlanRequest(SessionRequest):

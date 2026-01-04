@@ -1023,7 +1023,10 @@ def _is_dinner_time(time_str: str, meal_times: dict) -> bool:
 
 
 @router.post("/party", response_model=MenuPlanResponse)
-async def post_party(req: PartyPlanRequest):
+async def post_party(
+    req: PartyPlanRequest,
+    user_id: str = Depends(get_current_user),
+):
     """Generate party meal plan with age-aware constraints"""
     # Validate party settings (Pydantic already validated, but double-check)
     if req.party_settings.guest_count < 2 or req.party_settings.guest_count > 80:
@@ -1032,12 +1035,28 @@ async def post_party(req: PartyPlanRequest):
             detail="guest_count must be between 2 and 80"
         )
     
+    # Pull DB-backed inventory/history so party planning gets variety + inventory-first behavior.
+    try:
+        db_inventory = await get_inventory(user_id)
+    except Exception:
+        db_inventory = []
+    try:
+        db_history = await get_recipe_history(user_id, limit=50)
+    except Exception:
+        db_history = []
+
+    inventory_models = _db_inventory_to_models(db_inventory)
+
     context = _build_planning_context(
         req,
         "party",
-        party_settings=req.party_settings
+        party_settings=req.party_settings,
+        inventory_override=inventory_models,
+        history_override=db_history,
     )
     context["party_settings"] = req.party_settings.model_dump()
+    if getattr(req, "party_course_counts", None) is not None:
+        context["party_course_counts"] = req.party_course_counts.model_dump()
     
     result = await plan_party(context)
     return MenuPlanResponse(**result)
