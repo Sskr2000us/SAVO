@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,10 +18,30 @@ class ApiClient {
     // return 'http://localhost:8000';
   }
 
+  Future<String?> _getAccessToken() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    final existing = session?.accessToken;
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    // Best-effort: if the session hasn't been restored yet (common on web reload)
+    // or the token expired, try a refresh.
+    try {
+      final res = await Supabase.instance.client.auth.refreshSession();
+      final refreshed = res.session?.accessToken;
+      if (refreshed != null && refreshed.isNotEmpty) return refreshed;
+    } catch (_) {
+      // Ignore; caller will proceed unauthenticated.
+    }
+
+    final after = Supabase.instance.client.auth.currentSession?.accessToken;
+    if (after != null && after.isNotEmpty) return after;
+    return null;
+  }
+
   /// Get authentication headers with Bearer token
-  Map<String, String> _getAuthHeaders() {
-    final token = Supabase.instance.client.auth.currentSession?.accessToken;
-    if (token != null) {
+  Future<Map<String, String>> _getAuthHeaders() async {
+    final token = await _getAccessToken();
+    if (token != null && token.isNotEmpty) {
       return {'Authorization': 'Bearer $token'};
     }
     return {};
@@ -30,19 +49,15 @@ class ApiClient {
 
   /// Public method to get headers with auth (for external services)
   Future<Map<String, String>> getHeaders() async {
-    final token = Supabase.instance.client.auth.currentSession?.accessToken;
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
-    if (token != null && token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    final auth = await _getAuthHeaders();
+    headers.addAll(auth);
     return headers;
   }
 
   /// Merge custom headers with auth headers
-  Map<String, String> _mergeHeaders(Map<String, String>? customHeaders) {
-    final headers = _getAuthHeaders();
+  Future<Map<String, String>> _mergeHeaders(Map<String, String>? customHeaders) async {
+    final headers = await _getAuthHeaders();
     if (customHeaders != null) {
       headers.addAll(customHeaders);
     }
@@ -50,9 +65,10 @@ class ApiClient {
   }
 
   Future<dynamic> get(String endpoint, {Map<String, String>? headers}) async {
+    final merged = await _mergeHeaders(headers);
     final response = await http.get(
       Uri.parse('$baseUrl$endpoint'),
-      headers: _mergeHeaders(headers),
+      headers: merged,
     ).timeout(
       const Duration(seconds: 30),
       onTimeout: () => throw Exception('Request timed out. Please check your connection and try again.'),
@@ -77,7 +93,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> post(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    allHeaders.addAll(_mergeHeaders(headers));
+    allHeaders.addAll(await _mergeHeaders(headers));
     
     // LLM requests (planning endpoints) need longer timeout
     final timeout = endpoint.contains('/plan/') ? 120 : 30;
@@ -138,7 +154,7 @@ class ApiClient {
     final request = http.MultipartRequest('POST', uri);
 
     // Add auth headers
-    request.headers.addAll(_getAuthHeaders());
+    request.headers.addAll(await _getAuthHeaders());
     
     request.fields.addAll(fields);
 
@@ -181,7 +197,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    allHeaders.addAll(_mergeHeaders(headers));
+    allHeaders.addAll(await _mergeHeaders(headers));
     
     final response = await http.put(
       Uri.parse('$baseUrl$endpoint'),
@@ -197,7 +213,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> patch(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
-    allHeaders.addAll(_mergeHeaders(headers));
+    allHeaders.addAll(await _mergeHeaders(headers));
     
     final response = await http.patch(
       Uri.parse('$baseUrl$endpoint'),
@@ -212,9 +228,10 @@ class ApiClient {
   }
 
   Future<void> delete(String endpoint, {Map<String, String>? headers}) async {
+    final merged = await _mergeHeaders(headers);
     final response = await http.delete(
       Uri.parse('$baseUrl$endpoint'),
-      headers: _mergeHeaders(headers),
+      headers: merged,
     );
     if (response.statusCode != 204 && response.statusCode != 200) {
       throw Exception('Failed to delete data: ${response.statusCode}');

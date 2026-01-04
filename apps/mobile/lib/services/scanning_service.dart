@@ -14,8 +14,22 @@ class ScanningService {
   );
 
   Future<String?> _getAccessToken() async {
-    final token = Supabase.instance.client.auth.currentSession?.accessToken;
-    if (token != null && token.isNotEmpty) return token;
+    final session = Supabase.instance.client.auth.currentSession;
+    final existing = session?.accessToken;
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    // Best-effort: if the session hasn't been restored yet (common on web reload)
+    // or the token expired, try a refresh.
+    try {
+      final res = await Supabase.instance.client.auth.refreshSession();
+      final refreshed = res.session?.accessToken;
+      if (refreshed != null && refreshed.isNotEmpty) return refreshed;
+    } catch (_) {
+      // Ignore; will fall back to legacy token or unauthenticated.
+    }
+
+    final after = Supabase.instance.client.auth.currentSession?.accessToken;
+    if (after != null && after.isNotEmpty) return after;
 
     // Legacy fallback: some older flows stored tokens manually.
     final prefs = await SharedPreferences.getInstance();
