@@ -97,6 +97,9 @@ class Recipe {
   final Map<String, dynamic> nutritionPerServing;
   final List<Map<String, String>>? healthBenefits;
   final Map<String, dynamic> leftoverForecast;
+  final List<String> chefTips;
+  final Map<String, dynamic>? culturalContext;
+  final Map<String, dynamic>? dietaryInformation;
   final List<RankedVideo> youtubeReferences;
 
   Recipe({
@@ -111,6 +114,9 @@ class Recipe {
     required this.nutritionPerServing,
     this.healthBenefits,
     required this.leftoverForecast,
+    this.chefTips = const [],
+    this.culturalContext,
+    this.dietaryInformation,
     this.youtubeReferences = const [],
   });
 
@@ -137,6 +143,27 @@ class Recipe {
       refs.removeWhere((r) => r.videoId.trim().isEmpty);
     }
 
+    final tips = <String>[];
+    final rawTips = json['chef_tips'];
+    if (rawTips is List) {
+      for (final t in rawTips) {
+        final s = t.toString().trim();
+        if (s.isNotEmpty) tips.add(s);
+      }
+    }
+
+    Map<String, dynamic>? cultural;
+    final rawCultural = json['cultural_context'];
+    if (rawCultural is Map) {
+      cultural = Map<String, dynamic>.from(rawCultural);
+    }
+
+    Map<String, dynamic>? dietary;
+    final rawDietary = json['dietary_information'];
+    if (rawDietary is Map) {
+      dietary = Map<String, dynamic>.from(rawDietary);
+    }
+
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
       recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
@@ -157,6 +184,9 @@ class Recipe {
               ?.map((b) => Map<String, String>.from(b as Map))
               .toList(),
       leftoverForecast: json['leftover_forecast'] ?? {},
+      chefTips: tips,
+      culturalContext: cultural,
+      dietaryInformation: dietary,
       youtubeReferences: refs,
     );
   }
@@ -189,6 +219,9 @@ class Recipe {
       'nutrition_per_serving': nutritionPerServing,
       if (healthBenefits != null) 'health_benefits': healthBenefits,
       'leftover_forecast': leftoverForecast,
+      if (chefTips.isNotEmpty) 'chef_tips': chefTips,
+      if (culturalContext != null) 'cultural_context': culturalContext,
+      if (dietaryInformation != null) 'dietary_information': dietaryInformation,
       'youtube_references': youtubeReferences.map((r) => r.toJson()).toList(),
     };
   }

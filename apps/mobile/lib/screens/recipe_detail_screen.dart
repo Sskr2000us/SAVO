@@ -237,12 +237,16 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     buffer.writeln('');
 
     buffer.writeln('### Ingredients');
-    for (final ing in recipe.ingredientsUsed) {
-      final name = _titleCaseWords(ing.canonicalName);
-      final unit = ing.unit.trim();
-      final amount = _formatAmount(ing.amount * scalingFactor);
-      final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
-      buffer.writeln('- **$name:** $qty');
+    if (recipe.ingredientsUsed.isEmpty) {
+      buffer.writeln('- (No ingredient data)');
+    } else {
+      for (final ing in recipe.ingredientsUsed) {
+        final name = _titleCaseWords(ing.canonicalName.trim().isEmpty ? 'Ingredient' : ing.canonicalName);
+        final unit = ing.unit.trim();
+        final amount = _formatAmount(ing.amount * scalingFactor);
+        final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
+        buffer.writeln('- **$name:** $qty');
+      }
     }
     buffer.writeln('');
 
@@ -266,12 +270,46 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     if (recipe.nutritionPerServing.isNotEmpty) {
       buffer.writeln('### Nutrition (Per Serving)');
-      final keys = recipe.nutritionPerServing.keys.toList()..sort();
-      for (final key in keys) {
-        final value = recipe.nutritionPerServing[key];
+
+      // Newer schema shape: calories_kcal + macros + micros.
+      final n = recipe.nutritionPerServing;
+      final calories = n['calories_kcal'];
+      if (calories != null) {
+        buffer.writeln('- **Calories Kcal:** $calories');
+      }
+
+      final macros = n['macros'];
+      if (macros is Map) {
+        final mm = Map<String, dynamic>.from(macros);
+        if (mm['protein_g'] != null) buffer.writeln('- **Protein G:** ${mm['protein_g']}');
+        if (mm['carbs_g'] != null) buffer.writeln('- **Carbohydrates G:** ${mm['carbs_g']}');
+        if (mm['fat_g'] != null) buffer.writeln('- **Fat G:** ${mm['fat_g']}');
+      }
+
+      final micros = n['micros'];
+      if (micros is Map) {
+        final mi = Map<String, dynamic>.from(micros);
+        final keys = mi.keys.map((k) => k.toString()).toList()..sort();
+        for (final key in keys) {
+          final value = mi[key];
+          if (value == null) continue;
+          buffer.writeln('- **${_prettyNutritionKey(key)}:** $value');
+        }
+      }
+
+      // Backward compatibility: if the server returned a flat map (older recipes), print remaining keys.
+      final knownKeys = <String>{'calories_kcal', 'macros', 'micros'};
+      final flatKeys = n.keys
+          .map((k) => k.toString())
+          .where((k) => !knownKeys.contains(k))
+          .toList()
+        ..sort();
+      for (final key in flatKeys) {
+        final value = n[key];
         if (value == null) continue;
         buffer.writeln('- **${_prettyNutritionKey(key)}:** $value');
       }
+
       buffer.writeln('');
     }
 
@@ -291,10 +329,18 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     }
 
     final tips = <String>{};
-    for (final s in recipe.steps) {
-      for (final tip in s.tips) {
-        final cleaned = tip.trim();
-        if (cleaned.isNotEmpty) tips.add(cleaned);
+    // Prefer explicit chef_tips (new schema) if present.
+    for (final tip in recipe.chefTips) {
+      final cleaned = tip.trim();
+      if (cleaned.isNotEmpty) tips.add(cleaned);
+    }
+    // Fallback: aggregate per-step tips.
+    if (tips.isEmpty) {
+      for (final s in recipe.steps) {
+        for (final tip in s.tips) {
+          final cleaned = tip.trim();
+          if (cleaned.isNotEmpty) tips.add(cleaned);
+        }
       }
     }
     if (tips.isNotEmpty) {
@@ -305,6 +351,39 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       }
       buffer.writeln('');
     }
+
+    // Optional: Cultural Context
+    final cc = recipe.culturalContext;
+    if (cc != null && cc.isNotEmpty) {
+      buffer.writeln('### Cultural Context');
+      final origin = (cc['origin'] ?? '').toString().trim();
+      final occasions = (cc['occasions'] ?? '').toString().trim();
+      final serving = (cc['serving'] ?? '').toString().trim();
+      if (origin.isNotEmpty) buffer.writeln('- **Origin:** $origin');
+      if (occasions.isNotEmpty) buffer.writeln('- **Occasions:** $occasions');
+      if (serving.isNotEmpty) buffer.writeln('- **Serving:** $serving');
+      buffer.writeln('');
+    }
+
+    // Optional: Dietary Information
+    final di = recipe.dietaryInformation;
+    if (di != null && di.isNotEmpty) {
+      buffer.writeln('### Dietary Information');
+      if (di['vegetarian'] != null) buffer.writeln('- **Vegetarian:** ${di['vegetarian'] == true ? 'Yes' : 'No'}');
+      if (di['vegan'] != null) buffer.writeln('- **Vegan:** ${di['vegan'] == true ? 'Yes' : 'No'}');
+      if (di['gluten_free'] != null) buffer.writeln('- **Gluten-Free:** ${di['gluten_free'] == true ? 'Yes' : 'No'}');
+      final allergens = di['allergens'];
+      if (allergens is List && allergens.isNotEmpty) {
+        buffer.writeln('- **Allergens:** ${allergens.map((e) => e.toString()).join(', ')}');
+      }
+      final rel = di['religious_compatibility'];
+      if (rel is List && rel.isNotEmpty) {
+        buffer.writeln('- **Religious Compatibility:** ${rel.map((e) => e.toString()).join(', ')}');
+      }
+      buffer.writeln('');
+    }
+
+    buffer.writeln('================================================================================');
 
     return buffer.toString();
   }

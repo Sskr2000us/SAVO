@@ -471,6 +471,10 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   }
 
   Widget _buildCourseSection(Course course, {required int servings}) {
+    final recipeOptions = (widget.planType == 'party')
+        ? (course.recipeOptions.isNotEmpty ? [course.recipeOptions.first] : <Recipe>[])
+        : course.recipeOptions;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -487,9 +491,9 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
           height: 180,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
-            itemCount: course.recipeOptions.length,
+            itemCount: recipeOptions.length,
             itemBuilder: (context, index) {
-              final recipe = course.recipeOptions[index];
+              final recipe = recipeOptions[index];
               return _RecipeCard(recipe: recipe, baseServings: servings);
             },
           ),

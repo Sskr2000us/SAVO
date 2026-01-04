@@ -644,6 +644,23 @@ def _build_planning_context(
         "now_utc": datetime.utcnow().isoformat(),
         **orch_context
     }
+
+    # Prompt-pack compatibility aliases.
+    # The prompt instructions refer to UPPERCASE bindings like SESSION_REQUEST and INVENTORY.
+    # Our context JSON is lower_snake_case; provide aliases so the model reliably finds inputs.
+    try:
+        context["APP_CONFIGURATION"] = context.get("app_configuration")
+        context["SESSION_REQUEST"] = context.get("session_request")
+        context["INVENTORY"] = context.get("inventory")
+        context["CUISINE_METADATA"] = context.get("cuisine_metadata")
+        context["HISTORY_CONTEXT"] = context.get("history_context")
+        context["OUTPUT_LANGUAGE"] = context.get("output_language")
+        context["MEASUREMENT_SYSTEM"] = context.get("measurement_system")
+        context["NOW_UTC"] = context.get("now_utc")
+        if "feature_flags" in context:
+            context["FEATURE_FLAGS"] = context.get("feature_flags")
+    except Exception:
+        pass
     
     return context
 
@@ -1055,6 +1072,10 @@ async def post_party(
         history_override=db_history,
     )
     context["party_settings"] = req.party_settings.model_dump()
+    try:
+        context["PARTY_SETTINGS"] = context.get("party_settings")
+    except Exception:
+        pass
     if getattr(req, "party_course_counts", None) is not None:
         context["party_course_counts"] = req.party_course_counts.model_dump()
     

@@ -326,6 +326,32 @@
                               },
                               "additionalProperties": false
                             },
+                            "chef_tips": {
+                              "type": "array",
+                              "items": { "type": "string" }
+                            },
+                            "cultural_context": {
+                              "type": "object",
+                              "required": ["origin", "occasions", "serving"],
+                              "properties": {
+                                "origin": { "type": "string" },
+                                "occasions": { "type": "string" },
+                                "serving": { "type": "string" }
+                              },
+                              "additionalProperties": false
+                            },
+                            "dietary_information": {
+                              "type": "object",
+                              "required": ["vegetarian", "vegan", "gluten_free", "allergens", "religious_compatibility"],
+                              "properties": {
+                                "vegetarian": { "type": "boolean" },
+                                "vegan": { "type": "boolean" },
+                                "gluten_free": { "type": "boolean" },
+                                "allergens": { "type": "array", "items": { "type": "string" } },
+                                "religious_compatibility": { "type": "array", "items": { "type": "string" } }
+                              },
+                              "additionalProperties": false
+                            },
                             "youtube_references": {
                               "type": "array",
                               "items": {
@@ -540,7 +566,8 @@
             "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST include at least one recipe option that repurposes those leftovers (or explicitly schedules a leftovers meal) and do it as early as appropriate, especially if freshness_days_remaining is low.",
             "Derive menu_headers strictly from CUISINE_METADATA[selected_cuisine].daily_structure.",
             "For each course header, generate 2–3 recipe_options using available ingredients.",
-            "Include quantities, steps, nutrition, health_fit, leftovers forecast, preservation guidance, and YouTube references.",
+            "Include quantities, steps, nutrition, health_benefits, health_fit, leftovers forecast, preservation guidance, and YouTube references.",
+            "Also include chef_tips (5-8 bullets), cultural_context {origin, occasions, serving}, and dietary_information {vegetarian, vegan, gluten_free, allergens, religious_compatibility}.",
             "Apply variety rules: avoid repeating recently cooked recipes and cuisines within the repetition window.",
             "If constraints make this impossible, return status=needs_clarification with questions."
           ]
@@ -575,6 +602,8 @@
             "If teen_13_17 > 0, slightly more adventurous options allowed but still moderate spice/texture.",
             "If all adult_18_plus, no age restrictions apply.",
             "Include waste reduction plan and leftover reuse plan tailored to party leftovers."
+            ,
+            "For each dish, also include chef_tips (5-8 bullets), cultural_context {origin, occasions, serving}, and dietary_information {vegetarian, vegan, gluten_free, allergens, religious_compatibility}."
           ]
         },
         {
@@ -613,6 +642,8 @@
             "  - Rotate cuisines and cooking methods for variety",
             "  - Prefer expiring ingredients in earlier days",
             "Include shopping_suggestions aggregated across all days for efficient grocery planning."
+            ,
+            "For each recipe, also include chef_tips, cultural_context, and dietary_information as defined in the schema."
           ]
         },
         {
