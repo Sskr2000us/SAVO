@@ -6,6 +6,7 @@ Handles all database operations with connection pooling and error handling
 from typing import Optional, Dict, Any, List
 import os
 from datetime import datetime, date
+import re
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 import logging
@@ -60,6 +61,22 @@ db = SupabaseDB()
 def get_db_client() -> Client:
     """Get the Supabase client instance for direct database operations"""
     return db.client
+
+
+_MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
+
+
+def _extract_missing_column_name(err: Exception) -> Optional[str]:
+    text = str(err)
+    match = _MISSING_COLUMN_RE.search(text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _drop_none_values(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop None values so older schemas don't choke on optional fields."""
+    return {k: v for k, v in data.items() if v is not None}
 
 
 # ============================================================================
@@ -326,13 +343,26 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
     try:
         from app.core.media_storage import to_signed_url
 
+        item_data = dict(item_data or {})
         item_data["user_id"] = user_id
+        item_data = _drop_none_values(item_data)
         
         # Set default low stock threshold if not provided
         if "low_stock_threshold" not in item_data:
             item_data["low_stock_threshold"] = 1.0
         
-        result = db.client.table("inventory_items").insert(item_data).execute()
+        # PostgREST can fail if DB migrations haven't been applied yet or schema cache is stale.
+        # Retry by removing the missing column and re-attempting the insert.
+        for _ in range(5):
+            try:
+                result = db.client.table("inventory_items").insert(item_data).execute()
+                break
+            except APIError as e:
+                missing = _extract_missing_column_name(e)
+                if missing and missing in item_data:
+                    item_data.pop(missing, None)
+                    continue
+                raise
         created = result.data[0]
         if isinstance(created, dict) and created.get("image_url"):
             created["image_url"] = to_signed_url(created.get("image_url"))
@@ -347,7 +377,18 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
     try:
         from app.core.media_storage import to_signed_url
 
-        result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
+        item_data = _drop_none_values(dict(item_data or {}))
+
+        for _ in range(5):
+            try:
+                result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
+                break
+            except APIError as e:
+                missing = _extract_missing_column_name(e)
+                if missing and missing in item_data:
+                    item_data.pop(missing, None)
+                    continue
+                raise
         updated = result.data[0] if result.data else None
         if isinstance(updated, dict) and updated.get("image_url"):
             updated["image_url"] = to_signed_url(updated.get("image_url"))
