@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 /// Modern landing screen with hero imagery and clear CTAs
 class LandingScreen extends StatelessWidget {
@@ -6,6 +7,9 @@ class LandingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
     return Scaffold(
       body: SafeArea(
         child: CustomScrollView(
@@ -13,14 +17,15 @@ class LandingScreen extends StatelessWidget {
             // Hero section
             SliverToBoxAdapter(
               child: Container(
-                height: MediaQuery.of(context).size.height * 0.6,
+                height: MediaQuery.of(context).size.height * 0.55,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Theme.of(context).colorScheme.primary,
-                      Theme.of(context).colorScheme.secondary,
+                      cs.primary.withAlpha(36),
+                      cs.secondary.withAlpha(24),
+                      cs.surface,
                     ],
                   ),
                 ),
@@ -29,18 +34,24 @@ class LandingScreen extends StatelessWidget {
                     // Background pattern
                     Positioned.fill(
                       child: Opacity(
-                        opacity: 0.1,
-                        child: Image.network(
-                          'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=800',
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(),
+                        opacity: 0.18,
+                        child: ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            theme.scaffoldBackgroundColor.withAlpha(140),
+                            BlendMode.srcATop,
+                          ),
+                          child: Image.network(
+                            'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200',
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                          ),
                         ),
                       ),
                     ),
                     // Content
                     Center(
                       child: Padding(
-                        padding: const EdgeInsets.all(32.0),
+                        padding: const EdgeInsets.all(AppSpacing.xl),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -49,40 +60,39 @@ class LandingScreen extends StatelessWidget {
                               width: 120,
                               height: 120,
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: cs.surface,
                                 shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
+                                boxShadow: AppShadows.float,
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.restaurant_menu,
                                 size: 60,
-                                color: Color(0xFFFF6B6B),
+                                color: cs.primary,
                               ),
                             ),
-                            const SizedBox(height: 32),
-                            const Text(
-                              'Welcome to SAVO',
-                              style: TextStyle(
-                                fontSize: 40,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: -1,
+                            const SizedBox(height: AppSpacing.xl),
+                            Text(
+                              'SAVO',
+                              style: theme.textTheme.displayLarge?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.5,
                               ),
                               textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 16),
                             Text(
-                              'AI-powered meal planning for your household',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.white.withOpacity(0.9),
-                                height: 1.5,
+                              'Cook with what you have. Plan smarter. Waste less.',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: cs.onSurface.withAlpha(220),
+                                height: 1.35,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            Text(
+                              'Scan your pantry, get personalized menus, and generate a shopping list in seconds.',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: cs.onSurface.withAlpha(190),
+                                height: 1.45,
                               ),
                               textAlign: TextAlign.center,
                             ),
@@ -98,66 +108,44 @@ class LandingScreen extends StatelessWidget {
             // Features section
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(32.0),
+                padding: const EdgeInsets.all(AppSpacing.xl),
                 child: Column(
                   children: [
-                    const SizedBox(height: 24),
+                    const SizedBox(height: AppSpacing.lg),
                     _FeatureCard(
                       icon: Icons.camera_alt,
                       title: 'Scan Ingredients',
-                      description: 'Snap a photo to instantly add items to your pantry',
-                      gradient: LinearGradient(
-                        colors: [Colors.purple.shade400, Colors.blue.shade400],
-                      ),
+                      description: 'Snap a photo to add items to your pantry fast.',
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.md),
                     _FeatureCard(
                       icon: Icons.auto_awesome,
-                      title: 'Smart Meal Plans',
-                      description: 'AI-generated menus tailored to your family\'s preferences',
-                      gradient: LinearGradient(
-                        colors: [Colors.orange.shade400, Colors.pink.shade400],
-                      ),
+                      title: 'Smart meal plans',
+                      description: 'Daily, weekly, or party plans tailored to you.',
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.md),
                     _FeatureCard(
                       icon: Icons.savings,
-                      title: 'Reduce Waste',
-                      description: 'Track pantry items and use leftovers efficiently',
-                      gradient: LinearGradient(
-                        colors: [Colors.green.shade400, Colors.teal.shade400],
-                      ),
+                      title: 'Reduce waste',
+                      description: 'Prioritize expiring items and plan with leftovers.',
                     ),
-                    const SizedBox(height: 48),
+                    const SizedBox(height: AppSpacing.xl),
                     
                     // CTA Button
                     SizedBox(
                       width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
+                      height: 54,
+                      child: FilledButton(
                         onPressed: () {
-                          Navigator.of(context).pushNamed('/home');
+                          Navigator.of(context).pushNamed('/login');
                         },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          elevation: 8,
-                        ),
                         child: const Text(
                           'Get Started',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.5,
-                          ),
                         ),
                       ),
                     ),
                     
-                    const SizedBox(height: 32),
+                    const SizedBox(height: AppSpacing.xl),
                   ],
                 ),
               ),
@@ -173,29 +161,24 @@ class _FeatureCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String description;
-  final Gradient gradient;
 
   const _FeatureCard({
     required this.icon,
     required this.title,
     required this.description,
-    required this.gradient,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        gradient: gradient,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: gradient.colors.first.withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadows.card,
       ),
       child: Row(
         children: [
@@ -203,35 +186,32 @@ class _FeatureCard extends StatelessWidget {
             width: 60,
             height: 60,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(15),
+              color: cs.primary.withAlpha(22),
+              borderRadius: BorderRadius.circular(AppRadius.md),
             ),
             child: Icon(
               icon,
               size: 32,
-              color: Colors.white,
+              color: cs.primary,
             ),
           ),
-          const SizedBox(width: 20),
+          const SizedBox(width: AppSpacing.lg),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: AppSpacing.xs),
                 Text(
                   description,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white.withOpacity(0.9),
-                    height: 1.4,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurface.withAlpha(200),
+                    height: 1.35,
                   ),
                 ),
               ],
