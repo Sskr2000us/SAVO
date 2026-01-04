@@ -114,6 +114,45 @@ def _assess_image_quality(image_data: bytes) -> Dict[str, Any]:
     }
 
 
+def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _effective_seen_at(item: Dict[str, Any]) -> Optional[datetime]:
+    for k in ("last_seen_at", "updated_at", "created_at"):
+        dt = _parse_ts(item.get(k))
+        if dt:
+            return dt
+    return None
+
+
+def _inventory_status(
+    item: Dict[str, Any],
+    now: datetime,
+    maybe_days: int,
+    stale_days: int,
+) -> str:
+    # If the row is explicitly inactive, treat it as inactive regardless of time.
+    if item.get("is_current") is False:
+        return "inactive"
+
+    seen_at = _effective_seen_at(item)
+    if not seen_at:
+        return "maybe"
+
+    age_days = (now - seen_at).days
+    if stale_days > 0 and age_days >= stale_days:
+        return "stale"
+    if maybe_days > 0 and age_days >= maybe_days:
+        return "maybe"
+    return "available"
+
+
 # ============================================================================
 # Request/Response Models
 # ============================================================================
@@ -205,6 +244,21 @@ class ScanReceiptResponse(BaseModel):
     pantry_items: List[Dict]
     metadata: Dict
     message: Optional[str] = None
+
+
+class PantryCleanupResponse(BaseModel):
+    success: bool
+    marked_inactive_count: int
+    stale_days: int
+    message: str
+
+
+class PantrySummaryResponse(BaseModel):
+    success: bool
+    have: List[Dict]
+    maybe_have: List[Dict]
+    verify: List[Dict]
+    totals: Dict[str, int]
 
 
 # ============================================================================
@@ -936,6 +990,9 @@ async def get_scan_history(
 
 @router.get("/pantry")
 async def get_user_pantry(
+    include_inactive: bool = False,
+    maybe_days: int = 7,
+    stale_days: int = 30,
     user_id: str = Depends(get_current_user)
 ):
     """
@@ -945,6 +1002,8 @@ async def get_user_pantry(
     """
     try:
         db = get_db_client()
+
+        now = datetime.utcnow()
 
         # Canonical inventory is inventory_items; expose a backward-compatible pantry shape.
         items = (
@@ -958,6 +1017,11 @@ async def get_user_pantry(
         for item in items.data or []:
             if not isinstance(item, dict):
                 continue
+
+            status = _inventory_status(item, now=now, maybe_days=maybe_days, stale_days=stale_days)
+            if not include_inactive and status in {"inactive", "stale"}:
+                continue
+
             pantry.append(
                 {
                     "id": item.get("id"),
@@ -968,7 +1032,7 @@ async def get_user_pantry(
                     "storage_location": item.get("storage_location"),
                     "item_state": item.get("item_state"),
                     "source": item.get("source"),
-                    "status": "available",
+                    "status": status,
                     "notes": item.get("notes"),
                     "expiry_date": item.get("expiry_date"),
                 }
@@ -979,6 +1043,148 @@ async def get_user_pantry(
     except Exception as e:
         logger.error(f"Failed to get pantry: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get pantry: {str(e)}")
+
+
+@router.post("/pantry/weekly-cleanup", response_model=PantryCleanupResponse)
+async def pantry_weekly_cleanup(
+    stale_days: int = 30,
+    user_id: str = Depends(get_current_user),
+):
+    """Mark long-unseen scan/receipt items as inactive so the pantry stays manageable.
+
+    Notes:
+    - This does NOT delete rows.
+    - Only affects scan/receipt sourced raw items.
+    """
+    try:
+        if stale_days <= 0:
+            raise HTTPException(status_code=400, detail="stale_days must be > 0")
+
+        db = get_db_client()
+        now = datetime.utcnow()
+        cutoff = (now - timedelta(days=stale_days)).isoformat()
+
+        # Best-effort bulk update. Some rows may lack last_seen_at; handle those via a second pass.
+        marked = 0
+        try:
+            res1 = (
+                db.table("inventory_items")
+                .update({"is_current": False})
+                .eq("user_id", user_id)
+                .eq("item_state", "raw")
+                .in_("source", ["scan", "receipt"])
+                .eq("is_current", True)
+                .lt("last_seen_at", cutoff)
+                .execute()
+            )
+            marked += len(res1.data or [])
+        except Exception as e:
+            logger.warning(f"Pantry cleanup bulk pass (last_seen_at) failed: {e}")
+
+        try:
+            res2 = (
+                db.table("inventory_items")
+                .update({"is_current": False})
+                .eq("user_id", user_id)
+                .eq("item_state", "raw")
+                .in_("source", ["scan", "receipt"])
+                .eq("is_current", True)
+                .is_("last_seen_at", "null")
+                .lt("updated_at", cutoff)
+                .execute()
+            )
+            marked += len(res2.data or [])
+        except Exception as e:
+            logger.warning(f"Pantry cleanup bulk pass (updated_at) failed: {e}")
+
+        return PantryCleanupResponse(
+            success=True,
+            marked_inactive_count=marked,
+            stale_days=stale_days,
+            message=f"Marked {marked} items inactive (not seen in {stale_days} days).",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Pantry cleanup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pantry cleanup failed: {str(e)}")
+
+
+@router.get("/pantry/summary", response_model=PantrySummaryResponse)
+async def pantry_summary(
+    maybe_days: int = 7,
+    stale_days: int = 30,
+    max_verify: int = 5,
+    user_id: str = Depends(get_current_user),
+):
+    """Return a lightweight pantry summary for planning.
+
+    - **have**: fresh/high-confidence items (status=available)
+    - **maybe_have**: older/uncertain items (status=maybe)
+    - **verify**: up to max_verify items to ask the user about
+    """
+    try:
+        db = get_db_client()
+        now = datetime.utcnow()
+
+        items = (
+            db.table("inventory_items")
+            .select("id, canonical_name, display_name, quantity, unit, storage_location, item_state, source, is_current, last_seen_at, updated_at")
+            .eq("user_id", user_id)
+            .eq("item_state", "raw")
+            .execute()
+        )
+
+        have: List[Dict] = []
+        maybe_have: List[Dict] = []
+        verify_candidates: List[Dict] = []
+
+        for item in items.data or []:
+            if not isinstance(item, dict):
+                continue
+
+            status = _inventory_status(item, now=now, maybe_days=maybe_days, stale_days=stale_days)
+            if status in {"inactive", "stale"}:
+                continue
+
+            entry = {
+                "ingredient_name": item.get("canonical_name"),
+                "display_name": item.get("display_name") or _titleize(item.get("canonical_name") or ""),
+                "quantity": item.get("quantity"),
+                "unit": item.get("unit"),
+                "storage_location": item.get("storage_location"),
+                "source": item.get("source"),
+                "status": status,
+            }
+
+            if status == "available":
+                have.append(entry)
+            else:
+                maybe_have.append(entry)
+
+                seen_at = _effective_seen_at(item)
+                age_days = (now - seen_at).days if seen_at else 9999
+                verify_candidates.append({**entry, "age_days": age_days})
+
+        verify_candidates.sort(key=lambda x: x.get("age_days", 9999), reverse=True)
+        verify = verify_candidates[: max(0, min(int(max_verify), 10))]
+        for v in verify:
+            v.pop("age_days", None)
+
+        return PantrySummaryResponse(
+            success=True,
+            have=have,
+            maybe_have=maybe_have,
+            verify=verify,
+            totals={
+                "have": len(have),
+                "maybe_have": len(maybe_have),
+                "verify": len(verify),
+            },
+        )
+    except Exception as e:
+        logger.error(f"Pantry summary failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pantry summary failed: {str(e)}")
 
 
 @router.post("/feedback")
