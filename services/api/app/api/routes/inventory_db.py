@@ -45,6 +45,9 @@ class InventoryItemCreate(BaseModel):
     
     source: str = Field(default="manual", description="manual|scan|import")
     scan_confidence: Optional[float] = Field(None, ge=0, le=1)
+
+    # Inventory freshness semantics
+    is_current: bool = Field(default=True, description="If false, item is inactive for planning")
     
     # Optional packaged-good metadata (barcode lookups)
     barcode: Optional[str] = None
@@ -80,6 +83,8 @@ class InventoryItemUpdate(BaseModel):
     package_size_text: Optional[str] = None
 
     notes: Optional[str] = None
+
+    is_current: Optional[bool] = None
 
 
 class InventoryDeductionRequest(BaseModel):

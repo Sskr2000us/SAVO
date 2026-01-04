@@ -11,6 +11,10 @@ class InventoryItem {
   final DateTime? expiryDate;
   final String? notes;
 
+  // Planning semantics
+  final bool isCurrent;
+  final String? source;
+
   // Optional packaged-good metadata
   final String? barcode;
   final String? productName;
@@ -30,6 +34,8 @@ class InventoryItem {
     this.freshnessDaysRemaining,
     this.expiryDate,
     this.notes,
+    this.isCurrent = true,
+    this.source,
     this.barcode,
     this.productName,
     this.brand,
@@ -96,6 +102,9 @@ class InventoryItem {
       expiryDate: expiry,
       notes: json['notes'],
 
+      isCurrent: json['is_current'] == null ? true : (json['is_current'] == true),
+      source: json['source']?.toString(),
+
       barcode: json['barcode']?.toString(),
       productName: json['product_name']?.toString(),
       brand: json['brand']?.toString(),
@@ -117,6 +126,9 @@ class InventoryItem {
       'freshness_days_remaining': freshnessDaysRemaining,
       'expiry_date': expiryDate?.toIso8601String().split('T').first,
       'notes': notes,
+
+      'is_current': isCurrent,
+      'source': source,
 
       'barcode': barcode,
       'product_name': productName,

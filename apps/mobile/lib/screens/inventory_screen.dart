@@ -22,6 +22,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool _loading = true;
   bool _mergingDuplicates = false;
 
+  bool _showInactiveItems = false;
+
   static const List<String> _storageOptions = ['pantry', 'fridge', 'freezer', 'counter'];
 
   Future<void> _saveRealtimeScanResults(List<String> ingredients) async {
@@ -237,7 +239,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       // Use database endpoint with user header
-      final response = await apiClient.get('/inventory-db/items');
+      final response = await apiClient.get(
+        _showInactiveItems ? '/inventory-db/items?include_inactive=true' : '/inventory-db/items',
+      );
 
       if (response is Map && response['items'] is List) {
         setState(() {
@@ -261,6 +265,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
           SnackBar(content: Text('Error loading inventory from database: $e')),
         );
       }
+    }
+  }
+
+  Future<void> _setItemCurrent(InventoryItem item, bool isCurrent) async {
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.patch('/inventory-db/items/${item.inventoryId}', {
+        'is_current': isCurrent,
+      });
+      await _loadInventory();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update item: $e')),
+      );
     }
   }
 
@@ -407,6 +426,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String storage = item.storage;
     String state = item.state;
     DateTime? expiry = item.expiryDate;
+    bool isCurrent = item.isCurrent;
 
     await showModalBottomSheet(
       context: context,
@@ -558,6 +578,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       border: OutlineInputBorder(),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Use for recipe generation'),
+                    subtitle: const Text('If unchecked, this item is ignored for planning.'),
+                    value: isCurrent,
+                    onChanged: (value) {
+                      setModalState(() {
+                        isCurrent = value ?? true;
+                      });
+                    },
+                  ),
                   const SizedBox(height: 16),
                   Row(
                     children: [
@@ -587,6 +619,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               'storage_location': storage,
                               'item_state': state,
                               'notes': notesController.text.trim().isEmpty ? null : notesController.text.trim(),
+                              'is_current': isCurrent,
                             };
                             if (expiry != null) {
                               updates['expiry_date'] = '${expiry!.year.toString().padLeft(4, '0')}-${expiry!.month.toString().padLeft(2, '0')}-${expiry!.day.toString().padLeft(2, '0')}';
@@ -840,6 +873,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
               : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      child: SwitchListTile(
+                        title: const Text('Show previous (inactive) items'),
+                        subtitle: const Text('Lets you re-activate older scan results.'),
+                        value: _showInactiveItems,
+                        onChanged: (value) async {
+                          setState(() => _showInactiveItems = value);
+                          await _loadInventory();
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     if (duplicateGroups.isNotEmpty)
                       MaterialBanner(
                         content: Text(
@@ -871,6 +921,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             prettyName: _prettyName,
                             onEdit: () => _showEditItemSheet(item),
                             onDelete: () => _deleteItem(item.inventoryId),
+                            onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
                           )),
                       const SizedBox(height: 8),
                     ],
@@ -898,6 +949,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               prettyName: _prettyName,
                               onEdit: () => _showEditItemSheet(item),
                               onDelete: () => _deleteItem(item.inventoryId),
+                              onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
                             )),
                       ];
                     }),
@@ -960,12 +1012,14 @@ class _InventoryCard extends StatelessWidget {
   final String Function(String raw) prettyName;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onUse;
 
   const _InventoryCard({
     required this.item,
     required this.prettyName,
     required this.onEdit,
     required this.onDelete,
+    this.onUse,
   });
 
   String _formatQty(double qty) {
@@ -998,13 +1052,31 @@ class _InventoryCard extends StatelessWidget {
             color: Colors.white,
           ),
         ),
-        title: Text(prettyName(item.displayLabel)),
+        title: Row(
+          children: [
+            Expanded(child: Text(prettyName(item.displayLabel))),
+            if (!item.isCurrent)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Text('Inactive', style: TextStyle(fontSize: 12)),
+              ),
+          ],
+        ),
         subtitle: Text(
           '${_formatQty(item.quantity)} ${item.unit} • ${item.storage}',
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (onUse != null)
+              TextButton(
+                onPressed: onUse,
+                child: const Text('Use'),
+              ),
             if (showExpiryChip)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
