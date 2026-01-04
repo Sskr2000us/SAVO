@@ -201,16 +201,6 @@ class AppTheme {
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
       ),
 
-      // Cards
-      cardTheme: CardThemeData(
-        color: AppColors.card,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      ),
-
       // Text Theme
       textTheme: TextTheme(
         displayLarge: AppTypography.displayStyle(),

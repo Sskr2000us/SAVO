@@ -244,7 +244,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                     ),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
-                      initialValue: _planningGoal,
+                      value: _planningGoal,
                       decoration: const InputDecoration(
                         labelText: 'Planning goal',
                         border: OutlineInputBorder(),
