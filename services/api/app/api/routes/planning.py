@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 import logging
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -63,19 +64,22 @@ logger = logging.getLogger(__name__)
 def _recipe_dedupe_key(recipe: Any) -> Optional[str]:
     if not isinstance(recipe, dict):
         return None
-    rid = recipe.get("recipe_id") or recipe.get("id")
-    if isinstance(rid, str) and rid.strip():
-        return f"id:{rid.strip().lower()}"
 
-    name = recipe.get("name")
-    if isinstance(name, str) and name.strip():
-        return f"name:{name.strip().lower()}"
-
+    # Prefer name-based keys because LLM outputs often generate unique ids
+    # for the same recipe, which makes id-based dedupe ineffective.
     rn = recipe.get("recipe_name")
     if isinstance(rn, dict):
         en = rn.get("en")
         if isinstance(en, str) and en.strip():
             return f"name:{en.strip().lower()}"
+
+    name = recipe.get("name")
+    if isinstance(name, str) and name.strip():
+        return f"name:{name.strip().lower()}"
+
+    rid = recipe.get("recipe_id") or recipe.get("id")
+    if isinstance(rid, str) and rid.strip():
+        return f"id:{rid.strip().lower()}"
 
     # Fallback: try a stable-ish key.
     cuisine = (recipe.get("cuisine") or "").strip().lower() if isinstance(recipe.get("cuisine"), str) else ""
@@ -141,6 +145,24 @@ def _dedupe_menu_plan_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     payload["menus"] = menus
     return payload
+
+
+def _inventory_snapshot_hash(inventory_models: List[InventoryItem]) -> str:
+    """Stable-ish hash of current inventory to avoid reusing stale saved plans."""
+    parts: list[str] = []
+    for item in inventory_models or []:
+        try:
+            name = (item.canonical_name or "").strip().lower()
+            if not name:
+                continue
+            qty = item.quantity
+            unit = (item.unit or "").strip().lower()
+            parts.append(f"{name}|{qty}|{unit}")
+        except Exception:
+            continue
+    parts.sort()
+    raw = "\n".join(parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _normalize_cuisine_preference(value: Any) -> Optional[str]:
@@ -653,6 +675,19 @@ async def post_daily(
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}
 
+    # Load DB inventory/history early so we can avoid reusing stale plans when inventory changes.
+    try:
+        db_inventory = await get_inventory(user_id)
+    except Exception:
+        db_inventory = []
+    try:
+        db_history = await get_recipe_history(user_id, limit=50)
+    except Exception:
+        db_history = []
+
+    inventory_models = _db_inventory_to_models(db_inventory)
+    inventory_hash = _inventory_snapshot_hash(inventory_models)
+
     # Cuisine preferences: request takes precedence; otherwise fallback to DB household favorites.
     if not req.cuisine_preferences:
         db_favs = household.get("favorite_cuisines") or household.get("favoriteCuisines")
@@ -660,7 +695,8 @@ async def post_daily(
             req.cuisine_preferences = db_favs
     req.cuisine_preferences = _normalize_cuisine_preferences(req.cuisine_preferences)
 
-    # Reuse an existing saved plan for the day unless the request changed.
+    # Reuse an existing saved plan for the day unless the request changed
+    # AND the inventory snapshot hasn't materially changed.
     plan_date = _parse_iso_date(getattr(req, "current_date", None)) or date.today()
     if not force_regenerate:
         try:
@@ -676,15 +712,20 @@ async def post_daily(
         if isinstance(existing, dict):
             existing_payload = existing.get("recipes")
             if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
-                # Only reuse if core request knobs match.
-                if (
-                    (existing.get("servings") == req.servings)
-                    and (existing.get("time_available_minutes") == req.time_available_minutes)
-                ):
-                    sel = existing_payload.get("selected_cuisine")
-                    prefs = req.cuisine_preferences or []
-                    if not prefs or (isinstance(sel, str) and sel.lower() in {p.lower() for p in prefs}):
-                        return MenuPlanResponse(**existing_payload)
+                existing_hash = existing_payload.get("_inventory_hash")
+                if isinstance(existing_hash, str) and existing_hash and existing_hash != inventory_hash:
+                    existing_payload = None
+
+                if isinstance(existing_payload, dict):
+                    # Only reuse if core request knobs match.
+                    if (
+                        (existing.get("servings") == req.servings)
+                        and (existing.get("time_available_minutes") == req.time_available_minutes)
+                    ):
+                        sel = existing_payload.get("selected_cuisine")
+                        prefs = req.cuisine_preferences or []
+                        if not prefs or (isinstance(sel, str) and sel.lower() in {p.lower() for p in prefs}):
+                            return MenuPlanResponse(**existing_payload)
     
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
@@ -715,18 +756,6 @@ async def post_daily(
             },
             shopping_suggestions=[],
         )
-
-    # Prefer DB inventory/history for real planning
-    try:
-        db_inventory = await get_inventory(user_id)
-    except Exception:
-        db_inventory = []
-    try:
-        db_history = await get_recipe_history(user_id, limit=50)
-    except Exception:
-        db_history = []
-
-    inventory_models = _db_inventory_to_models(db_inventory)
 
     # Product default: if the user didn't specify a goal, prioritize using what they have.
     if not getattr(req, "planning_goal", None) and inventory_models:
@@ -862,6 +891,10 @@ async def post_daily(
     # Avoid duplicated recipes in the returned menu.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
+
+    # Persist inventory snapshot hash inside the stored payload (response model ignores unknown keys).
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result["_inventory_hash"] = inventory_hash
 
     # Persist successful plan
     if isinstance(result, dict) and result.get("status") == "ok":
