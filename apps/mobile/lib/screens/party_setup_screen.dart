@@ -1,0 +1,569 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../models/cuisine.dart';
+import '../models/planning.dart';
+import '../models/profile_state.dart';
+import '../services/api_client.dart';
+import '../services/metrics_service.dart';
+import '../theme/app_theme.dart';
+import '../ui/ui_principles.dart';
+import '../widgets/savo_widgets.dart';
+import 'generated_menu_screen.dart';
+
+enum PartyPlanningMode { dinnerParty, festival }
+
+enum _DietChoice { none, vegetarian, vegan }
+
+enum _MealTypeChoice { casual, standard, formal }
+
+class PartySetupScreen extends StatefulWidget {
+  final PartyPlanningMode mode;
+
+  const PartySetupScreen({super.key, required this.mode});
+
+  @override
+  State<PartySetupScreen> createState() => _PartySetupScreenState();
+}
+
+class _PartySetupScreenState extends State<PartySetupScreen> {
+  int _stepIndex = 0;
+
+  int _guestCount = 6;
+  _MealTypeChoice _mealType = _MealTypeChoice.standard;
+  _DietChoice _diet = _DietChoice.none;
+
+  List<Cuisine> _cuisines = const [];
+  bool _loadingCuisines = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fireAndForget(MetricsService.instance.recordWorkflowStep('PlanParty', 'CollectInputs'));
+    _loadCuisines();
+  }
+
+  Future<void> _loadCuisines() async {
+    setState(() => _loadingCuisines = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final res = await apiClient.get('/cuisines');
+      if (!mounted) return;
+      if (res is List) {
+        setState(() {
+          _cuisines = res
+              .whereType<Map>()
+              .map((m) => Cuisine.fromJson(Map<String, dynamic>.from(m)))
+              .where((c) => c.partyEnabled)
+              .toList();
+          _loadingCuisines = false;
+        });
+        return;
+      }
+    } catch (_) {
+      // ignore
+    }
+    if (!mounted) return;
+    setState(() => _loadingCuisines = false);
+  }
+
+  String _title() {
+    switch (widget.mode) {
+      case PartyPlanningMode.dinnerParty:
+        return 'Dinner party';
+      case PartyPlanningMode.festival:
+        return 'Festival';
+    }
+  }
+
+  String _stepTitle() {
+    switch (_stepIndex) {
+      case 0:
+        return 'Guests';
+      case 1:
+        return 'Meal type';
+      case 2:
+        return 'Diet';
+      case 3:
+        return 'Cuisine';
+      default:
+        return '';
+    }
+  }
+
+  void _goBack() {
+    if (_stepIndex == 0) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    setState(() {
+      _stepIndex -= 1;
+    });
+  }
+
+  void _selectGuests(int count) {
+    setState(() {
+      _guestCount = count;
+      _stepIndex = 1;
+    });
+  }
+
+  void _selectMealType(_MealTypeChoice type) {
+    setState(() {
+      _mealType = type;
+      _stepIndex = 2;
+    });
+  }
+
+  void _selectDiet(_DietChoice diet) {
+    setState(() {
+      _diet = diet;
+      _stepIndex = 3;
+    });
+  }
+
+  List<Cuisine> _topCuisineChoices() {
+    final profileState = Provider.of<ProfileState>(context, listen: false);
+    final favs = profileState.favoriteCuisines.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+
+    final byId = <String, Cuisine>{for (final c in _cuisines) c.cuisineId: c};
+
+    final choices = <Cuisine>[];
+    for (final id in favs) {
+      final c = byId[id];
+      if (c != null) choices.add(c);
+      if (choices.length >= 2) break;
+    }
+
+    if (choices.length < 2) {
+      for (final c in _cuisines) {
+        if (choices.any((x) => x.cuisineId == c.cuisineId)) continue;
+        choices.add(c);
+        if (choices.length >= 2) break;
+      }
+    }
+
+    return choices.take(2).toList();
+  }
+
+  Map<String, dynamic> _familyProfileOverride() {
+    final restrictions = <String>[];
+    switch (_diet) {
+      case _DietChoice.none:
+        break;
+      case _DietChoice.vegetarian:
+        restrictions.add('vegetarian');
+        break;
+      case _DietChoice.vegan:
+        restrictions.add('vegan');
+        break;
+    }
+
+    if (restrictions.isEmpty) return {};
+
+    return {
+      'members': [
+        {
+          'name': 'Household',
+          'age': 30,
+          'dietary_restrictions': restrictions,
+          'allergens': [],
+          'health_conditions': [],
+          'spice_tolerance': 'medium',
+        }
+      ],
+      'household_allergens': [],
+      'dietary_restrictions': restrictions,
+      'skill_level': 3,
+    };
+  }
+
+  String _planningGoal() {
+    switch (_mealType) {
+      case _MealTypeChoice.casual:
+        return 'fastest';
+      case _MealTypeChoice.standard:
+        return 'balanced';
+      case _MealTypeChoice.formal:
+        return 'balanced';
+    }
+  }
+
+  Map<String, dynamic> _partyCourseCounts() {
+    if (widget.mode == PartyPlanningMode.festival) {
+      return {
+        'appetizers': 3,
+        'mains': 3,
+        'sides': 3,
+        'desserts': 2,
+      };
+    }
+
+    return {
+      'appetizers': 2,
+      'mains': 2,
+      'sides': 2,
+      'desserts': 1,
+    };
+  }
+
+  Future<void> _selectCuisineAndGenerate(String selectedCuisine) async {
+    final apiClient = Provider.of<ApiClient>(context, listen: false);
+    final profileState = Provider.of<ProfileState>(context, listen: false);
+
+    final body = <String, dynamic>{
+      'selected_cuisine': selectedCuisine,
+      'party_settings': {
+        'guest_count': _guestCount,
+        'age_group_counts': {
+          'child_0_12': 0,
+          'teen_13_17': 0,
+          'adult_18_plus': _guestCount,
+        },
+      },
+      'party_course_counts': _partyCourseCounts(),
+      'planning_goal': _planningGoal(),
+      'avoid_waste': true,
+      'use_leftovers': true,
+    };
+
+    final familyOverride = _familyProfileOverride();
+    if (familyOverride.isNotEmpty) {
+      body['family_profile'] = familyOverride;
+    }
+
+    final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+        ? profileState.preferredLanguage!.trim()
+        : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+            ? profileState.primaryLanguage!.trim()
+            : 'en';
+    body['output_language'] = outputLang;
+    body['output_languages'] = outputLang == 'en' ? ['en'] : ['en', outputLang];
+
+    final measurementSystem = profileState.measurementSystem;
+    if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {
+      body['measurement_system'] = measurementSystem.trim();
+    }
+
+    final res = await apiClient.post('/plan/party', body);
+    final plan = MenuPlanResponse.fromJson(res);
+
+    fireAndForget(MetricsService.instance.recordWorkflowStep('PlanParty', 'GenerateMenu'));
+
+    if (!mounted) return;
+
+    await Navigator.of(context).pushReplacement(
+      AppMotion.createRoute(
+        GeneratedMenuScreen(
+          menuPlan: plan,
+          requestBody: body,
+          title: _title(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (kDebugMode || kProfileMode) {
+      SavoUiGuards.warnIfTooManyChoices(
+        screen: 'PartySetupScreen',
+        surface: _stepTitle(),
+        choices: 3,
+      );
+    }
+
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_title()),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _goBack,
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _stepTitle(),
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Expanded(child: _buildStepBody(context)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStepBody(BuildContext context) {
+    switch (_stepIndex) {
+      case 0:
+        return _GuestsStep(onSelect: _selectGuests);
+      case 1:
+        return _MealTypeStep(onSelect: _selectMealType);
+      case 2:
+        return _DietStep(onSelect: _selectDiet);
+      case 3:
+        return _CuisineStep(
+          loading: _loadingCuisines,
+          topCuisines: _topCuisineChoices(),
+          onSelect: _selectCuisineAndGenerate,
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+}
+
+class _GuestsStep extends StatelessWidget {
+  final void Function(int) onSelect;
+
+  const _GuestsStep({required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(4),
+          child: const Row(
+            children: [
+              Icon(Icons.people_outline),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('2–4 guests')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(8),
+          child: const Row(
+            children: [
+              Icon(Icons.groups_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('5–8 guests')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(12),
+          child: const Row(
+            children: [
+              Icon(Icons.groups_2_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('9–12 guests')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MealTypeStep extends StatelessWidget {
+  final void Function(_MealTypeChoice) onSelect;
+
+  const _MealTypeStep({required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_MealTypeChoice.casual),
+          child: const Row(
+            children: [
+              Icon(Icons.timer_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Casual')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_MealTypeChoice.standard),
+          child: const Row(
+            children: [
+              Icon(Icons.restaurant_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Standard')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_MealTypeChoice.formal),
+          child: const Row(
+            children: [
+              Icon(Icons.celebration_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Formal')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DietStep extends StatelessWidget {
+  final void Function(_DietChoice) onSelect;
+
+  const _DietStep({required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_DietChoice.none),
+          child: const Row(
+            children: [
+              Icon(Icons.restaurant_menu_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('No preference')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_DietChoice.vegetarian),
+          child: const Row(
+            children: [
+              Icon(Icons.eco_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Vegetarian')),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SavoCard(
+          elevated: true,
+          onTap: () => onSelect(_DietChoice.vegan),
+          child: const Row(
+            children: [
+              Icon(Icons.spa_outlined),
+              SizedBox(width: AppSpacing.md),
+              Expanded(child: Text('Vegan')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CuisineStep extends StatefulWidget {
+  final bool loading;
+  final List<Cuisine> topCuisines;
+  final Future<void> Function(String) onSelect;
+
+  const _CuisineStep({
+    required this.loading,
+    required this.topCuisines,
+    required this.onSelect,
+  });
+
+  @override
+  State<_CuisineStep> createState() => _CuisineStepState();
+}
+
+class _CuisineStepState extends State<_CuisineStep> {
+  bool _generating = false;
+  String? _error;
+
+  Future<void> _handleSelect(String cuisineId) async {
+    if (_generating) return;
+    setState(() {
+      _generating = true;
+      _error = null;
+    });
+
+    try {
+      await widget.onSelect(cuisineId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _generating = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SavoCard(
+          elevated: true,
+          onTap: _generating ? null : () => _handleSelect('auto'),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome_outlined),
+              const SizedBox(width: AppSpacing.md),
+              const Expanded(child: Text('Auto')),
+              if (_generating) ...[
+                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        ...widget.topCuisines.map((c) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.md),
+            child: SavoCard(
+              elevated: true,
+              onTap: _generating ? null : () => _handleSelect(c.cuisineId),
+              child: Row(
+                children: [
+                  Text(c.flag),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(child: Text(c.name)),
+                ],
+              ),
+            ),
+          );
+        }),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
+            child: Text(
+              _error!,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+            ),
+          ),
+      ],
+    );
+  }
+}

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
 import '../widgets/quantity_picker.dart';
@@ -753,6 +754,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (kDebugMode || kProfileMode) {
+      // v1: maxChoices=3. Inventory scan entry exposes <= 3 scan modes.
+      // (Realtime + barcode are hidden on web.)
+      SavoUiGuards.warnIfTooManyChoices(
+        screen: 'InventoryScreen',
+        surface: 'Scan menu',
+        choices: kIsWeb ? 1 : 3,
+      );
+
+      // v1: mandatory AI confirmation. Realtime scan always normalizes and
+      // shows an explicit review dialog before any inventory write.
+      SavoUiGuards.warnIfAiConfirmationNotExplicit(
+        flow: 'SnapPantry',
+        surface: 'Review before save (realtime/photo/barcode)',
+        hasExplicitReviewStep: true,
+      );
+    }
+
     final duplicateGroups = _findDuplicateGroups();
     final expiring = _items.where((i) => i.isExpiringSoon).toList();
     final notExpiring = _items.where((i) => !i.isExpiringSoon).toList();

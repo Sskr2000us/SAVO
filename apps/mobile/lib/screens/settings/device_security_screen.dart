@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../theme/app_theme.dart';
 import '../../utils/platform_info.dart';
 
 /// Device Security Screen - Enforce 2 device limit to prevent credential sharing

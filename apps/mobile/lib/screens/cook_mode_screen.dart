@@ -7,6 +7,7 @@ import '../services/cook_session_storage.dart';
 import '../services/scanning_service.dart';
 import '../models/profile_state.dart';
 import '../models/planning.dart';
+import 'post_cook_feedback_screen.dart';
 
 enum _CookLanguageMode { english, bilingual }
 
@@ -16,6 +17,7 @@ class CookModeScreen extends StatefulWidget {
   final int? baseServings;
   final String? preferredLanguageCode;
   final bool? startBilingual;
+  final bool enablePostCookFeedback;
 
   // Optional restore state (used for Resume Cooking)
   final int? initialStepIndex;
@@ -33,6 +35,7 @@ class CookModeScreen extends StatefulWidget {
     this.baseServings,
     this.preferredLanguageCode,
     this.startBilingual,
+    this.enablePostCookFeedback = false,
     this.initialStepIndex,
     this.initialStepSecondsRemaining,
     this.initialRecipeTotalSeconds,
@@ -614,6 +617,29 @@ class _CookModeScreenState extends State<CookModeScreen> {
   Future<void> _completeRecipe() async {
     _stepTimer?.cancel();
     _recipeTimer?.cancel();
+
+    if (widget.enablePostCookFeedback) {
+      // Completed: clear resume state.
+      try {
+        await ActiveCookSession.clear();
+      } catch (_) {
+        // Best-effort only.
+      }
+
+      if (!mounted) return;
+      final completionMinutes = _recipeTotalSeconds / 60.0;
+
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => PostCookFeedbackScreen(
+            recipe: widget.recipe,
+            servingsMade: widget.servings,
+            completionMinutes: completionMinutes,
+          ),
+        ),
+      );
+      return;
+    }
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);

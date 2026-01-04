@@ -6,9 +6,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'screens/home_screen.dart';
 import 'screens/plan_screen.dart';
-import 'screens/cook_screen.dart';
-import 'screens/leftovers_screen.dart';
-import 'screens/account_settings_screen.dart';
+import 'screens/cook_now_entry_screen.dart';
+import 'screens/pantry_overview_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
@@ -95,7 +94,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
       ],
       child: MaterialApp(
         title: 'SAVO',
-        theme: AppTheme.darkTheme,
+        theme: AppTheme.lightTheme,
         home: const _WebDeepLinkGate(),
         routes: {
           '/landing': (context) => const LandingScreen(),
@@ -138,10 +137,9 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
 
   static const List<Widget> _screens = [
     HomeScreen(),
+    CookNowEntryScreen(),
     PlanScreen(),
-    CookScreen(),
-    LeftoversScreen(),
-    AccountSettingsScreen(),
+    PantryOverviewScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -161,12 +159,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
             selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.restaurant_menu_outlined),
-            selectedIcon: Icon(Icons.restaurant_menu),
-            label: 'Plan',
+            label: 'Today',
           ),
           NavigationDestination(
             icon: Icon(Icons.timer_outlined),
@@ -174,14 +167,14 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             label: 'Cook',
           ),
           NavigationDestination(
-            icon: Icon(Icons.kitchen_outlined),
-            selectedIcon: Icon(Icons.kitchen),
-            label: 'Leftovers',
+            icon: Icon(Icons.restaurant_menu_outlined),
+            selectedIcon: Icon(Icons.restaurant_menu),
+            label: 'Plan',
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
+            icon: Icon(Icons.kitchen_outlined),
+            selectedIcon: Icon(Icons.kitchen),
+            label: 'Pantry',
           ),
         ],
       ),
@@ -200,7 +193,6 @@ class AppStartupScreen extends StatefulWidget {
 }
 
 class _AppStartupScreenState extends State<AppStartupScreen> {
-  bool _isLoading = true;
   String? _error;
   String _phase = 'Starting';
   Timer? _startupWatchdog;
@@ -223,7 +215,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       if (_error != null) return;
 
       setState(() {
-        _isLoading = false;
         _error = 'Startup timed out while: $_phase.\n\n'
             'Try: hard refresh (Ctrl+Shift+R), open /login directly, or wake the backend.';
       });
@@ -341,7 +332,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       debugPrint('Error checking auth/onboarding: $e');
       if (mounted) {
         setState(() {
-          _isLoading = false;
           _error = e.toString();
         });
       }
@@ -350,7 +340,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
   void _retryAuth() {
     setState(() {
-      _isLoading = true;
       _error = null;
     });
     _checkAuthAndOnboarding();

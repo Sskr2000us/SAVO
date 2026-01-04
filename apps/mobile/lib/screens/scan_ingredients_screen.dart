@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
@@ -194,6 +195,23 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (kDebugMode || kProfileMode) {
+      // v1: maxChoices=3. Scan entry presents up to 2 capture choices.
+      SavoUiGuards.warnIfTooManyChoices(
+        screen: 'ScanIngredientsScreen',
+        surface: 'Capture method',
+        choices: 2,
+      );
+
+      // v1: mandatory AI confirmation. This screen always requires user review
+      // (select items) before any inventory write.
+      SavoUiGuards.warnIfAiConfirmationNotExplicit(
+        flow: 'SnapPantry',
+        surface: 'Review candidates before save',
+        hasExplicitReviewStep: true,
+      );
+    }
+
     final canScan = !_loading;
 
     return Scaffold(

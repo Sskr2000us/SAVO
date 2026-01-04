@@ -1,25 +1,26 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
-import 'daily_plan_screen.dart';
-import 'party_setup_screen.dart';
+import 'pantry_camera_screen.dart';
+import 'pantry/manual_entry_screen.dart';
 
-class PlanScreen extends StatefulWidget {
-  const PlanScreen({super.key});
+class PantryUpdateEntryScreen extends StatelessWidget {
+  const PantryUpdateEntryScreen({super.key});
 
-  @override
-  State<PlanScreen> createState() => _PlanScreenState();
-}
+  void _comingSoon(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Scan receipt is coming soon.')),
+    );
+  }
 
-class _PlanScreenState extends State<PlanScreen> {
   @override
   Widget build(BuildContext context) {
     if (kDebugMode || kProfileMode) {
       SavoUiGuards.warnIfTooManyChoices(
-        screen: 'PlanScreen',
+        screen: 'PantryUpdateEntryScreen',
         surface: 'Entry options',
         choices: 3,
       );
@@ -27,7 +28,7 @@ class _PlanScreenState extends State<PlanScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Plan'),
+        title: const Text('Update Pantry'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -35,7 +36,7 @@ class _PlanScreenState extends State<PlanScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Choose what you want to plan',
+              'How would you like to update your pantry?',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: AppSpacing.md),
@@ -44,14 +45,16 @@ class _PlanScreenState extends State<PlanScreen> {
               onTap: () {
                 Navigator.push(
                   context,
-                  AppMotion.createRoute(const DailyPlanScreen()),
+                  AppMotion.createRoute(const PantryCameraScreen()),
                 );
               },
               child: const Row(
                 children: [
-                  Icon(Icons.today_outlined),
+                  Icon(Icons.photo_camera),
                   SizedBox(width: AppSpacing.md),
-                  Expanded(child: Text('Daily meal')),
+                  Expanded(
+                    child: Text('Scan pantry shelf'),
+                  ),
                 ],
               ),
             ),
@@ -61,35 +64,33 @@ class _PlanScreenState extends State<PlanScreen> {
               onTap: () {
                 Navigator.push(
                   context,
-                  AppMotion.createRoute(
-                    const PartySetupScreen(mode: PartyPlanningMode.dinnerParty),
-                  ),
+                  AppMotion.createRoute(const ManualEntryScreen()),
                 );
               },
               child: const Row(
                 children: [
-                  Icon(Icons.celebration_outlined),
+                  Icon(Icons.edit_note),
                   SizedBox(width: AppSpacing.md),
-                  Expanded(child: Text('Dinner party')),
+                  Expanded(
+                    child: Text('Add manually'),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: AppSpacing.md),
             SavoCard(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  AppMotion.createRoute(
-                    const PartySetupScreen(mode: PartyPlanningMode.festival),
-                  ),
-                );
-              },
-              child: const Row(
+              elevated: false,
+              onTap: () => _comingSoon(context),
+              child: Row(
                 children: [
+                  Icon(Icons.receipt_long, color: Theme.of(context).disabledColor),
                   const SizedBox(width: AppSpacing.md),
-                  Icon(Icons.festival_outlined),
-                  SizedBox(width: AppSpacing.md),
-                  Expanded(child: Text('Festival')),
+                  Expanded(
+                    child: Text(
+                      'Scan receipt (coming soon)',
+                      style: TextStyle(color: Theme.of(context).disabledColor),
+                    ),
+                  ),
                 ],
               ),
             ),

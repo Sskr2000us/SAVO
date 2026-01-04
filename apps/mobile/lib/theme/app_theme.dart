@@ -1,34 +1,33 @@
 import 'package:flutter/material.dart';
 
-/// SAVO Custom Theme - Figma-ready design tokens
-/// Based on docs/spec/ui-spec.ant.figma-ready.json
+/// SAVO Custom Theme - v1 design tokens
+/// Source of truth: `SAVO_COMPREHENSIVE_UI_JSON_USER_STORIES_V1.md`
 
 class AppColors {
-  // Brand Colors
-  static const Color primary = Color(0xFFFF5A3C);
-  static const Color secondary = Color(0xFF2CCB7F);
-  static const Color accent = Color(0xFFFFC043);
+  // v1 colors
+  static const Color primary = Color(0xFF2F6F62);
+  static const Color primarySoft = Color(0xFFE6F1EE);
+  static const Color accent = Color(0xFFE07A3F);
+  static const Color background = Color(0xFFFAFAF7);
+  static const Color surface = Color(0xFFFFFFFF);
+  static const Color textPrimary = Color(0xFF1F2933);
+  static const Color textSecondary = Color(0xFF6B7280);
 
-  // Food Palette
-  static const Color tomato = Color(0xFFFF4D4D);
-  static const Color basil = Color(0xFF2ECC71);
-  static const Color saffron = Color(0xFFFFB000);
-  static const Color blueberry = Color(0xFF5B6CFF);
-  static const Color cocoa = Color(0xFF7A4E2D);
+  // Back-compat aliases (used throughout the existing UI)
+  static const Color secondary = accent;
+  static const Color bg = background;
+  static const Color info = primary;
 
-  // Neutrals (Dark Mode)
-  static const Color bg = Color(0xFF0B0F14);
-  static const Color surface = Color(0xFF121826);
-  static const Color card = Color(0xFF161F2E);
-  static const Color textPrimary = Color(0xFFF4F7FF);
-  static const Color textSecondary = Color(0xFFA9B1C3);
-  static const Color divider = Color(0xFF243049);
+  // Derived neutrals (keep in sync with v1 tokens; avoid introducing new hexes)
+  static const Color divider = Color(0x336B7280); // textSecondary @ 20%
 
-  // State Colors
-  static const Color success = Color(0xFF2CCB7F);
-  static const Color warning = Color(0xFFFFC043);
-  static const Color danger = Color(0xFFFF4D4D);
-  static const Color info = Color(0xFF5B6CFF);
+  // Surfaces
+  static const Color card = surface;
+
+  // State colors
+  static const Color success = Color(0xFF2E7D32);
+  static const Color warning = Color(0xFFED6C02);
+  static const Color danger = Color(0xFFC62828);
 }
 
 class AppTypography {
@@ -91,17 +90,17 @@ class AppTypography {
 }
 
 class AppSpacing {
-  static const double xs = 6;
-  static const double sm = 10;
+  static const double xs = 4;
+  static const double sm = 8;
   static const double md = 16;
   static const double lg = 24;
   static const double xl = 32;
 }
 
 class AppRadius {
-  static const double sm = 10;
-  static const double md = 16;
-  static const double lg = 24;
+  static const double sm = 8;
+  static const double md = 12;
+  static const double lg = 20;
   static const double pill = 999;
 }
 
@@ -124,7 +123,8 @@ class AppShadows {
 }
 
 class AppMotion {
-  static const Duration transition = Duration(milliseconds: 220);
+  static const Duration fast = Duration(milliseconds: 150);
+  static const Duration transition = Duration(milliseconds: 250);
   static const Curve easing = Curves.easeInOutCubic; // Approximates cubic-bezier(0.2, 0.8, 0.2, 1)
 
   /// Create a custom page route with slide and fade animation
@@ -155,44 +155,42 @@ class AppMotion {
 
 /// Main Theme Data
 class AppTheme {
-  static ThemeData get darkTheme {
+  static ThemeData get lightTheme {
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
+      brightness: Brightness.light,
       visualDensity: VisualDensity.standard,
-      
+
       // Color Scheme
-      colorScheme: ColorScheme.dark(
+      colorScheme: const ColorScheme.light(
         primary: AppColors.primary,
-        secondary: AppColors.secondary,
-        tertiary: AppColors.accent,
-        primaryContainer: AppColors.primary.withOpacity(0.18),
-        secondaryContainer: AppColors.secondary.withOpacity(0.18),
-        tertiaryContainer: AppColors.accent.withOpacity(0.18),
+        secondary: AppColors.accent,
+        tertiary: AppColors.primarySoft,
+        primaryContainer: AppColors.primarySoft,
+        secondaryContainer: AppColors.primarySoft,
+        tertiaryContainer: AppColors.primarySoft,
         surface: AppColors.surface,
-        surfaceVariant: AppColors.card,
+        surfaceVariant: AppColors.primarySoft,
         outline: AppColors.divider,
         outlineVariant: AppColors.divider,
-        background: AppColors.bg,
         error: AppColors.danger,
         onPrimary: Colors.white,
         onSecondary: Colors.white,
-        onTertiary: Colors.black,
+        onTertiary: AppColors.textPrimary,
         onPrimaryContainer: AppColors.textPrimary,
         onSecondaryContainer: AppColors.textPrimary,
         onTertiaryContainer: AppColors.textPrimary,
         onSurface: AppColors.textPrimary,
         onSurfaceVariant: AppColors.textSecondary,
-        onBackground: AppColors.textPrimary,
         onError: Colors.white,
       ),
 
       // Scaffold
-      scaffoldBackgroundColor: AppColors.bg,
+      scaffoldBackgroundColor: AppColors.background,
 
       // AppBar
       appBarTheme: AppBarTheme(
-        backgroundColor: AppColors.surface,
+        backgroundColor: AppColors.background,
         elevation: 0,
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
@@ -275,7 +273,7 @@ class AppTheme {
       // Input Decoration
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.card,
+        fillColor: AppColors.primarySoft,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.md),
           borderSide: BorderSide.none,
@@ -340,9 +338,9 @@ class AppTheme {
 
       // Chip Theme
       chipTheme: ChipThemeData(
-        backgroundColor: AppColors.card,
+        backgroundColor: AppColors.primarySoft,
         selectedColor: AppColors.primary.withOpacity(0.22),
-        disabledColor: AppColors.card.withOpacity(0.5),
+        disabledColor: AppColors.primarySoft.withOpacity(0.5),
         labelStyle: AppTypography.captionStyle(),
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.sm,
@@ -385,6 +383,40 @@ class AppTheme {
           TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
         },
       ),
+    );
+  }
+
+  /// Legacy dark theme (kept to avoid churn; not currently used by default).
+  static ThemeData get darkTheme {
+    return ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      visualDensity: VisualDensity.standard,
+      colorScheme: ColorScheme.dark(
+        primary: AppColors.primary,
+        secondary: AppColors.accent,
+        tertiary: AppColors.primarySoft,
+        primaryContainer: AppColors.primary.withOpacity(0.18),
+        secondaryContainer: AppColors.accent.withOpacity(0.18),
+        tertiaryContainer: AppColors.primarySoft.withOpacity(0.35),
+        surface: const Color(0xFF121826),
+        surfaceVariant: const Color(0xFF161F2E),
+        outline: const Color(0xFF243049),
+        outlineVariant: const Color(0xFF243049),
+        background: const Color(0xFF0B0F14),
+        error: AppColors.danger,
+        onPrimary: Colors.white,
+        onSecondary: Colors.white,
+        onTertiary: Colors.black,
+        onPrimaryContainer: const Color(0xFFF4F7FF),
+        onSecondaryContainer: const Color(0xFFF4F7FF),
+        onTertiaryContainer: const Color(0xFFF4F7FF),
+        onSurface: const Color(0xFFF4F7FF),
+        onSurfaceVariant: const Color(0xFFA9B1C3),
+        onBackground: const Color(0xFFF4F7FF),
+        onError: Colors.white,
+      ),
+      scaffoldBackgroundColor: const Color(0xFF0B0F14),
     );
   }
 }

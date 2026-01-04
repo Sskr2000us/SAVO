@@ -314,21 +314,27 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
     ];
     if (produce.any((k) => name.contains(k))) return 'Produce';
 
-    // Dairy
-    const dairy = ['milk', 'cheese', 'yogurt', 'curd', 'butter', 'ghee', 'cream'];
-    if (dairy.any((k) => name.contains(k))) return 'Dairy';
-
-    // Meat / seafood
-    const meat = ['chicken', 'beef', 'pork', 'lamb', 'fish', 'shrimp', 'prawn', 'egg'];
-    if (meat.any((k) => name.contains(k))) return 'Meat & Seafood';
-
-    // Frozen
-    const frozen = ['frozen', 'ice cream'];
-    if (frozen.any((k) => name.contains(k))) return 'Frozen';
-
-    // Bakery
-    const bakery = ['bread', 'bun', 'roll', 'tortilla', 'naan', 'pita'];
-    if (bakery.any((k) => name.contains(k))) return 'Bakery';
+    // Refrigerated
+    const refrigerated = [
+      'milk',
+      'cheese',
+      'yogurt',
+      'curd',
+      'butter',
+      'ghee',
+      'cream',
+      'chicken',
+      'beef',
+      'pork',
+      'lamb',
+      'fish',
+      'shrimp',
+      'prawn',
+      'egg',
+      'frozen',
+      'ice cream',
+    ];
+    if (refrigerated.any((k) => name.contains(k))) return 'Refrigerated';
 
     // Pantry (default)
     return 'Pantry';
@@ -337,22 +343,18 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
   Map<String, List<dynamic>> _groupItems(List<dynamic> items) {
     final groups = <String, List<dynamic>>{
       'Produce': [],
-      'Dairy': [],
-      'Meat & Seafood': [],
-      'Bakery': [],
-      'Frozen': [],
       'Pantry': [],
-      'Other': [],
+      'Refrigerated': [],
     };
 
     for (final item in items) {
       final name = _itemName(item);
       if (name.isEmpty) {
-        groups['Other']!.add(item);
+        groups['Pantry']!.add(item);
         continue;
       }
       final cat = _categoryForName(name);
-      (groups[cat] ?? groups['Other']!).add(item);
+      (groups[cat] ?? groups['Pantry']!).add(item);
     }
 
     // Remove empty sections except keep stable ordering.
@@ -407,9 +409,16 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
         actions: [
           if (!_loading && _items.isNotEmpty) ...[
             IconButton(
-              tooltip: 'Copy',
-              icon: const Icon(Icons.copy),
-              onPressed: () => _copyToClipboard(exportText),
+              tooltip: 'Save',
+              icon: const Icon(Icons.save_outlined),
+              onPressed: () async {
+                await _persistItems(_items);
+                await _persistChecked(_checked);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Shopping list saved')),
+                );
+              },
             ),
             IconButton(
               tooltip: 'Share',
