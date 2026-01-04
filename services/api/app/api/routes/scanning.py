@@ -163,7 +163,7 @@ async def analyze_image(
         api_cost = await vision_client.estimate_api_cost(image_data)
         
         # Insert scan record
-        scan_record = await db.table("ingredient_scans").insert({
+        scan_record = db.table("ingredient_scans").insert({
             "id": scan_id,
             "user_id": user_id,
             "image_url": image_url,
@@ -194,7 +194,7 @@ async def analyze_image(
                 requires_confirmation = True
             
             # Insert detected ingredient
-            await db.table("detected_ingredients").insert({
+            db.table("detected_ingredients").insert({
                 "id": detected_id,
                 "scan_id": scan_id,
                 "user_id": user_id,
@@ -231,7 +231,7 @@ async def analyze_image(
             ))
         
         # Update scan processing time
-        await db.table("ingredient_scans").update({
+        db.table("ingredient_scans").update({
             "processing_time_ms": analysis_result["metadata"]["processing_time_ms"]
         }).eq("id", scan_id).execute()
         
@@ -275,7 +275,7 @@ async def confirm_ingredients(
         db = get_db_client()
         
         # Verify scan belongs to user
-        scan = await db.table("ingredient_scans").select("*").eq("id", request.scan_id).eq("user_id", user_id).execute()
+        scan = db.table("ingredient_scans").select("*").eq("id", request.scan_id).eq("user_id", user_id).execute()
         if not scan.data:
             raise HTTPException(status_code=404, detail="Scan not found")
         
@@ -293,7 +293,7 @@ async def confirm_ingredients(
             unit = confirmation.get("unit")
             
             # Verify detected ingredient exists
-            detected = await db.table("detected_ingredients").select("*").eq("id", detected_id).eq("user_id", user_id).execute()
+            detected = db.table("detected_ingredients").select("*").eq("id", detected_id).eq("user_id", user_id).execute()
             if not detected.data:
                 logger.warning(f"Detected ingredient {detected_id} not found for user {user_id}")
                 continue
@@ -335,7 +335,7 @@ async def confirm_ingredients(
                 rejected_count += 1
             
             # Update detected ingredient
-            await db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
+            db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
         
         # Scan completion will be handled by trigger
         
@@ -376,7 +376,7 @@ async def get_scan_history(
         db = get_db_client()
         
         # Get scans
-        scans_result = await db.table("ingredient_scans") \
+        scans_result = db.table("ingredient_scans") \
             .select("*, detected_ingredients(*)") \
             .eq("user_id", user_id) \
             .order("created_at", desc=True) \
@@ -384,7 +384,7 @@ async def get_scan_history(
             .execute()
         
         # Get total count
-        count_result = await db.table("ingredient_scans") \
+        count_result = db.table("ingredient_scans") \
             .select("id", count="exact") \
             .eq("user_id", user_id) \
             .execute()
@@ -392,7 +392,7 @@ async def get_scan_history(
         total_scans = count_result.count if count_result.count else 0
         
         # Get accuracy stats
-        accuracy_result = await db.rpc("get_user_scanning_accuracy", {"p_user_id": user_id}).execute()
+        accuracy_result = db.rpc("get_user_scanning_accuracy", {"p_user_id": user_id}).execute()
         accuracy_stats = accuracy_result.data[0] if accuracy_result.data else {
             "total_detections": 0,
             "confirmed_count": 0,
@@ -425,7 +425,7 @@ async def get_user_pantry(
         db = get_db_client()
         
         # Call database function
-        result = await db.rpc("get_user_pantry", {"p_user_id": user_id}).execute()
+        result = db.rpc("get_user_pantry", {"p_user_id": user_id}).execute()
         
         return {
             "success": True,
@@ -457,7 +457,7 @@ async def submit_feedback(
         db = get_db_client()
         
         # Verify scan belongs to user
-        scan = await db.table("ingredient_scans").select("id").eq("id", request.scan_id).eq("user_id", user_id).execute()
+        scan = db.table("ingredient_scans").select("id").eq("id", request.scan_id).eq("user_id", user_id).execute()
         if not scan.data:
             raise HTTPException(status_code=404, detail="Scan not found")
         
@@ -483,7 +483,7 @@ async def submit_feedback(
         if request.comment:
             feedback_data["comment"] = request.comment
         
-        await db.table("scan_feedback").insert(feedback_data).execute()
+        db.table("scan_feedback").insert(feedback_data).execute()
         
         return {
             "success": True,
@@ -509,7 +509,7 @@ async def remove_from_pantry(
         db = get_db_client()
         
         # Update pantry item status
-        result = await db.table("user_pantry") \
+        result = db.table("user_pantry") \
             .update({
                 "status": "removed",
                 "removed_at": datetime.utcnow().isoformat()
@@ -577,7 +577,7 @@ async def add_manual_ingredient(
                 )
         
         # Check if ingredient already exists in pantry
-        existing = await db.table("user_pantry") \
+        existing = db.table("user_pantry") \
             .select("*") \
             .eq("user_id", user_id) \
             .eq("ingredient_name", canonical_name) \
@@ -603,7 +603,7 @@ async def add_manual_ingredient(
                     logger.warning(f"Cannot convert {request.unit} to {old_unit} for {canonical_name}")
                     new_qty = old_qty
             
-            await db.table("user_pantry") \
+            db.table("user_pantry") \
                 .update({
                     "quantity": new_qty,
                     "unit": old_unit,
@@ -623,7 +623,7 @@ async def add_manual_ingredient(
             }
         else:
             # Insert new ingredient
-            result = await db.table("user_pantry").insert({
+            result = db.table("user_pantry").insert({
                 "user_id": user_id,
                 "ingredient_name": canonical_name,
                 "display_name": request.ingredient_name,
@@ -693,7 +693,7 @@ async def check_recipe_sufficiency(
         db = get_db_client()
         
         # Get recipe with ingredients
-        recipe = await db.table("recipes") \
+        recipe = db.table("recipes") \
             .select("*, recipe_ingredients(ingredient_name, quantity, unit)") \
             .eq("id", request.recipe_id) \
             .single() \
@@ -703,7 +703,7 @@ async def check_recipe_sufficiency(
             raise HTTPException(status_code=404, detail="Recipe not found")
         
         # Get user's pantry with quantities
-        pantry = await db.table("user_pantry") \
+        pantry = db.table("user_pantry") \
             .select("ingredient_name, quantity, unit") \
             .eq("user_id", user_id) \
             .eq("status", "available") \

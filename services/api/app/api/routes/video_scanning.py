@@ -247,7 +247,7 @@ async def analyze_video(
         db = get_db_client()
         scan_id = str(uuid4())
         
-        await db.table("ingredient_scans").insert({
+        db.table("ingredient_scans").insert({
             "id": scan_id,
             "user_id": user_id,
             "scan_type": "video_" + scan_type,
@@ -296,7 +296,7 @@ async def analyze_video(
         for detection in unique_detections:
             detected_id = str(uuid4())
             
-            await db.table("detected_ingredients").insert({
+            db.table("detected_ingredients").insert({
                 "id": detected_id,
                 "scan_id": scan_id,
                 "user_id": user_id,
@@ -316,7 +316,7 @@ async def analyze_video(
             }).execute()
         
         # Update scan status
-        await db.table("ingredient_scans").update({
+        db.table("ingredient_scans").update({
             "status": "completed",
             "completed_at": datetime.utcnow().isoformat(),
             "total_detections": len(unique_detections)
@@ -354,7 +354,7 @@ async def get_video_scan_status(
         
         db = get_db_client()
         
-        scan = await db.table("ingredient_scans") \
+        scan = db.table("ingredient_scans") \
             .select("*") \
             .eq("id", scan_id) \
             .eq("user_id", user_id) \
