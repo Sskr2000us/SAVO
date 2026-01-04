@@ -6,12 +6,11 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/app_config.dart';
+
 /// Service for pantry/fridge scanning with Vision AI
 class ScanningService {
-  final String baseUrl = const String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'https://savo-ynp1.onrender.com',
-  );
+  final String baseUrl = Config.apiBaseUrl;
 
   Future<String?> _getAccessToken() async {
     final session = Supabase.instance.client.auth.currentSession;

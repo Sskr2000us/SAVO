@@ -434,8 +434,11 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
               ? Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'No shopping list yet. Generate one from a plan (“Shopping List”) or from a recipe (“Check if I have enough”).',
-                    style: TextStyle(color: Colors.grey.shade600),
+                    'No shopping list yet. Create one from a plan (tap “Build Shopping List” or “Approve menu”), or from a recipe (tap “Check if I have enough”).',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 )
               : ListView(
