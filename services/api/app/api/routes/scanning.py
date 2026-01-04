@@ -4,7 +4,7 @@ Endpoints for pantry/fridge scanning with Vision AI
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from uuid import UUID, uuid4
 from datetime import datetime
 from datetime import timedelta
@@ -949,6 +949,21 @@ async def check_recipe_sufficiency(
         
         normalizer = get_normalizer()
 
+        # Minimal production logging for debugging (avoid logging ingredient names or full payload).
+        try:
+            uid_suffix = user_id[-6:] if isinstance(user_id, str) else "unknown"
+        except Exception:
+            uid_suffix = "unknown"
+
+        logger.info(
+            "check_sufficiency request uid_suffix=%s has_recipe_id=%s recipe_ingredients=%s recipe_servings=%s servings=%s",
+            uid_suffix,
+            bool(request.recipe_id),
+            len(request.recipe_ingredients) if isinstance(request.recipe_ingredients, list) else 0,
+            getattr(request, "recipe_servings", None),
+            getattr(request, "servings", None),
+        )
+
         # Resolve recipe ingredients
         recipe_ingredients: List[Dict[str, Any]] = []
 
@@ -1035,6 +1050,12 @@ async def check_recipe_sufficiency(
                 qty = 0.0
             unit = _normalize_unit(item.get("unit") or "pieces")
             pantry_dict[name] = {"quantity": qty, "unit": unit}
+
+        logger.info(
+            "check_sufficiency inventory uid_suffix=%s pantry_items=%s",
+            uid_suffix,
+            len(pantry_dict),
+        )
         
         # Calculate sufficiency
         result = ServingCalculator.check_sufficiency(
@@ -1053,6 +1074,14 @@ async def check_recipe_sufficiency(
             "You have enough ingredients."
             if result.get("sufficient")
             else f"Missing {result.get('total_missing', 0)} ingredient(s)."
+        )
+
+        logger.info(
+            "check_sufficiency result uid_suffix=%s sufficient=%s missing=%s scaling_factor=%s",
+            uid_suffix,
+            bool(result.get("sufficient")),
+            int(result.get("total_missing") or 0),
+            float(result.get("scaling_factor") or 0),
         )
 
         return CheckSufficiencyResponse(
