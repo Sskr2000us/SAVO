@@ -20,8 +20,9 @@ enum _RecipeLanguageMode { english, bilingual }
 
 class RecipeDetailScreen extends StatefulWidget {
   final Recipe recipe;
+  final int? baseServings;
 
-  const RecipeDetailScreen({super.key, required this.recipe});
+  const RecipeDetailScreen({super.key, required this.recipe, this.baseServings});
 
   @override
   State<RecipeDetailScreen> createState() => _RecipeDetailScreenState();
@@ -36,6 +37,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   
   // Serving calculator state
   int _targetServings = 4;
+  int _baseServings = 4;
   bool _checkingSufficiency = false;
   Map<String, dynamic>? _sufficiencyResult;
 
@@ -50,7 +52,10 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   void initState() {
     super.initState();
     _loadYouTubeVideos();
-    _targetServings = 4; // Default to 4 servings
+    _baseServings = (widget.baseServings != null && widget.baseServings! > 0)
+        ? widget.baseServings!
+        : 4;
+    _targetServings = _baseServings;
   }
 
   Future<void> _shareRecipe() async {
@@ -204,6 +209,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   String _buildRecipeMarkdown() {
     final recipe = widget.recipe;
+    final scalingFactor = _baseServings > 0 ? (_targetServings / _baseServings) : 1.0;
     final secondaryCode = _secondaryLanguageCode(recipe);
     final showSecondary = _showBilingual && secondaryCode != null && secondaryCode != 'en';
 
@@ -234,7 +240,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     for (final ing in recipe.ingredientsUsed) {
       final name = _titleCaseWords(ing.canonicalName);
       final unit = ing.unit.trim();
-      final amount = _formatAmount(ing.amount);
+      final amount = _formatAmount(ing.amount * scalingFactor);
       final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
       buffer.writeln('- **$name:** $qty');
     }
@@ -566,10 +572,23 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final scanningService = ScanningService();
+
+      final recipeIngredients = widget.recipe.ingredientsUsed
+          .map(
+            (i) => {
+              'name': i.canonicalName,
+              'quantity': i.amount,
+              'unit': i.unit,
+            },
+          )
+          .toList();
+
       final result = await scanningService.checkSufficiency(
         recipeId: widget.recipe.recipeId,
         servings: _targetServings,
         apiClient: apiClient,
+        recipeIngredients: recipeIngredients,
+        recipeServings: _baseServings,
       );
 
       setState(() {

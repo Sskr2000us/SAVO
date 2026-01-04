@@ -60,6 +60,89 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _recipe_dedupe_key(recipe: Any) -> Optional[str]:
+    if not isinstance(recipe, dict):
+        return None
+    rid = recipe.get("recipe_id") or recipe.get("id")
+    if isinstance(rid, str) and rid.strip():
+        return f"id:{rid.strip().lower()}"
+
+    name = recipe.get("name")
+    if isinstance(name, str) and name.strip():
+        return f"name:{name.strip().lower()}"
+
+    rn = recipe.get("recipe_name")
+    if isinstance(rn, dict):
+        en = rn.get("en")
+        if isinstance(en, str) and en.strip():
+            return f"name:{en.strip().lower()}"
+
+    # Fallback: try a stable-ish key.
+    cuisine = (recipe.get("cuisine") or "").strip().lower() if isinstance(recipe.get("cuisine"), str) else ""
+    method = (recipe.get("cooking_method") or "").strip().lower() if isinstance(recipe.get("cooking_method"), str) else ""
+    if cuisine or method:
+        return f"fallback:{cuisine}|{method}"
+    return None
+
+
+def _dedupe_menu_plan_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort de-duplication of repeated recipe options.
+
+    Prevents the UI from showing the exact same recipe multiple times in a course or across courses.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    seen: set[str] = set()
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list) or not opts:
+                continue
+
+            original = list(opts)
+            new_opts: list[dict] = []
+            local_seen: set[str] = set()
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                key = _recipe_dedupe_key(opt)
+                if not key:
+                    new_opts.append(opt)
+                    continue
+                if key in local_seen:
+                    continue
+                if key in seen:
+                    continue
+                local_seen.add(key)
+                seen.add(key)
+                new_opts.append(opt)
+
+            if not new_opts and original:
+                # Keep at least one option to avoid empty UI.
+                first = original[0]
+                if isinstance(first, dict):
+                    new_opts = [first]
+
+            course["recipe_options"] = new_opts
+
+    payload["menus"] = menus
+    return payload
+
+
 def _normalize_cuisine_preference(value: Any) -> Optional[str]:
     """Normalize cuisine inputs (ids/names/case) to the display names used by rank_cuisines."""
     if not isinstance(value, str):
@@ -645,6 +728,13 @@ async def post_daily(
 
     inventory_models = _db_inventory_to_models(db_inventory)
 
+    # Product default: if the user didn't specify a goal, prioritize using what they have.
+    if not getattr(req, "planning_goal", None) and inventory_models:
+        try:
+            req.planning_goal = "use_what_i_have"
+        except Exception:
+            pass
+
     # Inject DB-backed household/members into APP_CONFIGURATION for LLM safety compliance
     app_config_dict = config.model_dump(mode="json")
     nutrition_targets = household.get("nutrition_targets") or household.get("nutritionTargets") or {}
@@ -768,6 +858,10 @@ async def post_daily(
     except Exception:
         logger.exception("plan_daily crashed user_id=%s", user_id)
         raise
+
+    # Avoid duplicated recipes in the returned menu.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _dedupe_menu_plan_payload(result)
 
     # Persist successful plan
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -908,6 +1002,23 @@ async def post_weekly(
         if isinstance(db_favs, list) and db_favs:
             req.cuisine_preferences = db_favs
     req.cuisine_preferences = _normalize_cuisine_preferences(getattr(req, "cuisine_preferences", None))
+
+    # Product default: if the user didn't specify a goal, prioritize using what they have.
+    try:
+        db_inventory = await get_inventory(user_id)
+    except Exception:
+        db_inventory = []
+    try:
+        db_history = await get_recipe_history(user_id, limit=50)
+    except Exception:
+        db_history = []
+
+    inventory_models = _db_inventory_to_models(db_inventory)
+    if not getattr(req, "planning_goal", None) and inventory_models:
+        try:
+            req.planning_goal = "use_what_i_have"
+        except Exception:
+            pass
     
     # Determine timezone with priority: request > config > UTC
     timezone = req.timezone or config.global_settings.timezone or "UTC"
@@ -923,7 +1034,9 @@ async def post_weekly(
     context = _build_planning_context(
         req,
         "weekly",
-        weekly_context=weekly_context
+        weekly_context=weekly_context,
+        inventory_override=inventory_models,
+        history_override=db_history,
     )
     
     # Add weekly-specific fields
@@ -937,6 +1050,10 @@ async def post_weekly(
         context["servings"] = req.servings
     
     result = await plan_weekly(context)
+
+    # Avoid duplicated recipes in the returned menu.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _dedupe_menu_plan_payload(result)
 
     # Persist successful plan (keyed by start_date)
     if isinstance(result, dict) and result.get("status") == "ok":

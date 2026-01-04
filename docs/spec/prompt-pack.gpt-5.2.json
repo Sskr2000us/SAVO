@@ -533,6 +533,8 @@
           "prompt": [
             "Generate a cuisine-driven menu for daily cooking.",
             "Select cuisine: if requested_cuisine=auto, choose based on inventory fit and variety rotation.",
+            "INVENTORY is the authoritative list of what the user currently has. Prefer recipes that can be cooked mostly from INVENTORY and common staples; minimize shopping_suggestions. If SESSION_REQUEST.planning_goal is use_what_i_have, do not choose recipes that rely on non-inventory ingredients as core components.",
+            "Do not repeat the same recipe across recipe_options, courses, or menus. All recipe_options in a course must be distinct.",
             "If SESSION_REQUEST.planning_goal is set, optimize tradeoffs accordingly: fastest => minimize total time and complexity; healthiest => maximize nutrition quality and minimize added sugar/sodium; kid_friendly => mild spice, familiar textures, safe variants; budget => reuse overlapping ingredients and cheaper staples; use_what_i_have => maximize use of INVENTORY and minimize shopping_suggestions; balanced => default.",
             "If SESSION_REQUEST.avoid_waste=true, prioritize using expiring/near-expiry inventory first and include leftover reuse ideas.",
             "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST include at least one recipe option that repurposes those leftovers (or explicitly schedules a leftovers meal) and do it as early as appropriate, especially if freshness_days_remaining is low.",
@@ -591,6 +593,8 @@
           "prompt": [
             "Create a configurable-horizon weekly plan anchored to SESSION_REQUEST.start_date for SESSION_REQUEST.num_days days (allowed range: 1..4, default 4).",
             "Timezone priority: Use APP_CONFIGURATION.timezone (preferred), falling back to SESSION_REQUEST.timezone if app config not set, or device timezone as final fallback.",
+            "INVENTORY is the authoritative list of what the user currently has. Prefer recipes that can be cooked mostly from INVENTORY and common staples; minimize shopping_suggestions.",
+            "Do not repeat the same recipe across days/courses unless explicitly required by leftovers reuse.",
             "If SESSION_REQUEST.planning_goal is set, apply the same tradeoffs as daily planning across the full horizon.",
             "If SESSION_REQUEST.avoid_waste=true, schedule expiring items earlier in the window and include leftover reuse ideas to reduce waste.",
             "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST schedule leftover consumption within the first 1-2 days when safe (or within weekly_rules.use_leftovers_within_days if present). Prefer consuming leftovers with low freshness_days_remaining earlier.",

@@ -120,10 +120,21 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
         for (final course in menu.courses) {
           if (course.recipeOptions.isEmpty) continue;
           final recipe = course.recipeOptions.first;
+          final recipeIngredients = recipe.ingredientsUsed
+              .map(
+                (i) => {
+                  'name': i.canonicalName,
+                  'quantity': i.amount,
+                  'unit': i.unit,
+                },
+              )
+              .toList();
           final result = await scanningService.checkSufficiency(
             recipeId: recipe.recipeId,
             servings: servings,
             apiClient: apiClient,
+            recipeIngredients: recipeIngredients,
+            recipeServings: servings,
           );
           if (result['success'] == true) {
             successes += 1;
@@ -303,7 +314,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                     ),
                     const Divider(),
                   ],
-                  ...menu.courses.map((course) => _buildCourseSection(course)),
+                  ...menu.courses.map((course) => _buildCourseSection(course, servings: _extractServings(menu))),
                   const SizedBox(height: 16),
                 ],
               );
@@ -315,11 +326,14 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     }
 
     Recipe? firstRecipe;
+    int firstRecipeServings = 4;
     try {
       for (final menu in widget.menuPlan.menus) {
+        final servings = _extractServings(menu);
         for (final course in menu.courses) {
           if (course.recipeOptions.isNotEmpty) {
             firstRecipe = course.recipeOptions.first;
+            firstRecipeServings = servings;
             break;
           }
         }
@@ -361,7 +375,10 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => RecipeDetailScreen(recipe: firstRecipe!),
+                            builder: (_) => RecipeDetailScreen(
+                              recipe: firstRecipe!,
+                              baseServings: firstRecipeServings,
+                            ),
                           ),
                         );
                       },
@@ -438,7 +455,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     }
   }
 
-  Widget _buildCourseSection(Course course) {
+  Widget _buildCourseSection(Course course, {required int servings}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -458,7 +475,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
             itemCount: course.recipeOptions.length,
             itemBuilder: (context, index) {
               final recipe = course.recipeOptions[index];
-              return _RecipeCard(recipe: recipe);
+              return _RecipeCard(recipe: recipe, baseServings: servings);
             },
           ),
         ),
@@ -469,8 +486,9 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
 
 class _RecipeCard extends StatefulWidget {
   final Recipe recipe;
+  final int baseServings;
 
-  const _RecipeCard({required this.recipe});
+  const _RecipeCard({required this.recipe, required this.baseServings});
 
   @override
   State<_RecipeCard> createState() => _RecipeCardState();
@@ -569,7 +587,7 @@ class _RecipeCardState extends State<_RecipeCard> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => RecipeDetailScreen(recipe: widget.recipe),
+                builder: (_) => RecipeDetailScreen(recipe: widget.recipe, baseServings: widget.baseServings),
               ),
             );
           },

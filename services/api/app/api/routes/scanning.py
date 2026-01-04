@@ -906,12 +906,15 @@ async def add_manual_ingredient(
 
 class CheckSufficiencyRequest(BaseModel):
     """Request to check recipe sufficiency"""
-    recipe_id: str
+    recipe_id: Optional[str] = None
+    recipe_ingredients: Optional[List[Dict[str, Any]]] = None
+    recipe_servings: int = Field(default=4, ge=1, le=100)
     servings: int = Field(ge=1, le=100)
 
 
 class CheckSufficiencyResponse(BaseModel):
     """Response with sufficiency status"""
+    success: bool = True
     sufficient: bool
     missing: List[Dict]
     surplus: List[Dict]
@@ -920,6 +923,7 @@ class CheckSufficiencyResponse(BaseModel):
     total_sufficient: int
     total_ingredients: int
     shopping_list: Optional[List[Dict]] = None
+    message: Optional[str] = None
 
 
 @router.post("/check-sufficiency", response_model=CheckSufficiencyResponse)
@@ -943,37 +947,100 @@ async def check_recipe_sufficiency(
         
         db = get_db_client()
         
-        # Get recipe with ingredients
-        recipe = db.table("recipes") \
-            .select("*, recipe_ingredients(ingredient_name, quantity, unit)") \
-            .eq("id", request.recipe_id) \
-            .single() \
-            .execute()
-        
-        if not recipe.data:
-            raise HTTPException(status_code=404, detail="Recipe not found")
-        
-        # Get user's pantry with quantities
-        pantry = db.table("user_pantry") \
-            .select("ingredient_name, quantity, unit") \
-            .eq("user_id", user_id) \
-            .eq("status", "available") \
-            .execute()
-        
-        # Convert pantry to dict
-        pantry_dict = {
-            item["ingredient_name"]: {
-                "quantity": item.get("quantity") or 0,
-                "unit": item.get("unit") or "pieces"
-            }
-            for item in pantry.data
-        }
+        normalizer = get_normalizer()
+
+        # Resolve recipe ingredients
+        recipe_ingredients: List[Dict[str, Any]] = []
+
+        if isinstance(request.recipe_ingredients, list) and request.recipe_ingredients:
+            # Accept from client (preferred path for LLM recipes)
+            for ing in request.recipe_ingredients:
+                if not isinstance(ing, dict):
+                    continue
+                name_raw = (ing.get("name") or ing.get("ingredient") or ing.get("canonical_name") or "").strip()
+                if not name_raw:
+                    continue
+                try:
+                    qty = float(ing.get("quantity") if ing.get("quantity") is not None else ing.get("amount") or 0)
+                except Exception:
+                    qty = 0.0
+                unit = _normalize_unit((ing.get("unit") or "pieces"))
+                recipe_ingredients.append(
+                    {
+                        "name": normalizer.normalize_name(name_raw),
+                        "quantity": qty,
+                        "unit": unit,
+                    }
+                )
+        elif request.recipe_id:
+            # Legacy path: attempt DB lookup
+            recipe = (
+                db.table("recipes")
+                .select("*, recipe_ingredients(ingredient_name, quantity, unit)")
+                .eq("id", request.recipe_id)
+                .single()
+                .execute()
+            )
+            if not recipe.data:
+                raise HTTPException(status_code=404, detail="Recipe not found")
+            for ing in recipe.data.get("recipe_ingredients") or []:
+                try:
+                    recipe_ingredients.append(
+                        {
+                            "name": normalizer.normalize_name((ing.get("ingredient_name") or "").strip()),
+                            "quantity": float(ing.get("quantity") or 0),
+                            "unit": _normalize_unit(ing.get("unit") or "pieces"),
+                        }
+                    )
+                except Exception:
+                    continue
+        else:
+            raise HTTPException(status_code=400, detail="Provide recipe_ingredients or recipe_id")
+
+        if not recipe_ingredients:
+            raise HTTPException(status_code=400, detail="No valid recipe ingredients provided")
+
+        # Get user's canonical inventory (inventory_items)
+        # Prefer current items when the schema supports it.
+        try:
+            pantry = (
+                db.table("inventory_items")
+                .select("canonical_name, quantity, unit")
+                .eq("user_id", user_id)
+                .eq("item_state", "raw")
+                .in_("storage_location", ["pantry", "fridge", "freezer"])
+                .eq("is_current", True)
+                .execute()
+            )
+        except Exception:
+            pantry = (
+                db.table("inventory_items")
+                .select("canonical_name, quantity, unit")
+                .eq("user_id", user_id)
+                .eq("item_state", "raw")
+                .in_("storage_location", ["pantry", "fridge", "freezer"])
+                .execute()
+            )
+
+        pantry_dict: Dict[str, Dict[str, Any]] = {}
+        for item in pantry.data or []:
+            if not isinstance(item, dict):
+                continue
+            name = (item.get("canonical_name") or "").strip()
+            if not name:
+                continue
+            try:
+                qty = float(item.get("quantity") or 0)
+            except Exception:
+                qty = 0.0
+            unit = _normalize_unit(item.get("unit") or "pieces")
+            pantry_dict[name] = {"quantity": qty, "unit": unit}
         
         # Calculate sufficiency
         result = ServingCalculator.check_sufficiency(
             pantry_items=pantry_dict,
-            recipe_ingredients=recipe.data["recipe_ingredients"],
-            recipe_servings=recipe.data.get("servings", 4),
+            recipe_ingredients=recipe_ingredients,
+            recipe_servings=request.recipe_servings,
             needed_servings=request.servings
         )
         
@@ -982,6 +1049,12 @@ async def check_recipe_sufficiency(
         if result["missing"]:
             shopping_list = ServingCalculator.generate_shopping_list(result["missing"])
         
+        msg = (
+            "You have enough ingredients."
+            if result.get("sufficient")
+            else f"Missing {result.get('total_missing', 0)} ingredient(s)."
+        )
+
         return CheckSufficiencyResponse(
             sufficient=result["sufficient"],
             missing=result["missing"],
@@ -990,7 +1063,8 @@ async def check_recipe_sufficiency(
             total_missing=result["total_missing"],
             total_sufficient=result["total_sufficient"],
             total_ingredients=result["total_ingredients"],
-            shopping_list=shopping_list
+            shopping_list=shopping_list,
+            message=msg,
         )
         
     except HTTPException:

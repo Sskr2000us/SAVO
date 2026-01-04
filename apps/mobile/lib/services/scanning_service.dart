@@ -436,6 +436,8 @@ class ScanningService {
     required String recipeId,
     required int servings,
     required dynamic apiClient,
+    List<Map<String, dynamic>>? recipeIngredients,
+    int recipeServings = 4,
   }) async {
     try {
       // Use ApiClient which handles auth automatically
@@ -446,6 +448,8 @@ class ScanningService {
         body: json.encode({
           'recipe_id': recipeId,
           'servings': servings,
+          'recipe_servings': recipeServings,
+          if (recipeIngredients != null) 'recipe_ingredients': recipeIngredients,
         }),
       );
 
