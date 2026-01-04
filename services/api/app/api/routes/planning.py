@@ -967,6 +967,17 @@ async def get_latest_plan(
     payload = plans[0].get("recipes")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=500, detail="Saved meal plan is not in expected format")
+
+    # If the inventory has changed since this plan was generated, treat it as stale.
+    try:
+        db_inventory = await get_inventory(user_id)
+    except Exception:
+        db_inventory = []
+    current_hash = _inventory_snapshot_hash(_db_inventory_to_models(db_inventory))
+    saved_hash = payload.get("_inventory_hash")
+    if isinstance(saved_hash, str) and saved_hash and saved_hash != current_hash:
+        raise HTTPException(status_code=404, detail="Saved meal plan is stale")
+
     return MenuPlanResponse(**payload)
 
 
