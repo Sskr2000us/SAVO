@@ -17,6 +17,19 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
   int _numDays = 3;
   bool _planning = false;
 
+  static const Map<String, String> _planningGoalLabels = {
+    'balanced': 'Balanced',
+    'fastest': 'Fastest',
+    'healthiest': 'Healthiest',
+    'kid_friendly': 'Kid-friendly',
+    'budget': 'Budget',
+    'use_what_i_have': 'Use what I have',
+  };
+
+  String _planningGoal = 'balanced';
+  bool _avoidWaste = false;
+  bool _useLeftovers = true;
+
   Future<void> _selectStartDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -37,10 +50,22 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final response = await apiClient.post('/plan/weekly', {
+      final body = <String, dynamic>{
         'start_date': DateFormat('yyyy-MM-dd').format(_startDate),
         'num_days': _numDays,
-      });
+      };
+
+      if (_planningGoal != 'balanced') {
+        body['planning_goal'] = _planningGoal;
+      }
+      if (_avoidWaste) {
+        body['avoid_waste'] = true;
+      }
+      if (!_useLeftovers) {
+        body['use_leftovers'] = false;
+      }
+
+      final response = await apiClient.post('/plan/weekly', body);
 
       if (response['status'] == 'ok') {
         final menuPlan = MenuPlanResponse.fromJson(response);
@@ -125,6 +150,45 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
                           });
                         },
                       ),
+                    ),
+                    const Divider(),
+                    Text(
+                      'Advanced options (optional)',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: _planningGoal,
+                      decoration: const InputDecoration(
+                        labelText: 'Planning goal',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _planningGoalLabels.entries
+                          .map(
+                            (e) => DropdownMenuItem<String>(
+                              value: e.key,
+                              child: Text(e.value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _planningGoal = value);
+                      },
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _avoidWaste,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Avoid waste'),
+                      subtitle: const Text('Use expiring items earlier, reuse leftovers'),
+                      onChanged: (v) => setState(() => _avoidWaste = v),
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _useLeftovers,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use leftovers (when available)'),
+                      subtitle: const Text('Schedule leftover meals sooner when safe'),
+                      onChanged: (v) => setState(() => _useLeftovers = v),
                     ),
                   ],
                 ),

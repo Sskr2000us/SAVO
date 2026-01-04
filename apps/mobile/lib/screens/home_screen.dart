@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/api_client.dart';
+import '../services/profile_service.dart';
 import '../models/planning.dart';
 import '../models/profile_state.dart';
 import '../theme/app_theme.dart';
@@ -12,9 +13,64 @@ import 'party_planner_screen.dart';
 import 'scan_ingredients_screen.dart';
 import 'settings_screen.dart';
 import 'onboarding/login_screen.dart';
+import 'onboarding/household_screen.dart';
+import 'onboarding/allergies_screen.dart';
+import 'onboarding/dietary_screen.dart';
+import 'onboarding/onboarding_coordinator.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _loadingOnboarding = true;
+  Map<String, dynamic>? _onboardingStatus;
+
+  static const Map<String, String> _planningGoalLabels = {
+    'balanced': 'Balanced',
+    'fastest': 'Fastest',
+    'healthiest': 'Healthiest',
+    'kid_friendly': 'Kid-friendly',
+    'budget': 'Budget',
+    'use_what_i_have': 'Use what I have',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshOnboardingStatus();
+    });
+  }
+
+  Future<void> _refreshOnboardingStatus() async {
+    if (mounted) {
+      setState(() {
+        _loadingOnboarding = true;
+      });
+    }
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final profileService = ProfileService(apiClient);
+      final status = await profileService.getOnboardingStatus();
+      profileState.updateOnboardingStatus(status);
+
+      if (!mounted) return;
+      setState(() {
+        _onboardingStatus = status;
+        _loadingOnboarding = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingOnboarding = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +163,38 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.lg),
 
+            if (!_loadingOnboarding) ...[
+              _SetupBanner(
+                onboardingStatus: _onboardingStatus,
+                onResume: () {
+                  Navigator.push(
+                    context,
+                    AppMotion.createRoute(const OnboardingCoordinator()),
+                  );
+                },
+                onHousehold: () {
+                  Navigator.push(
+                    context,
+                    AppMotion.createRoute(const OnboardingHouseholdScreen()),
+                  );
+                },
+                onAllergies: () {
+                  Navigator.push(
+                    context,
+                    AppMotion.createRoute(const OnboardingAllergiesScreen()),
+                  );
+                },
+                onDietary: () {
+                  Navigator.push(
+                    context,
+                    AppMotion.createRoute(const OnboardingDietaryScreen()),
+                  );
+                },
+                onRefresh: _refreshOnboardingStatus,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+            ],
+
             // Section header
             Text(
               'What would you like to plan?',
@@ -177,6 +265,10 @@ class HomeScreen extends StatelessWidget {
       Navigator.of(context).pushReplacementNamed('/login');
       return;
     }
+
+    final advanced = await _showDailyPlanningOptions(context);
+    if (!context.mounted) return;
+    if (advanced == null) return;
     
     final apiClient = Provider.of<ApiClient>(context, listen: false);
     final profileState = Provider.of<ProfileState>(context, listen: false);
@@ -214,8 +306,6 @@ class HomeScreen extends StatelessWidget {
     );
 
     try {
-      print('DEBUG: Sending daily plan request with time=60, servings=4');
-
       // Best-effort warm-up to reduce Render cold-start fetch failures on web.
       try {
         await apiClient.get('/health');
@@ -228,6 +318,16 @@ class HomeScreen extends StatelessWidget {
         'servings': 4,
       };
 
+      if (advanced.planningGoal != null && advanced.planningGoal != 'balanced') {
+        body['planning_goal'] = advanced.planningGoal;
+      }
+      if (advanced.avoidWaste == true) {
+        body['avoid_waste'] = true;
+      }
+      if (advanced.useLeftovers == false) {
+        body['use_leftovers'] = false;
+      }
+
       // Pass preferred cuisines (min 1, max 5 configured in Settings).
       final preferred = profileState.favoriteCuisines;
       if (preferred.isNotEmpty) {
@@ -235,7 +335,7 @@ class HomeScreen extends StatelessWidget {
       }
 
       final response = await apiClient.post('/plan/daily', body);
-      print('DEBUG: Received response: ${response.toString().substring(0, 100)}');
+      if (!context.mounted) return;
       Navigator.pop(context); // Close loading
 
       if (response['status'] == 'ok') {
@@ -273,6 +373,7 @@ class HomeScreen extends StatelessWidget {
         _showError(context, message);
       }
     } catch (e) {
+      if (!context.mounted) return;
       Navigator.pop(context);
       _showError(context, e.toString());
     }
@@ -290,6 +391,221 @@ class HomeScreen extends StatelessWidget {
             child: const Text('OK'),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<_AdvancedPlanningOptions?> _showDailyPlanningOptions(BuildContext context) async {
+    String selectedGoal = 'balanced';
+    bool avoidWaste = false;
+    bool useLeftovers = true;
+
+    return showDialog<_AdvancedPlanningOptions>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setLocalState) => AlertDialog(
+          title: const Text('Daily Menu'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Advanced options (optional)'),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: selectedGoal,
+                decoration: const InputDecoration(
+                  labelText: 'Planning goal',
+                  border: OutlineInputBorder(),
+                ),
+                items: _planningGoalLabels.entries
+                    .map(
+                      (e) => DropdownMenuItem<String>(
+                        value: e.key,
+                        child: Text(e.value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  setLocalState(() => selectedGoal = v);
+                },
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile.adaptive(
+                value: avoidWaste,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Avoid waste'),
+                subtitle: const Text('Prioritize expiring items and leftover reuse'),
+                onChanged: (v) => setLocalState(() => avoidWaste = v),
+              ),
+              SwitchListTile.adaptive(
+                value: useLeftovers,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Use leftovers (when available)'),
+                subtitle: const Text('Schedule leftovers sooner when safe'),
+                onChanged: (v) => setLocalState(() => useLeftovers = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                _AdvancedPlanningOptions(
+                  planningGoal: selectedGoal,
+                  avoidWaste: avoidWaste,
+                  useLeftovers: useLeftovers,
+                ),
+              ),
+              child: const Text('Plan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AdvancedPlanningOptions {
+  final String? planningGoal;
+  final bool avoidWaste;
+  final bool useLeftovers;
+
+  const _AdvancedPlanningOptions({
+    required this.planningGoal,
+    required this.avoidWaste,
+    required this.useLeftovers,
+  });
+}
+
+class _SetupBanner extends StatelessWidget {
+  final Map<String, dynamic>? onboardingStatus;
+  final VoidCallback onResume;
+  final VoidCallback onHousehold;
+  final VoidCallback onAllergies;
+  final VoidCallback onDietary;
+  final VoidCallback onRefresh;
+
+  const _SetupBanner({
+    required this.onboardingStatus,
+    required this.onResume,
+    required this.onHousehold,
+    required this.onAllergies,
+    required this.onDietary,
+    required this.onRefresh,
+  });
+
+  bool get _completed => onboardingStatus?['completed'] == true;
+
+  List<String> get _missingLabels {
+    final raw = onboardingStatus?['missing_fields'];
+    if (raw is! List) return const [];
+
+    final labels = <String>[];
+    for (final v in raw) {
+      final s = v.toString().trim().toLowerCase();
+      if (s.isEmpty) continue;
+
+      if (s.contains('household')) {
+        labels.add('Household');
+      } else if (s.contains('allerg') || s.contains('safety')) {
+        labels.add('Allergens');
+      } else if (s.contains('diet')) {
+        labels.add('Dietary');
+      } else if (s.contains('spice')) {
+        labels.add('Spice');
+      } else if (s.contains('pantry')) {
+        labels.add('Pantry');
+      } else if (s.contains('language')) {
+        labels.add('Language');
+      }
+    }
+    return labels.toSet().toList()..sort();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_completed) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      color: cs.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_fix_high, color: cs.onPrimaryContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Finish setup to personalize your menus',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: cs.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Refresh',
+                  onPressed: onRefresh,
+                  icon: Icon(Icons.refresh, color: cs.onPrimaryContainer),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Set your household, allergens, and dietary preferences so SAVO can plan safely and accurately.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onPrimaryContainer,
+              ),
+            ),
+            if (_missingLabels.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Missing: ${_missingLabels.join(', ')}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onPrimaryContainer,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: onResume,
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Resume setup'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: onHousehold,
+                  icon: const Icon(Icons.people_outline),
+                  label: const Text('Household'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: onAllergies,
+                  icon: const Icon(Icons.health_and_safety_outlined),
+                  label: const Text('Allergens'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: onDietary,
+                  icon: const Icon(Icons.restaurant_menu),
+                  label: const Text('Dietary'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

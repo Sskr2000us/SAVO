@@ -533,6 +533,9 @@
           "prompt": [
             "Generate a cuisine-driven menu for daily cooking.",
             "Select cuisine: if requested_cuisine=auto, choose based on inventory fit and variety rotation.",
+            "If SESSION_REQUEST.planning_goal is set, optimize tradeoffs accordingly: fastest => minimize total time and complexity; healthiest => maximize nutrition quality and minimize added sugar/sodium; kid_friendly => mild spice, familiar textures, safe variants; budget => reuse overlapping ingredients and cheaper staples; use_what_i_have => maximize use of INVENTORY and minimize shopping_suggestions; balanced => default.",
+            "If SESSION_REQUEST.avoid_waste=true, prioritize using expiring/near-expiry inventory first and include leftover reuse ideas.",
+            "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST include at least one recipe option that repurposes those leftovers (or explicitly schedules a leftovers meal) and do it as early as appropriate, especially if freshness_days_remaining is low.",
             "Derive menu_headers strictly from CUISINE_METADATA[selected_cuisine].daily_structure.",
             "For each course header, generate 2–3 recipe_options using available ingredients.",
             "Include quantities, steps, nutrition, health_fit, leftovers forecast, preservation guidance, and YouTube references.",
@@ -588,6 +591,9 @@
           "prompt": [
             "Create a configurable-horizon weekly plan anchored to SESSION_REQUEST.start_date for SESSION_REQUEST.num_days days (allowed range: 1..4, default 4).",
             "Timezone priority: Use APP_CONFIGURATION.timezone (preferred), falling back to SESSION_REQUEST.timezone if app config not set, or device timezone as final fallback.",
+            "If SESSION_REQUEST.planning_goal is set, apply the same tradeoffs as daily planning across the full horizon.",
+            "If SESSION_REQUEST.avoid_waste=true, schedule expiring items earlier in the window and include leftover reuse ideas to reduce waste.",
+            "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST schedule leftover consumption within the first 1-2 days when safe (or within weekly_rules.use_leftovers_within_days if present). Prefer consuming leftovers with low freshness_days_remaining earlier.",
             "REQUIRED: Return planning_window object with fields: {start_date (YYYY-MM-DD), num_days (1..4), timezone (string)}.",
             "Generate one menu with menu_type='weekly_day' for each day in the planning window.",
             "For each weekly_day menu, you MUST set:",

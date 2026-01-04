@@ -18,6 +18,19 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
   int _adult18Plus = 10;
   bool _planning = false;
 
+  static const Map<String, String> _planningGoalLabels = {
+    'balanced': 'Balanced',
+    'fastest': 'Fastest',
+    'healthiest': 'Healthiest',
+    'kid_friendly': 'Kid-friendly',
+    'budget': 'Budget',
+    'use_what_i_have': 'Use what I have',
+  };
+
+  String _planningGoal = 'balanced';
+  bool _avoidWaste = false;
+  bool _useLeftovers = true;
+
   String? _validationError;
 
   void _validateAgeGroups() {
@@ -56,7 +69,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final response = await apiClient.post('/plan/party', {
+      final body = <String, dynamic>{
         'party_settings': {
           'guest_count': _guestCount,
           'age_group_counts': {
@@ -65,7 +78,20 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
             'adult_18_plus': _adult18Plus,
           },
         },
-      });
+      };
+
+      if (_planningGoal != 'balanced') {
+        body['planning_goal'] = _planningGoal;
+      }
+      if (_avoidWaste) {
+        body['avoid_waste'] = true;
+      }
+
+      if (!_useLeftovers) {
+        body['use_leftovers'] = false;
+      }
+
+      final response = await apiClient.post('/plan/party', body);
 
       if (response['status'] == 'ok') {
         final menuPlan = MenuPlanResponse.fromJson(response);
@@ -208,6 +234,47 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                           _validateAgeGroups();
                         });
                       },
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Advanced options (optional)',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: _planningGoal,
+                      decoration: const InputDecoration(
+                        labelText: 'Planning goal',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _planningGoalLabels.entries
+                          .map(
+                            (e) => DropdownMenuItem<String>(
+                              value: e.key,
+                              child: Text(e.value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _planningGoal = value);
+                      },
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _avoidWaste,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Avoid waste'),
+                      subtitle: const Text('Prioritize expiring items and leftover reuse'),
+                      onChanged: (v) => setState(() => _avoidWaste = v),
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _useLeftovers,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use leftovers (when available)'),
+                      subtitle: const Text('Schedule leftovers sooner when safe'),
+                      onChanged: (v) => setState(() => _useLeftovers = v),
                     ),
                   ],
                 ),

@@ -53,6 +53,30 @@ class SessionRequest(BaseModel):
     inventory: Optional[Dict[str, Any]] = Field(None, description="Inventory with available_ingredients list")
     family_profile: Optional[Dict[str, Any]] = Field(None, description="Family profile with members, dietary restrictions")
 
+    # Advanced planning preferences (optional)
+    planning_goal: Optional[
+        Literal[
+            "balanced",
+            "fastest",
+            "healthiest",
+            "kid_friendly",
+            "budget",
+            "use_what_i_have",
+        ]
+    ] = Field(
+        None,
+        description="High-level planning intent to guide tradeoffs",
+    )
+    avoid_waste: Optional[bool] = Field(
+        None,
+        description="If true, prioritize using expiring items and reduce waste",
+    )
+
+    use_leftovers: Optional[bool] = Field(
+        None,
+        description="If false, do not schedule leftover reuse even when available",
+    )
+
 
 class DailyPlanRequest(SessionRequest):
     """Request for daily meal planning with meal type and time context"""

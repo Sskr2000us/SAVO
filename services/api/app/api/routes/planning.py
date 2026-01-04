@@ -410,6 +410,22 @@ def _build_planning_context(
         party_settings=party_settings,
         weekly_context=weekly_context
     )
+
+    # Surface leftover inventory explicitly for the prompt pack.
+    try:
+        leftover_ids = [
+            getattr(i, "inventory_id", None)
+            for i in inventory
+            if getattr(i, "state", None) == "leftover"
+        ]
+        leftover_ids = [x for x in leftover_ids if x]
+        if isinstance(orch_context, dict):
+            rules_ctx = orch_context.get("orchestration_rules")
+            if isinstance(rules_ctx, dict):
+                rules_ctx["leftover_inventory_ids"] = leftover_ids
+    except Exception:
+        # Best-effort only; planning should still function without leftovers metadata.
+        pass
     
     # Determine output settings
     output_lang = request.output_language or config.global_settings.primary_language
@@ -417,10 +433,32 @@ def _build_planning_context(
     
     inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
 
+    leftovers_inventory: list[dict] = []
+    try:
+        for item in inventory_items or []:
+            if not isinstance(item, dict):
+                continue
+            state = item.get("state")
+            if isinstance(state, str) and state.strip().lower() == "leftover":
+                leftovers_inventory.append(item)
+    except Exception:
+        leftovers_inventory = []
+
+    leftovers_expiring_soon: list[dict] = []
+    for item in leftovers_inventory:
+        days = item.get("freshness_days_remaining")
+        if isinstance(days, int) and days <= 2:
+            leftovers_expiring_soon.append(item)
+
     context = {
         "app_configuration": app_configuration_override or config.model_dump(mode='json'),
         "session_request": request.model_dump(mode='json'),
         "inventory": inventory_items,
+        "leftovers_inventory": leftovers_inventory,
+        "leftovers_summary": {
+            "count": len(leftovers_inventory),
+            "expiring_soon_count": len(leftovers_expiring_soon),
+        },
         "cuisine_metadata": CUISINE_METADATA,
         "cuisine_rankings": [score.model_dump() for score in cuisine_scores[:5]],  # Top 5 cuisines
         "history_context": {
@@ -536,6 +574,12 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
         context["meal_time"] = req.meal_time
     if req.current_date:
         context["current_date"] = req.current_date
+
+    # Advanced planning options (optional)
+    if getattr(req, "planning_goal", None):
+        context["planning_goal"] = req.planning_goal
+    if getattr(req, "avoid_waste", None) is not None:
+        context["avoid_waste"] = bool(req.avoid_waste)
     
     # Intelligence Layer 2: Build Nutrition Profile from family members
     nutrition_profile = None

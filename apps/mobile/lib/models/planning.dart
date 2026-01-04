@@ -1,3 +1,5 @@
+import 'youtube.dart';
+
 class MenuPlanResponse {
   final String status;
   final String selectedCuisine;
@@ -95,6 +97,7 @@ class Recipe {
   final Map<String, dynamic> nutritionPerServing;
   final List<Map<String, String>>? healthBenefits;
   final Map<String, dynamic> leftoverForecast;
+  final List<RankedVideo> youtubeReferences;
 
   Recipe({
     required this.recipeId,
@@ -108,9 +111,32 @@ class Recipe {
     required this.nutritionPerServing,
     this.healthBenefits,
     required this.leftoverForecast,
+    this.youtubeReferences = const [],
   });
 
   factory Recipe.fromJson(Map<String, dynamic> json) {
+    final refs = <RankedVideo>[];
+    final rawRefs = json['youtube_references'];
+    if (rawRefs is List) {
+      for (final v in rawRefs) {
+        if (v is Map) {
+          final m = Map<String, dynamic>.from(v);
+          refs.add(
+            RankedVideo(
+              videoId: (m['video_id'] ?? '').toString(),
+              title: (m['title'] ?? '').toString(),
+              channel: (m['channel'] ?? '').toString(),
+              trustScore: (m['trust_score'] ?? 0.0).toDouble(),
+              matchScore: 0.0,
+              reasons: const [],
+            ),
+          );
+        }
+      }
+      // Drop invalid rows with no video id.
+      refs.removeWhere((r) => r.videoId.trim().isEmpty);
+    }
+
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
       recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
@@ -131,6 +157,7 @@ class Recipe {
               ?.map((b) => Map<String, String>.from(b as Map))
               .toList(),
       leftoverForecast: json['leftover_forecast'] ?? {},
+      youtubeReferences: refs,
     );
   }
 
