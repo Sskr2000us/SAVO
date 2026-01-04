@@ -26,6 +26,7 @@ class _QuantityPickerState extends State<QuantityPicker> {
   late double _quantity;
   late String _unit;
   late TextEditingController _textController;
+  final FocusNode _quantityFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -42,14 +43,27 @@ class _QuantityPickerState extends State<QuantityPicker> {
         oldWidget.initialUnit != widget.initialUnit) {
       _quantity = widget.initialQuantity;
       _unit = widget.initialUnit;
-      _textController.text = _formatQuantity(_quantity);
+
+      // Avoid clobbering user input mid-edit (causes cursor jump and digit overwrite).
+      if (!_quantityFocusNode.hasFocus) {
+        _setQuantityText(_formatQuantity(_quantity));
+      }
     }
   }
 
   @override
   void dispose() {
     _textController.dispose();
+    _quantityFocusNode.dispose();
     super.dispose();
+  }
+
+  void _setQuantityText(String text) {
+    _textController.value = _textController.value.copyWith(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+      composing: TextRange.empty,
+    );
   }
 
   String _formatQuantity(double qty) {
@@ -75,7 +89,7 @@ class _QuantityPickerState extends State<QuantityPicker> {
       } else {
         _quantity += 10;
       }
-      _textController.text = _formatQuantity(_quantity);
+      _setQuantityText(_formatQuantity(_quantity));
       widget.onChanged(_quantity, _unit);
     });
   }
@@ -97,13 +111,16 @@ class _QuantityPickerState extends State<QuantityPicker> {
       }
       
       _quantity = (_quantity - decrement).clamp(0.25, double.infinity);
-      _textController.text = _formatQuantity(_quantity);
+      _setQuantityText(_formatQuantity(_quantity));
       widget.onChanged(_quantity, _unit);
     });
   }
 
   void _handleTextChange(String value) {
     if (!widget.enabled) return;
+
+    // Let the user type naturally (e.g. "1."), and only parse when it's valid.
+    if (value.isEmpty || value.endsWith('.')) return;
     
     final qty = double.tryParse(value);
     if (qty != null && qty > 0) {
@@ -168,11 +185,19 @@ class _QuantityPickerState extends State<QuantityPicker> {
             ),
             child: TextField(
               controller: _textController,
+              focusNode: _quantityFocusNode,
               enabled: widget.enabled,
               textAlign: TextAlign.center,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  final text = newValue.text;
+                  if (text.isEmpty) return newValue;
+                  if (RegExp(r'^\d*\.?\d{0,2}$').hasMatch(text)) {
+                    return newValue;
+                  }
+                  return oldValue;
+                }),
               ],
               style: quantityTextStyle,
               decoration: const InputDecoration(
