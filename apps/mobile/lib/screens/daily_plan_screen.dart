@@ -22,6 +22,99 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
   bool _generating = false;
   String? _error;
 
+  Future<List<Map<String, dynamic>>> _fetchVerifyItems(ApiClient apiClient) async {
+    try {
+      final res = await apiClient.get('/api/scanning/pantry/summary?max_verify=5');
+      if (res is Map && res['verify'] is List) {
+        return (res['verify'] as List)
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
+      }
+    } catch (_) {
+      // Best-effort only.
+    }
+    return const [];
+  }
+
+  Future<Map<String, bool>?> _askQuickInventoryCheck(List<Map<String, dynamic>> verify) async {
+    if (verify.isEmpty) return const {};
+
+    final Map<String, bool> selections = {};
+    for (final item in verify) {
+      final id = item['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      selections[id] = true;
+    }
+
+    return showDialog<Map<String, bool>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Quick inventory check'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Confirm a few items so today\'s plan is more accurate.'),
+                    const SizedBox(height: 12),
+                    for (final item in verify)
+                      Builder(
+                        builder: (_) {
+                          final id = item['id']?.toString() ?? '';
+                          if (id.isEmpty) return const SizedBox.shrink();
+                          final label = (item['display_name']?.toString().trim().isNotEmpty == true)
+                              ? item['display_name'].toString().trim()
+                              : (item['ingredient_name']?.toString() ?? 'Item');
+                          final checked = selections[id] ?? true;
+                          return CheckboxListTile(
+                            value: checked,
+                            onChanged: (v) => setLocal(() => selections[id] = (v ?? true)),
+                            title: Text(label),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Skip'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, selections),
+                  child: const Text('Continue'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _applyInventorySelections(
+    ApiClient apiClient,
+    List<Map<String, dynamic>> verify,
+    Map<String, bool> selections,
+  ) async {
+    for (final item in verify) {
+      final id = item['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+
+      final stillHave = selections[id] ?? true;
+      if (!stillHave) {
+        await apiClient.patch('/inventory-db/items/$id', {
+          'is_current': false,
+        });
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +165,14 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
     final profileState = Provider.of<ProfileState>(context, listen: false);
 
     try {
+      final verify = await _fetchVerifyItems(apiClient);
+      if (verify.isNotEmpty && mounted) {
+        final selections = await _askQuickInventoryCheck(verify);
+        if (selections != null && selections.isNotEmpty) {
+          await _applyInventorySelections(apiClient, verify, selections);
+        }
+      }
+
       final body = <String, dynamic>{
         'time_available_minutes': 60,
         'servings': 4,
@@ -96,8 +197,8 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
         body['measurement_system'] = measurementSystem.trim();
       }
 
-        // Prefer cached daily plans when available for reliability (especially on web).
-        final response = await apiClient.post('/plan/daily', body);
+      // Prefer cached daily plans when available for reliability (especially on web).
+      final response = await apiClient.post('/plan/daily', body);
       if (!mounted) return;
 
       final plan = MenuPlanResponse.fromJson(response);
