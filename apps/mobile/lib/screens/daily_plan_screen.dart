@@ -96,7 +96,8 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
         body['measurement_system'] = measurementSystem.trim();
       }
 
-      final response = await apiClient.post('/plan/daily?force_regenerate=true', body);
+        // Prefer cached daily plans when available for reliability (especially on web).
+        final response = await apiClient.post('/plan/daily', body);
       if (!mounted) return;
 
       final plan = MenuPlanResponse.fromJson(response);

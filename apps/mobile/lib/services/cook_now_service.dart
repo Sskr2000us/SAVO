@@ -34,7 +34,9 @@ class CookNowService {
       body['measurement_system'] = measurementSystem.trim();
     }
 
-    final response = await apiClient.post('/plan/daily?force_regenerate=true', body);
+    // Avoid forcing regeneration on every request.
+    // On web, long-running forced generations can be cut off by upstream timeouts and surface as "Failed to fetch".
+    final response = await apiClient.post('/plan/daily', body);
     final plan = MenuPlanResponse.fromJson(response);
 
     final byId = <String, Recipe>{};
