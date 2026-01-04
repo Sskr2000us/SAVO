@@ -213,10 +213,10 @@ class _OnboardingSignupScreenState extends State<OnboardingSignupScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Checkbox(
+                    Switch.adaptive(
                       value: _agreedToTerms,
                       onChanged: (value) {
-                        setState(() => _agreedToTerms = value ?? false);
+                        setState(() => _agreedToTerms = value);
                       },
                     ),
                     Expanded(

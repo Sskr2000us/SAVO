@@ -159,19 +159,32 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      visualDensity: VisualDensity.standard,
       
       // Color Scheme
       colorScheme: ColorScheme.dark(
         primary: AppColors.primary,
         secondary: AppColors.secondary,
         tertiary: AppColors.accent,
+        primaryContainer: AppColors.primary.withOpacity(0.18),
+        secondaryContainer: AppColors.secondary.withOpacity(0.18),
+        tertiaryContainer: AppColors.accent.withOpacity(0.18),
         surface: AppColors.surface,
+        surfaceVariant: AppColors.card,
+        outline: AppColors.divider,
+        outlineVariant: AppColors.divider,
         background: AppColors.bg,
         error: AppColors.danger,
         onPrimary: Colors.white,
         onSecondary: Colors.white,
+        onTertiary: Colors.black,
+        onPrimaryContainer: AppColors.textPrimary,
+        onSecondaryContainer: AppColors.textPrimary,
+        onTertiaryContainer: AppColors.textPrimary,
         onSurface: AppColors.textPrimary,
+        onSurfaceVariant: AppColors.textSecondary,
         onBackground: AppColors.textPrimary,
+        onError: Colors.white,
       ),
 
       // Scaffold
@@ -181,9 +194,21 @@ class AppTheme {
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         centerTitle: false,
         titleTextStyle: AppTypography.h2Style(),
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
+      ),
+
+      // Cards
+      cardTheme: CardThemeData(
+        color: AppColors.card,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       ),
 
       // Text Theme
@@ -248,6 +273,15 @@ class AppTheme {
         ),
       ),
 
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: AppColors.textPrimary,
+          textStyle: AppTypography.bodyStyle().copyWith(
+            fontWeight: AppTypography.semibold,
+          ),
+        ),
+      ),
+
       // Input Decoration
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -271,10 +305,53 @@ class AppTheme {
         hintStyle: AppTypography.bodyStyle(color: AppColors.textSecondary),
       ),
 
+      // List Tiles
+      listTileTheme: ListTileThemeData(
+        iconColor: AppColors.textSecondary,
+        textColor: AppColors.textPrimary,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.xs,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+      ),
+
+      // Switch / Checkbox
+      switchTheme: SwitchThemeData(
+        thumbColor: MaterialStateProperty.resolveWith((states) {
+          if (states.contains(MaterialState.selected)) {
+            return Colors.white;
+          }
+          return AppColors.textSecondary;
+        }),
+        trackColor: MaterialStateProperty.resolveWith((states) {
+          if (states.contains(MaterialState.selected)) {
+            return AppColors.primary;
+          }
+          return AppColors.divider;
+        }),
+      ),
+
+      checkboxTheme: CheckboxThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+        ),
+        side: const BorderSide(color: AppColors.divider, width: 1.5),
+        fillColor: MaterialStateProperty.resolveWith((states) {
+          if (states.contains(MaterialState.selected)) {
+            return AppColors.primary;
+          }
+          return Colors.transparent;
+        }),
+        checkColor: MaterialStateProperty.all(Colors.white),
+      ),
+
       // Chip Theme
       chipTheme: ChipThemeData(
         backgroundColor: AppColors.card,
-        selectedColor: AppColors.primary.withOpacity(0.2),
+        selectedColor: AppColors.primary.withOpacity(0.22),
         disabledColor: AppColors.card.withOpacity(0.5),
         labelStyle: AppTypography.captionStyle(),
         padding: const EdgeInsets.symmetric(

@@ -158,7 +158,7 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
                     ),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
-                      initialValue: _planningGoal,
+                      value: _planningGoal,
                       decoration: const InputDecoration(
                         labelText: 'Planning goal',
                         border: OutlineInputBorder(),

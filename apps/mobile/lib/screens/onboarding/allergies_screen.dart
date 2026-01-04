@@ -155,6 +155,9 @@ class _OnboardingAllergiesScreenState extends State<OnboardingAllergiesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return Scaffold(
       appBar: OnboardingAppBar(
         title: 'Allergies',
@@ -175,17 +178,17 @@ class _OnboardingAllergiesScreenState extends State<OnboardingAllergiesScreen> {
                 children: [
                   Text(
                     'Step ${getStepNumber('ALLERGIES')} of 8',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Any food allergies?',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    style: theme.textTheme.headlineMedium,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Select all that apply. SAVO will never suggest recipes with these ingredients.',
-                    style: TextStyle(color: Colors.grey),
+                    style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 32),
                   
@@ -199,24 +202,27 @@ class _OnboardingAllergiesScreenState extends State<OnboardingAllergiesScreen> {
                         label: Text(allergen),
                         selected: isSelected,
                         onSelected: (_) => _toggleAllergen(allergen),
-                        selectedColor: Colors.red.withOpacity(0.3),
-                        checkmarkColor: Colors.red,
+                        selectedColor: colorScheme.error.withOpacity(0.18),
+                        checkmarkColor: colorScheme.error,
                       );
                     }).toList(),
                   ),
                   
                   const SizedBox(height: 16),
-                  
-                  // None option
-                  CheckboxListTile(
-                    title: const Text('No allergies'),
-                    value: _selectedAllergens.isEmpty,
-                    onChanged: (value) {
-                      if (value == true) {
-                        setState(() => _selectedAllergens.clear());
-                      }
-                    },
-                    contentPadding: EdgeInsets.zero,
+
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      FilterChip(
+                        label: const Text('No allergies'),
+                        selected: _selectedAllergens.isEmpty,
+                        onSelected: (value) {
+                          if (value) {
+                            setState(() => _selectedAllergens.clear());
+                          }
+                        },
+                      ),
+                    ],
                   ),
                   
                   if (_error != null) ...[
@@ -224,12 +230,12 @@ class _OnboardingAllergiesScreenState extends State<OnboardingAllergiesScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
+                        color: colorScheme.error.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         _error!,
-                        style: const TextStyle(color: Colors.red),
+                        style: TextStyle(color: colorScheme.error),
                         textAlign: TextAlign.center,
                       ),
                     ),

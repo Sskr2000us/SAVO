@@ -412,7 +412,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const Text('Advanced options (optional)'),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                initialValue: selectedGoal,
+                value: selectedGoal,
                 decoration: const InputDecoration(
                   labelText: 'Planning goal',
                   border: OutlineInputBorder(),

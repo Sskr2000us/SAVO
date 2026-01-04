@@ -4,6 +4,7 @@ import '../../models/profile_state.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
+import '../../theme/app_theme.dart';
 import '../../widgets/onboarding_app_bar.dart';
 import 'onboarding_coordinator.dart';
 
@@ -171,6 +172,9 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return Scaffold(
       appBar: OnboardingAppBar(
         title: 'Dietary Preferences',
@@ -191,63 +195,65 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                 children: [
                   Text(
                     'Step ${getStepNumber('DIETARY')} of 8',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Any dietary restrictions?',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    style: theme.textTheme.headlineMedium,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Select all that apply for the primary household member',
-                    style: TextStyle(color: Colors.grey),
+                    style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 4),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
+                      color: AppColors.card,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.shade200),
+                      border: Border.all(color: AppColors.divider),
                     ),
                     child: Row(
-                      children: const [
-                        Icon(Icons.info_outline, size: 20, color: Colors.blue),
-                        SizedBox(width: 8),
+                      children: [
+                        const Icon(Icons.info_outline, size: 20, color: AppColors.info),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Other family members can set their own dietary restrictions in Settings',
-                            style: TextStyle(fontSize: 13, color: Colors.black87),
+                            style: theme.textTheme.bodySmall,
                           ),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 24),
-                  
-                  // Dietary restriction checkboxes
-                  ...dietaryOptions.map((option) {
-                    return CheckboxListTile(
-                      title: Text(optionLabels[option] ?? option),
-                      value: _selectedRestrictions.contains(option),
-                      onChanged: (_) => _toggleRestriction(option),
-                      contentPadding: EdgeInsets.zero,
-                    );
-                  }),
-                  
-                  const SizedBox(height: 8),
-                  
-                  // None option
-                  CheckboxListTile(
-                    title: const Text('No dietary restrictions'),
-                    value: _selectedRestrictions.isEmpty,
-                    onChanged: (value) {
-                      if (value == true) {
-                        setState(() => _selectedRestrictions.clear());
-                      }
-                    },
-                    contentPadding: EdgeInsets.zero,
+
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      FilterChip(
+                        label: const Text('No dietary restrictions'),
+                        selected: _selectedRestrictions.isEmpty,
+                        onSelected: (value) {
+                          if (value) {
+                            setState(() => _selectedRestrictions.clear());
+                          }
+                        },
+                      ),
+                      ...dietaryOptions.map((option) {
+                        final isSelected = _selectedRestrictions.contains(option);
+                        return FilterChip(
+                          label: Text(optionLabels[option] ?? option),
+                          selected: isSelected,
+                          onSelected: (_) => _toggleRestriction(option),
+                          selectedColor: colorScheme.primary.withOpacity(0.22),
+                          checkmarkColor: colorScheme.primary,
+                        );
+                      }),
+                    ],
                   ),
                   
                   if (_error != null) ...[
@@ -255,12 +261,12 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
+                        color: colorScheme.error.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         _error!,
-                        style: const TextStyle(color: Colors.red),
+                        style: TextStyle(color: colorScheme.error),
                         textAlign: TextAlign.center,
                       ),
                     ),

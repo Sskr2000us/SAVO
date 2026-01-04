@@ -58,24 +58,24 @@ class OnboardingAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
+      leadingWidth: showBack ? 92 : null,
       leading: showBack
-          ? IconButton(
-              icon: const Icon(Icons.arrow_back),
+          ? TextButton.icon(
               onPressed: () {
                 if (Navigator.canPop(context)) {
                   Navigator.pop(context);
                 }
               },
-              tooltip: 'Back',
+              icon: const Icon(Icons.arrow_back, size: 20),
+              label: const Text('Back'),
             )
           : null,
       title: Text(title),
       actions: [
-        // Logout button
-        IconButton(
-          icon: const Icon(Icons.logout),
+        TextButton.icon(
           onPressed: () => _handleLogout(context),
-          tooltip: 'Sign Out',
+          icon: const Icon(Icons.logout, size: 20),
+          label: const Text('Sign out'),
         ),
         // Save & Exit button (only show if callback provided)
         if (onSaveAndExit != null) ...[
@@ -83,7 +83,6 @@ class OnboardingAppBar extends StatelessWidget implements PreferredSizeWidget {
             onPressed: isLoading ? null : onSaveAndExit,
             child: const Text(
               'Save & Exit',
-              style: TextStyle(color: Colors.white70),
             ),
           ),
           const SizedBox(width: 8),
