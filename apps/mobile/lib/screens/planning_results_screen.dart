@@ -13,11 +13,13 @@ import '../models/market_config_state.dart';
 class PlanningResultsScreen extends StatefulWidget {
   final MenuPlanResponse menuPlan;
   final String planType; // 'daily', 'weekly', 'party'
+  final bool showScaffold;
 
   const PlanningResultsScreen({
     super.key,
     required this.menuPlan,
     required this.planType,
+    this.showScaffold = true,
   });
 
   @override
@@ -259,6 +261,119 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     final market = Provider.of<MarketConfigState>(context);
     final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
     final leftoversScheduleLines = _buildLeftoversScheduleLines(widget.menuPlan);
+    final content = widget.menuPlan.status == 'error'
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.menuPlan.errorMessage ?? 'Planning failed',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          )
+        : ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: widget.menuPlan.menus.length,
+            itemBuilder: (context, menuIndex) {
+              final menu = widget.menuPlan.menus[menuIndex];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (menuIndex == 0 && widget.planType == 'weekly' && leftoversScheduleLines.isNotEmpty) ...[
+                    _buildLeftoversScheduleCard(leftoversScheduleLines),
+                    const SizedBox(height: 12),
+                  ],
+                  if (widget.planType == 'weekly') ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Text(
+                        _formatWeeklyDayTitle(menu),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ),
+                    const Divider(),
+                  ],
+                  ...menu.courses.map((course) => _buildCourseSection(course)),
+                  const SizedBox(height: 16),
+                ],
+              );
+            },
+          );
+
+    if (!widget.showScaffold) {
+      return content;
+    }
+
+    Recipe? firstRecipe;
+    try {
+      for (final menu in widget.menuPlan.menus) {
+        for (final course in menu.courses) {
+          if (course.recipeOptions.isNotEmpty) {
+            firstRecipe = course.recipeOptions.first;
+            break;
+          }
+        }
+        if (firstRecipe != null) break;
+      }
+    } catch (_) {
+      firstRecipe = null;
+    }
+
+    final bottomBar = widget.menuPlan.status == 'ok'
+        ? Container(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showShoppingList)
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _buildingShoppingList ? null : _createShoppingListFromPlan,
+                      icon: _buildingShoppingList
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(Icons.shopping_cart_outlined),
+                      label: Text(_buildingShoppingList ? 'Building...' : 'Build Shopping List'),
+                    ),
+                  ),
+                if (firstRecipe != null) ...[
+                  if (showShoppingList) const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => RecipeDetailScreen(recipe: firstRecipe!),
+                          ),
+                        );
+                      },
+                      child: const Text('Start Cooking'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          )
+        : null;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_getPlanTitle()),
@@ -274,9 +389,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                 // TODO: Re-plan with new cuisine
               },
               itemBuilder: (context) => _cuisines
-                  .where((c) => widget.planType == 'party'
-                      ? c.partyEnabled
-                      : c.dailyEnabled)
+                  .where((c) => widget.planType == 'party' ? c.partyEnabled : c.dailyEnabled)
                   .map((c) => PopupMenuItem(
                         value: c.cuisineId,
                         child: Row(
@@ -291,111 +404,8 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
             ),
         ],
       ),
-        body: widget.menuPlan.status == 'error'
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline, size: 64, color: Colors.red),
-                    const SizedBox(height: 16),
-                    Text(
-                      widget.menuPlan.errorMessage ?? 'Planning failed',
-                      style: Theme.of(context).textTheme.titleMedium,
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: widget.menuPlan.menus.length,
-              itemBuilder: (context, menuIndex) {
-                final menu = widget.menuPlan.menus[menuIndex];
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (menuIndex == 0 && widget.planType == 'weekly' && leftoversScheduleLines.isNotEmpty) ...[
-                      _buildLeftoversScheduleCard(leftoversScheduleLines),
-                      const SizedBox(height: 12),
-                    ],
-                    if (widget.planType == 'weekly') ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8.0),
-                        child: Text(
-                          _formatWeeklyDayTitle(menu),
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const Divider(),
-                    ],
-                    ...menu.courses.map((course) => _buildCourseSection(course)),
-                    const SizedBox(height: 16),
-                  ],
-                );
-              },
-            ),
-      bottomNavigationBar: widget.menuPlan.status == 'ok'
-          ? Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, -2),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.tonal(
-                      onPressed: _buildingShoppingList ? null : () {
-                        if (showShoppingList) {
-                          _createShoppingListFromPlan();
-                        }
-                      },
-                      child: _buildingShoppingList
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Shopping List'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _buildingShoppingList
-                          ? null
-                          : () {
-                              // Navigate to first recipe in cook mode
-                              if (widget.menuPlan.menus.isNotEmpty &&
-                                  widget.menuPlan.menus.first.courses.isNotEmpty &&
-                                  widget.menuPlan.menus.first.courses.first.recipeOptions.isNotEmpty) {
-                                final firstRecipe = widget.menuPlan.menus.first.courses.first.recipeOptions.first;
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => RecipeDetailScreen(recipe: firstRecipe),
-                                  ),
-                                );
-                              }
-                            },
-                      child: const Text('Start Cooking'),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          : null,
+      body: content,
+      bottomNavigationBar: bottomBar,
     );
   }
 

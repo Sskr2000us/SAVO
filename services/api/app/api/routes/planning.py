@@ -28,7 +28,14 @@ from app.core.storage import get_storage
 from app.core.orchestrator import plan_daily, plan_party, plan_weekly
 from app.core.orchestration_rules import build_orchestration_context
 from app.core.cuisine_metadata import get_cuisine_by_id, CUISINE_METADATA
-from app.core.database import get_full_profile, get_inventory, get_recipe_history
+from app.core.database import (
+    get_full_profile,
+    get_inventory,
+    get_recipe_history,
+    create_meal_plan,
+    get_meal_plan_for_date,
+    get_meal_plans,
+)
 from app.middleware.auth import get_current_user
 from app.core.safety_constraints import (
     build_complete_safety_context,
@@ -51,6 +58,48 @@ from app.models.inventory import InventoryItem
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_cuisine_preference(value: Any) -> Optional[str]:
+    """Normalize cuisine inputs (ids/names/case) to the display names used by rank_cuisines."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    raw_lower = raw.lower().replace("-", "_")
+
+    # If the client sends cuisine_id (e.g. 'indian'), map to display name.
+    meta = CUISINE_METADATA.get(raw_lower)
+    if isinstance(meta, dict) and isinstance(meta.get("name"), str):
+        return meta["name"].strip()
+
+    # Otherwise normalize case-insensitively against known cuisine names.
+    for cuisine_id, data in CUISINE_METADATA.items():
+        name = data.get("name") if isinstance(data, dict) else None
+        if isinstance(name, str) and name.strip().lower() == raw_lower:
+            return name.strip()
+
+    # Fallback: title-case (best effort)
+    return raw[:1].upper() + raw[1:]
+
+
+def _normalize_cuisine_preferences(values: Any) -> Optional[List[str]]:
+    if not isinstance(values, list) or not values:
+        return None
+    out: List[str] = []
+    seen = set()
+    for v in values:
+        norm = _normalize_cuisine_preference(v)
+        if not norm:
+            continue
+        key = norm.lower()
+        if key in seen:
+            continue
+        out.append(norm)
+        seen.add(key)
+    return out or None
 
 
 def _coerce_list(value: Any) -> list:
@@ -375,7 +424,7 @@ def _build_planning_context(
     if cuisine == "auto":
         # Rank cuisines based on ingredients, preferences, history, skill, nutrition
         available_ingredients = [item.canonical_name for item in inventory]
-        user_preferences = request.cuisine_preferences or []
+        user_preferences = _normalize_cuisine_preferences(request.cuisine_preferences) or []
         recent_cuisines = [h.get("cuisine", "") for h in history[:10] if h.get("cuisine")]
         
         # Get user skill level from config
@@ -400,6 +449,11 @@ def _build_planning_context(
             skill_level=user_skill_level,
             nutrition_focus=nutrition_focus
         )
+
+        # If the user specified cuisine preferences, restrict the ranking hints to that set.
+        if user_preferences:
+            preferred_lower = {p.lower() for p in user_preferences}
+            cuisine_scores = [s for s in cuisine_scores if getattr(s, "cuisine", "").lower() in preferred_lower]
     
     # Build orchestration context
     orch_context = build_orchestration_context(
@@ -489,7 +543,11 @@ def _build_planning_context(
 
 
 @router.post("/daily", response_model=MenuPlanResponse)
-async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_user)):
+async def post_daily(
+    req: DailyPlanRequest,
+    user_id: str = Depends(get_current_user),
+    force_regenerate: bool = False,
+):
     """Generate daily meal plan with full family profile and product intelligence"""
     storage = get_storage()
     config = storage.get_config()
@@ -511,6 +569,39 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
             m = {**m, "allergens": []}
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}
+
+    # Cuisine preferences: request takes precedence; otherwise fallback to DB household favorites.
+    if not req.cuisine_preferences:
+        db_favs = household.get("favorite_cuisines") or household.get("favoriteCuisines")
+        if isinstance(db_favs, list) and db_favs:
+            req.cuisine_preferences = db_favs
+    req.cuisine_preferences = _normalize_cuisine_preferences(req.cuisine_preferences)
+
+    # Reuse an existing saved plan for the day unless the request changed.
+    plan_date = _parse_iso_date(getattr(req, "current_date", None)) or date.today()
+    if not force_regenerate:
+        try:
+            existing = await get_meal_plan_for_date(
+                user_id,
+                plan_date=plan_date,
+                plan_type="daily",
+                meal_type=req.meal_type,
+            )
+        except Exception:
+            existing = None
+
+        if isinstance(existing, dict):
+            existing_payload = existing.get("recipes")
+            if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+                # Only reuse if core request knobs match.
+                if (
+                    (existing.get("servings") == req.servings)
+                    and (existing.get("time_available_minutes") == req.time_available_minutes)
+                ):
+                    sel = existing_payload.get("selected_cuisine")
+                    prefs = req.cuisine_preferences or []
+                    if not prefs or (isinstance(sel, str) and sel.lower() in {p.lower() for p in prefs}):
+                        return MenuPlanResponse(**existing_payload)
     
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
@@ -678,6 +769,25 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
         logger.exception("plan_daily crashed user_id=%s", user_id)
         raise
 
+    # Persist successful plan
+    if isinstance(result, dict) and result.get("status") == "ok":
+        try:
+            await create_meal_plan(
+                user_id,
+                {
+                    "plan_type": "daily",
+                    "plan_date": plan_date.isoformat(),
+                    "meal_type": req.meal_type,
+                    "selected_cuisine": result.get("selected_cuisine"),
+                    "servings": req.servings,
+                    "time_available_minutes": req.time_available_minutes,
+                    # Store the full validated plan payload for exact rehydration.
+                    "recipes": result,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to persist meal plan user_id=%s plan_date=%s", user_id, plan_date)
+
     status_val = result.get("status")
     if status_val and status_val != "ok":
         questions = result.get("needs_clarification_questions")
@@ -715,6 +825,22 @@ async def post_daily(req: DailyPlanRequest, user_id: str = Depends(get_current_u
             )
     
     return MenuPlanResponse(**result)
+
+
+@router.get("/latest", response_model=MenuPlanResponse)
+async def get_latest_plan(
+    user_id: str = Depends(get_current_user),
+    plan_type: str = "daily",
+):
+    """Fetch latest saved meal plan (does not trigger regeneration)."""
+    plans = await get_meal_plans(user_id, plan_type=plan_type)
+    if not plans:
+        raise HTTPException(status_code=404, detail="No saved meal plans")
+
+    payload = plans[0].get("recipes")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Saved meal plan is not in expected format")
+    return MenuPlanResponse(**payload)
 
 
 def _is_breakfast_time(time_str: str, meal_times: dict) -> bool:
@@ -760,10 +886,28 @@ async def post_party(req: PartyPlanRequest):
 
 
 @router.post("/weekly", response_model=MenuPlanResponse)
-async def post_weekly(req: WeeklyPlanRequest):
+async def post_weekly(
+    req: WeeklyPlanRequest,
+    user_id: str = Depends(get_current_user),
+):
     """Generate weekly meal plan with configurable horizon"""
     storage = get_storage()
     config = storage.get_config()
+
+    # Pull DB-backed profile (source of truth for favorites)
+    try:
+        full_profile = await get_full_profile(user_id)
+    except Exception:
+        full_profile = {}
+
+    household = (full_profile.get("household") or full_profile.get("profile") or {}) if isinstance(full_profile, dict) else {}
+
+    # Cuisine preferences: request takes precedence; otherwise fallback to DB household favorites.
+    if not getattr(req, "cuisine_preferences", None):
+        db_favs = household.get("favorite_cuisines") or household.get("favoriteCuisines")
+        if isinstance(db_favs, list) and db_favs:
+            req.cuisine_preferences = db_favs
+    req.cuisine_preferences = _normalize_cuisine_preferences(getattr(req, "cuisine_preferences", None))
     
     # Determine timezone with priority: request > config > UTC
     timezone = req.timezone or config.global_settings.timezone or "UTC"
@@ -793,6 +937,29 @@ async def post_weekly(req: WeeklyPlanRequest):
         context["servings"] = req.servings
     
     result = await plan_weekly(context)
+
+    # Persist successful plan (keyed by start_date)
+    if isinstance(result, dict) and result.get("status") == "ok":
+        try:
+            await create_meal_plan(
+                user_id,
+                {
+                    "plan_type": "weekly",
+                    "plan_date": req.start_date.isoformat(),
+                    "meal_type": None,
+                    "selected_cuisine": result.get("selected_cuisine"),
+                    "servings": req.servings,
+                    "time_available_minutes": req.time_available_minutes,
+                    "recipes": result,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist weekly meal plan user_id=%s plan_date=%s",
+                user_id,
+                req.start_date,
+            )
+
     return MenuPlanResponse(**result)
 
 

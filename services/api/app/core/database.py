@@ -594,6 +594,35 @@ async def get_meal_plans(
         raise
 
 
+async def get_meal_plan_for_date(
+    user_id: str,
+    *,
+    plan_date: date,
+    plan_type: str,
+    meal_type: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Get the most recent meal plan for a specific date/type (optionally meal_type)."""
+    try:
+        query = (
+            db.client.table("meal_plans")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("plan_type", plan_type)
+            .eq("plan_date", plan_date.isoformat())
+        )
+
+        if meal_type:
+            query = query.eq("meal_type", meal_type)
+
+        result = query.order("planned_at", desc=True).limit(1).execute()
+        if result.data:
+            return result.data[0]
+        return None
+    except APIError as e:
+        logger.error(f"Error getting meal plan for date: {e}")
+        raise
+
+
 async def update_meal_plan(meal_plan_id: str, plan_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update meal plan"""
     try:
