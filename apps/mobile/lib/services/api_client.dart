@@ -30,10 +30,14 @@ class ApiClient {
 
   /// Public method to get headers with auth (for external services)
   Future<Map<String, String>> getHeaders() async {
-    return {
-      'Authorization': 'Bearer ${Supabase.instance.client.auth.currentSession?.accessToken ?? ''}',
+    final token = Supabase.instance.client.auth.currentSession?.accessToken;
+    final headers = <String, String>{
       'Content-Type': 'application/json',
     };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    return headers;
   }
 
   /// Merge custom headers with auth headers

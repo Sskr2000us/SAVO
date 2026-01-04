@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Service for pantry/fridge scanning with Vision AI
 class ScanningService {
@@ -11,6 +12,18 @@ class ScanningService {
     'API_BASE_URL',
     defaultValue: 'https://savo-ynp1.onrender.com',
   );
+
+  Future<String?> _getAccessToken() async {
+    final token = Supabase.instance.client.auth.currentSession?.accessToken;
+    if (token != null && token.isNotEmpty) return token;
+
+    // Legacy fallback: some older flows stored tokens manually.
+    final prefs = await SharedPreferences.getInstance();
+    final legacy = prefs.getString('access_token');
+    if (legacy != null && legacy.isNotEmpty) return legacy;
+
+    return null;
+  }
 
   Future<Map<String, dynamic>> analyzeImage({
     required File imageFile,
@@ -45,8 +58,7 @@ class ScanningService {
       }
 
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -167,8 +179,7 @@ class ScanningService {
   }) async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -222,8 +233,7 @@ class ScanningService {
   }) async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -269,8 +279,7 @@ class ScanningService {
   Future<Map<String, dynamic>> getPantry() async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -313,8 +322,7 @@ class ScanningService {
   Future<Map<String, dynamic>> removeFromPantry(String ingredientName) async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -360,8 +368,7 @@ class ScanningService {
   }) async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
@@ -466,8 +473,7 @@ class ScanningService {
   }) async {
     try {
       // Get auth token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token');
+      final token = await _getAccessToken();
 
       if (token == null) {
         return {
