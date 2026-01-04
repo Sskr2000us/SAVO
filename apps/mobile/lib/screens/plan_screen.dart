@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
+import 'account_settings_screen.dart';
 import 'daily_plan_screen.dart';
 import 'party_setup_screen.dart';
 
@@ -28,6 +29,18 @@ class _PlanScreenState extends State<PlanScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Plan'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                AppMotion.createRoute(const AccountSettingsScreen()),
+              );
+            },
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),

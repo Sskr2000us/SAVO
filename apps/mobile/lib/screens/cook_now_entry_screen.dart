@@ -7,6 +7,7 @@ import '../services/api_client.dart';
 import '../services/cook_now_service.dart';
 import '../services/metrics_service.dart';
 import '../ui/ui_principles.dart';
+import 'account_settings_screen.dart';
 import 'recipe_options_screen.dart';
 
 class CookNowEntryScreen extends StatefulWidget {
@@ -78,6 +79,18 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cook'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AccountSettingsScreen()),
+              );
+            },
+          ),
+        ],
       ),
       body: Center(
         child: Padding(

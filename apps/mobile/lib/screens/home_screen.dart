@@ -11,7 +11,7 @@ import '../widgets/savo_widgets.dart';
 import 'plan_screen.dart';
 import 'cook_now_entry_screen.dart';
 import 'pantry_update_entry_screen.dart';
-import 'settings_screen.dart';
+import 'account_settings_screen.dart';
 import 'onboarding/onboarding_coordinator.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -101,10 +101,10 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () {
               Navigator.push(
                 context,
-                AppMotion.createRoute(const SettingsScreen()),
+                AppMotion.createRoute(const AccountSettingsScreen()),
               );
             },
-            tooltip: 'Family Profile Settings',
+            tooltip: 'Settings',
           ),
         ],
       ),

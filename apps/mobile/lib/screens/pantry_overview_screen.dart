@@ -6,6 +6,7 @@ import '../models/inventory.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
+import 'account_settings_screen.dart';
 
 class PantryOverviewScreen extends StatefulWidget {
   const PantryOverviewScreen({super.key});
@@ -107,6 +108,18 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Pantry'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Settings',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  AppMotion.createRoute(const AccountSettingsScreen()),
+                );
+              },
+            ),
+          ],
           bottom: const TabBar(
             tabs: [
               Tab(text: 'UseSoon'),

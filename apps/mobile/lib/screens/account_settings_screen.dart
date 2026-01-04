@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../services/auth_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/savo_widgets.dart';
 import 'settings_screen.dart';
 import 'inventory_screen.dart';
 import 'recipe_import_screen.dart';
@@ -60,113 +63,99 @@ class AccountSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final market = Provider.of<MarketConfigState>(context);
     final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         children: [
           // Profile Section
-          _buildSectionHeader('Profile'),
-          const SizedBox(height: 12),
-          _buildSettingCard(
+          _buildSectionHeader(context, 'Profile'),
+          const SizedBox(height: AppSpacing.sm),
+          _settingTile(
             context: context,
             icon: Icons.family_restroom,
-            iconColor: Colors.blue,
+            iconColor: theme.colorScheme.primary,
             title: 'Family Profile',
             subtitle: 'Edit household and family members',
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
+              Navigator.push(context, AppMotion.createRoute(const SettingsScreen()));
             },
           ),
           
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.lg),
           
           // Pantry Section
-          _buildSectionHeader('Pantry'),
-          const SizedBox(height: 12),
-          _buildSettingCard(
+          _buildSectionHeader(context, 'Pantry'),
+          const SizedBox(height: AppSpacing.sm),
+          _settingTile(
             context: context,
             icon: Icons.inventory_2,
-            iconColor: Colors.orange,
+            iconColor: theme.colorScheme.secondary,
             title: 'Manage Inventory',
             subtitle: 'View and edit pantry items',
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const InventoryScreen()),
-              );
+              Navigator.push(context, AppMotion.createRoute(const InventoryScreen()));
             },
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
           if (showShoppingList)
-            _buildSettingCard(
+            _settingTile(
               context: context,
               icon: Icons.local_grocery_store,
-              iconColor: Colors.indigo,
+              iconColor: theme.colorScheme.secondary,
               title: 'Shopping List',
               subtitle: 'Items to buy (from recipes)',
               onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ShoppingListScreen()),
-                );
+                Navigator.push(context, AppMotion.createRoute(const ShoppingListScreen()));
               },
             ),
 
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.lg),
 
           // Recipes Section
-          _buildSectionHeader('Recipes'),
-          const SizedBox(height: 12),
-          _buildSettingCard(
+          _buildSectionHeader(context, 'Recipes'),
+          const SizedBox(height: AppSpacing.sm),
+          _settingTile(
             context: context,
             icon: Icons.download,
-            iconColor: Colors.green,
+            iconColor: theme.colorScheme.tertiary,
             title: 'Import Recipe',
             subtitle: 'From URL, text, or photo',
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const RecipeImportScreen()),
-              );
+              Navigator.push(context, AppMotion.createRoute(const RecipeImportScreen()));
             },
           ),
           
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.lg),
           
           // Security Section
-          _buildSectionHeader('Security'),
-          const SizedBox(height: 12),
-          _buildSettingCard(
+          _buildSectionHeader(context, 'Security'),
+          const SizedBox(height: AppSpacing.sm),
+          _settingTile(
             context: context,
             icon: Icons.devices,
-            iconColor: Colors.red.shade700,
+            iconColor: theme.colorScheme.error,
             title: 'Device Security (Max 2)',
-            subtitle: 'Prevent unauthorized access - manage devices',
+            subtitle: 'Manage devices and sessions',
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const DeviceSecurityScreen()),
-              );
+              Navigator.push(context, AppMotion.createRoute(const DeviceSecurityScreen()));
             },
           ),
-          const SizedBox(height: 12),
-          _buildSettingCard(
+          const SizedBox(height: AppSpacing.sm),
+          _settingTile(
             context: context,
             icon: Icons.logout,
-            iconColor: Colors.red,
+            iconColor: theme.colorScheme.error,
             title: 'Sign Out',
             subtitle: 'Log out from this device',
             onTap: () => _handleSignOut(context),
           ),
           
-          const SizedBox(height: 48),
+          const SizedBox(height: AppSpacing.xl),
           
           // App Info
           Center(
@@ -177,7 +166,7 @@ class AccountSettingsScreen extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Colors.grey.shade600,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -185,7 +174,7 @@ class AccountSettingsScreen extends StatelessWidget {
                   'Version 1.0.0',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade500,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -196,22 +185,21 @@ class AccountSettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(BuildContext context, String title) {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(left: 4),
       child: Text(
         title,
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: Colors.grey,
+        style: theme.textTheme.labelLarge?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
           letterSpacing: 0.5,
         ),
       ),
     );
   }
 
-  Widget _buildSettingCard({
+  Widget _settingTile({
     required BuildContext context,
     required IconData icon,
     required Color iconColor,
@@ -219,58 +207,31 @@ class AccountSettingsScreen extends StatelessWidget {
     required String subtitle,
     required VoidCallback onTap,
   }) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.shade200),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
+    final theme = Theme.of(context);
+    return SavoCard(
+      elevated: true,
+      onTap: onTap,
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.titleMedium),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  subtitle,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                child: Icon(icon, color: iconColor, size: 24),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.chevron_right,
-                color: Colors.grey.shade400,
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+          Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+        ],
       ),
     );
   }
