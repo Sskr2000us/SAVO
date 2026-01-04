@@ -8,6 +8,7 @@ import '../models/planning.dart';
 import '../models/cuisine.dart';
 import 'recipe_detail_screen.dart';
 import 'shopping_list_screen.dart';
+import '../models/market_config_state.dart';
 
 class PlanningResultsScreen extends StatefulWidget {
   final MenuPlanResponse menuPlan;
@@ -41,6 +42,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   Future<void> _loadCuisines() async {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+      // Load cuisines from the API
       final response = await apiClient.get('/cuisines');
 
       if (response is List) {
@@ -163,8 +165,100 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     }
   }
 
+  List<String> _buildLeftoversScheduleLines(MenuPlanResponse menuPlan) {
+    if (widget.planType != 'weekly') return const [];
+
+    final lines = <String>[];
+
+    for (final menu in menuPlan.menus) {
+      final dayIndex = (menu.dayIndex ?? 0) + 1;
+
+      for (final course in menu.courses) {
+        // Keep it simple + fast: use the top option per course.
+        if (course.recipeOptions.isEmpty) continue;
+        final recipe = course.recipeOptions.first;
+
+        final forecast = recipe.leftoverForecast;
+        if (forecast.isEmpty) continue;
+
+        final expected = forecast['expected_leftover_servings'];
+        final reuse = forecast['reuse_ideas'];
+
+        final num? expectedNum =
+            expected is num ? expected : num.tryParse(expected?.toString() ?? '');
+
+        final reuseIdeas = <String>[];
+        if (reuse is List) {
+          for (final v in reuse) {
+            final s = v.toString().trim();
+            if (s.isEmpty) continue;
+            if (s.toLowerCase() == 'n/a') continue;
+            reuseIdeas.add(s);
+          }
+        }
+
+        // Only show genuinely useful leftovers.
+        final hasLeftovers =
+            (expectedNum != null && expectedNum > 0) || reuseIdeas.isNotEmpty;
+        if (!hasLeftovers) continue;
+
+        final recipeName = recipe.getLocalizedName('en');
+        final suffix = reuseIdeas.isNotEmpty ? reuseIdeas.first : 'Use within 1–2 days';
+        lines.add('Day $dayIndex: $recipeName → $suffix');
+      }
+    }
+
+    // Cap to keep the UI punchy.
+    if (lines.length > 4) {
+      return lines.take(4).toList();
+    }
+    return lines;
+  }
+
+  Widget _buildLeftoversScheduleCard(List<String> lines) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.kitchen, color: cs.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Leftovers plan',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            for (final line in lines)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '• $line',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: cs.onSurface.withOpacity(0.85)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final market = Provider.of<MarketConfigState>(context);
+    final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
+    final leftoversScheduleLines = _buildLeftoversScheduleLines(widget.menuPlan);
     return Scaffold(
       appBar: AppBar(
         title: Text(_getPlanTitle()),
@@ -197,7 +291,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
             ),
         ],
       ),
-      body: widget.menuPlan.status == 'error'
+        body: widget.menuPlan.status == 'error'
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -223,6 +317,10 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (menuIndex == 0 && widget.planType == 'weekly' && leftoversScheduleLines.isNotEmpty) ...[
+                      _buildLeftoversScheduleCard(leftoversScheduleLines),
+                      const SizedBox(height: 12),
+                    ],
                     if (widget.planType == 'weekly') ...[
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -258,7 +356,11 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                 children: [
                   Expanded(
                     child: FilledButton.tonal(
-                      onPressed: _buildingShoppingList ? null : _createShoppingListFromPlan,
+                      onPressed: _buildingShoppingList ? null : () {
+                        if (showShoppingList) {
+                          _createShoppingListFromPlan();
+                        }
+                      },
                       child: _buildingShoppingList
                           ? const SizedBox(
                               height: 18,
@@ -366,7 +468,20 @@ class _RecipeCard extends StatefulWidget {
 
 class _RecipeCardState extends State<_RecipeCard> {
   bool _usesExpiringItems = false;
+  bool _usesLeftovers = false;
   bool _checkingExpiring = true;
+
+  String? get _coverImageUrl {
+    final refs = widget.recipe.youtubeReferences;
+    if (refs.isNotEmpty) return refs.first.thumbnailUrl;
+
+    final name = widget.recipe.getLocalizedName('en').trim();
+    if (name.isEmpty) {
+      return 'https://source.unsplash.com/featured/?food';
+    }
+    final encoded = Uri.encodeComponent(name);
+    return 'https://source.unsplash.com/featured/?food,$encoded';
+  }
 
   @override
   void initState() {
@@ -385,6 +500,8 @@ class _RecipeCardState extends State<_RecipeCard> {
             .toList();
 
         // Check if any recipe ingredients are expiring (< 3 days)
+        bool usesExpiring = false;
+        bool usesLeftovers = false;
         for (final ingredient in widget.recipe.ingredientsUsed) {
           final item = inventory.firstWhere(
             (inv) => inv['inventory_id'] == ingredient.inventoryId,
@@ -394,14 +511,22 @@ class _RecipeCardState extends State<_RecipeCard> {
           if (item.isNotEmpty) {
             final freshness = item['freshness_days_remaining'];
             if (freshness != null && freshness < 3) {
-              setState(() {
-                _usesExpiringItems = true;
-                _checkingExpiring = false;
-              });
-              return;
+              usesExpiring = true;
+            }
+
+            final state = item['state'];
+            if (state is String && state.toLowerCase() == 'leftover') {
+              usesLeftovers = true;
             }
           }
         }
+
+        setState(() {
+          _usesExpiringItems = usesExpiring;
+          _usesLeftovers = usesLeftovers;
+          _checkingExpiring = false;
+        });
+        return;
       }
 
       setState(() {
@@ -416,6 +541,14 @@ class _RecipeCardState extends State<_RecipeCard> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final title = widget.recipe.getLocalizedName('en');
+
+    final expected = widget.recipe.leftoverForecast['expected_leftover_servings'];
+    final num? expectedNum = expected is num ? expected : num.tryParse(expected?.toString() ?? '');
+    final bool makesLeftovers = expectedNum != null && expectedNum > 0;
+
     return Container(
       width: 280,
       margin: const EdgeInsets.only(right: 12),
@@ -433,24 +566,47 @@ class _RecipeCardState extends State<_RecipeCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                height: 100,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      const Color(0xFFFF6B6B).withOpacity(0.7),
-                      const Color(0xFFFFB347).withOpacity(0.7),
-                    ],
-                  ),
-                ),
-                child: Center(
-                  child: Icon(
-                    Icons.restaurant_menu,
-                    size: 56,
-                    color: Colors.white.withOpacity(0.9),
-                  ),
+              SizedBox(
+                height: 140,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(
+                      _coverImageUrl ?? 'https://source.unsplash.com/featured/?food',
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: cs.surfaceVariant,
+                        child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
+                      ),
+                    ),
+                    // Subtle scrim for readability.
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            cs.onSurface.withOpacity(0.05),
+                            cs.onSurface.withOpacity(0.45),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 10,
+                      child: Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: cs.surface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Padding(
@@ -458,52 +614,33 @@ class _RecipeCardState extends State<_RecipeCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        Expanded(
-                          child: Text(
-                            widget.recipe.getLocalizedName('en'),
-                            style: Theme.of(context).textTheme.titleSmall,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                        _Badge(
+                          icon: Icons.timer,
+                          label: '${widget.recipe.estimatedTimes.totalMinutes} min',
                         ),
+                        _Badge(
+                          icon: Icons.signal_cellular_alt,
+                          label: widget.recipe.difficulty,
+                        ),
+                        if (makesLeftovers)
+                          _Badge(
+                            icon: Icons.kitchen,
+                            label: 'Leftovers',
+                          ),
+                        if (_usesLeftovers && !_checkingExpiring)
+                          _Badge(
+                            icon: Icons.replay,
+                            label: 'Uses leftovers',
+                          ),
                         if (_usesExpiringItems && !_checkingExpiring)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 4.0),
-                            child: Tooltip(
-                              message: 'Uses expiring ingredients',
-                              child: Icon(
-                                Icons.eco,
-                                size: 16,
-                                color: Colors.orange[700],
-                              ),
-                            ),
+                          _Badge(
+                            icon: Icons.eco,
+                            label: 'Expiring items',
                           ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.timer, size: 14, color: Colors.white70),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${widget.recipe.estimatedTimes.totalMinutes} min',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Icon(Icons.signal_cellular_alt, size: 14, color: Colors.white70),
-                        const SizedBox(width: 4),
-                        Text(
-                          widget.recipe.difficulty,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
-                          ),
-                        ),
                       ],
                     ),
                   ],
@@ -528,5 +665,37 @@ class _RecipeCardState extends State<_RecipeCard> {
       }
     }
     return 'Day ${(menu.dayIndex ?? 0) + 1}';
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _Badge({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceVariant,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: cs.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
   }
 }

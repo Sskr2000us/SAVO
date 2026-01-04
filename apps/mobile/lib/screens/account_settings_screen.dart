@@ -6,6 +6,7 @@ import 'inventory_screen.dart';
 import 'recipe_import_screen.dart';
 import 'shopping_list_screen.dart';
 import 'settings/device_security_screen.dart';
+import '../models/market_config_state.dart';
 
 /// Account and app settings screen
 /// Contains inventory, sessions, sign out, and link to profile settings
@@ -57,6 +58,8 @@ class AccountSettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final market = Provider.of<MarketConfigState>(context);
+    final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
@@ -101,19 +104,20 @@ class AccountSettingsScreen extends StatelessWidget {
           ),
 
           const SizedBox(height: 12),
-          _buildSettingCard(
-            context: context,
-            icon: Icons.local_grocery_store,
-            iconColor: Colors.indigo,
-            title: 'Shopping List',
-            subtitle: 'Items to buy (from recipes)',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ShoppingListScreen()),
-              );
-            },
-          ),
+          if (showShoppingList)
+            _buildSettingCard(
+              context: context,
+              icon: Icons.local_grocery_store,
+              iconColor: Colors.indigo,
+              title: 'Shopping List',
+              subtitle: 'Items to buy (from recipes)',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ShoppingListScreen()),
+                );
+              },
+            ),
 
           const SizedBox(height: 32),
 

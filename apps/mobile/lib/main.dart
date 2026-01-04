@@ -16,6 +16,7 @@ import 'services/auth_service.dart';
 import 'services/profile_service.dart';
 import 'services/onboarding_storage.dart';
 import 'models/profile_state.dart';
+import 'models/market_config_state.dart';
 import 'theme/app_theme.dart';
 import 'config/app_config.dart';
 
@@ -88,6 +89,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
         Provider(create: (_) => ApiClient()),
         Provider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => ProfileState()),
+        ChangeNotifierProvider(create: (_) => MarketConfigState()),
       ],
       child: MaterialApp(
         title: 'SAVO',
@@ -181,6 +183,16 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   bool _isLoading = true;
   String? _error;
 
+  Future<void> _refreshMarketConfig() async {
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final marketState = Provider.of<MarketConfigState>(context, listen: false);
+      await marketState.refresh(apiClient);
+    } catch (_) {
+      // Best-effort. UI can fall back to defaults.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -236,6 +248,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         } catch (e) {
           debugPrint('No profile yet: $e');
         }
+
+        await _refreshMarketConfig();
 
         if (mounted) {
           if (status['completed'] == true) {

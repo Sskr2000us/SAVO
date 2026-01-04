@@ -4,6 +4,8 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
+import '../models/market_config_state.dart';
+import 'admin_market_screen.dart';
 import 'inventory_screen.dart';
 import 'settings/active_sessions_screen.dart';
 
@@ -390,6 +392,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final market = Provider.of<MarketConfigState>(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Family Profile Settings'),
@@ -455,6 +458,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+
+                  if (market.isSuperAdmin) ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    _buildSectionHeader('Admin'),
+                    SavoCard(
+                      child: ListTile(
+                        leading: const Icon(Icons.admin_panel_settings),
+                        title: const Text('Market Feature Flags'),
+                        subtitle: Text('Region: ${market.region}'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const AdminMarketScreen()),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: AppSpacing.lg),
 
                   // Cuisine Preferences Section
