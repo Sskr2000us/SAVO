@@ -2,10 +2,10 @@ import '../models/planning.dart';
 import 'api_client.dart';
 
 class RecipeShareService {
-  Future<String> createShare(ApiClient apiClient, Recipe recipe) async {
+  Future<String> createShare(ApiClient apiClient, Recipe recipe, {int expiresHours = 24 * 7}) async {
     final result = await apiClient.post('/recipes/share', {
       'recipe': _recipeToJson(recipe),
-      'expires_hours': 24 * 7,
+      'expires_hours': expiresHours,
     });
 
     if (result['success'] == true && (result['share_id'] ?? '').toString().isNotEmpty) {
@@ -26,6 +26,10 @@ class RecipeShareService {
     }
 
     throw Exception('Failed to load shared recipe');
+  }
+
+  Future<void> revokeShare(ApiClient apiClient, String shareId) async {
+    await apiClient.delete('/recipes/shared/$shareId');
   }
 
   Map<String, dynamic> _recipeToJson(Recipe recipe) {

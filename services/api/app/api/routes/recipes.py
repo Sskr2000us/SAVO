@@ -331,7 +331,7 @@ async def get_shared_recipe(share_id: str):
             if exp.tzinfo is None:
                 exp = exp.replace(tzinfo=timezone.utc)
             if exp < datetime.now(timezone.utc):
-                raise HTTPException(status_code=404, detail="Shared recipe expired")
+                raise HTTPException(status_code=410, detail="Shared recipe expired")
         except HTTPException:
             raise
         except Exception:
@@ -342,12 +342,84 @@ async def get_shared_recipe(share_id: str):
     return {"success": True, "recipe": recipe, "share_id": row.get("id")}
 
 
+@router.delete("/shared/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_shared_recipe(
+    share_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    """Revoke (delete) a previously created share link.
+
+    Only the owner of the share may revoke it.
+    """
+
+    supabase = get_db_client()
+    try:
+        result = (
+            supabase.table("shared_recipes")
+            .select("id,owner_user_id")
+            .eq("id", share_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load share: {e}")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Shared recipe not found")
+
+    row = result.data[0]
+    owner_user_id = str(row.get("owner_user_id") or "")
+    if owner_user_id != str(user_id):
+        raise HTTPException(status_code=403, detail="Not allowed to revoke this share")
+
+    try:
+        supabase.table("shared_recipes").delete().eq("id", share_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to revoke share: {e}")
+
+    return None
+
+
 @public_router.get("/r/{share_id}", response_class=HTMLResponse)
 async def shared_recipe_page(share_id: str):
     """Simple shareable recipe page (public HTML)."""
 
-    data = await get_shared_recipe(share_id)
-    recipe = data.get("recipe") or {}
+        try:
+                data = await get_shared_recipe(share_id)
+                recipe = data.get("recipe") or {}
+        except HTTPException as e:
+                title = "Shared Recipe"
+                if e.status_code == 410:
+                        message = "This shared recipe link has expired."
+                elif e.status_code == 404:
+                        message = "This shared recipe link was not found."
+                else:
+                        message = "Could not load this shared recipe."
+
+                body = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <title>{_html.escape(title)} - SAVO</title>
+    <style>
+        body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b0b0c; color: #f2f2f3; }}
+        .wrap {{ max-width: 820px; margin: 0 auto; padding: 24px; }}
+        h1 {{ margin: 0 0 8px; font-size: 24px; }}
+        .sub {{ opacity: .8; margin-bottom: 16px; }}
+        .card {{ background: rgba(255,255,255,.06); border-radius: 12px; padding: 16px; margin: 16px 0; }}
+        a {{ color: #9fd3ff; }}
+    </style>
+</head>
+<body>
+    <div class=\"wrap\">
+        <h1>{_html.escape(title)}</h1>
+        <div class=\"sub\">Shared via SAVO</div>
+        <div class=\"card\">{_html.escape(message)}</div>
+    </div>
+</body>
+</html>"""
+                return HTMLResponse(content=body, status_code=e.status_code)
 
     def esc(v: Any) -> str:
         return _html.escape(str(v or ""))

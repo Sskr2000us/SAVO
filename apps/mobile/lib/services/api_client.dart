@@ -56,7 +56,18 @@ class ApiClient {
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
-      throw Exception('Failed to load data: ${response.statusCode}');
+      String errorDetail = 'HTTP ${response.statusCode}';
+      try {
+        final errorBody = json.decode(response.body);
+        if (errorBody is Map && errorBody['detail'] != null) {
+          errorDetail = errorBody['detail'].toString();
+        }
+      } catch (_) {
+        if (response.body.isNotEmpty) {
+          errorDetail = response.body;
+        }
+      }
+      throw Exception('Failed to load data: ${response.statusCode} ($errorDetail)');
     }
   }
 

@@ -20,6 +20,17 @@ class _SharedRecipeScreenState extends State<SharedRecipeScreen> {
   String? _error;
   bool _loading = true;
 
+  String _friendlyError(String raw) {
+    final msg = raw.toLowerCase();
+    if (msg.contains('410') || msg.contains('expired')) {
+      return 'This share link has expired.';
+    }
+    if (msg.contains('404') || msg.contains('not found')) {
+      return 'This share link was not found.';
+    }
+    return raw;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -75,7 +86,7 @@ class _SharedRecipeScreenState extends State<SharedRecipeScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _error!,
+                  _friendlyError(_error!),
                   style: Theme.of(context).textTheme.bodyMedium,
                   textAlign: TextAlign.center,
                 ),
