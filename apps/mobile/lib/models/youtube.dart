@@ -65,6 +65,15 @@ class RankedVideo {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'video_id': videoId,
+        'title': title,
+        'channel': channel,
+        'trust_score': trustScore,
+        'match_score': matchScore,
+        'reasons': reasons,
+      };
+
   String get youtubeUrl => 'https://www.youtube.com/watch?v=$videoId';
   String get embedUrl => 'https://www.youtube.com/embed/$videoId';
   String get thumbnailUrl =>

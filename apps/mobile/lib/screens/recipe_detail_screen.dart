@@ -1189,20 +1189,29 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 12),
-          ...widget.recipe.ingredientsUsed.map((ingredient) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4.0),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle_outline, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${ingredient.amount} ${ingredient.unit} ${ingredient.canonicalName}',
-                      ),
-                    ),
-                  ],
-                ),
-              )),
+          ...widget.recipe.ingredientsUsed.map((ingredient) {
+            final scalingFactor =
+                _baseServings > 0 ? (_targetServings / _baseServings) : 1.0;
+
+            final name = _titleCaseWords(ingredient.canonicalName);
+            final unit = ingredient.unit.trim();
+            final amount = _formatAmount(ingredient.amount * scalingFactor);
+            final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
+            final line = qty.isEmpty ? name : '$qty $name';
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle_outline, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(line),
+                  ),
+                ],
+              ),
+            );
+          }),
           const SizedBox(height: 24),
 
           // Steps preview
@@ -1211,7 +1220,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 12),
-          ...widget.recipe.steps.take(3).map((step) => Card(
+          ...widget.recipe.steps.map((step) => Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
                   leading: CircleAvatar(
@@ -1219,8 +1228,6 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                   ),
                   title: Text(
                     step.getLocalizedInstruction('en'),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
                   trailing: step.timeMinutes > 0
                       ? Chip(
@@ -1230,15 +1237,6 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                       : null,
                 ),
               )),
-          if (widget.recipe.steps.length > 3)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: Text(
-                '+ ${widget.recipe.steps.length - 3} more steps',
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
-            ),
         ],
       ),
       bottomNavigationBar: Container(
@@ -1261,6 +1259,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                 builder: (_) => CookModeScreen(
                   recipe: widget.recipe,
                   servings: _targetServings,
+                  baseServings: _baseServings,
                   preferredLanguageCode: _recipeLanguageCode,
                   startBilingual: _showBilingual,
                 ),

@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
+import '../services/cook_session_storage.dart';
 import '../services/scanning_service.dart';
 import '../models/profile_state.dart';
 import '../models/planning.dart';
@@ -12,15 +13,33 @@ enum _CookLanguageMode { english, bilingual }
 class CookModeScreen extends StatefulWidget {
   final Recipe recipe;
   final int servings;
+  final int? baseServings;
   final String? preferredLanguageCode;
   final bool? startBilingual;
+
+  // Optional restore state (used for Resume Cooking)
+  final int? initialStepIndex;
+  final int? initialStepSecondsRemaining;
+  final int? initialRecipeTotalSeconds;
+  final bool? initialIsStepTimerRunning;
+  final bool? initialIsStepTimerPaused;
+  final String? initialSecondaryLanguageCode;
+  final bool? initialStartBilingual;
 
   const CookModeScreen({
     super.key,
     required this.recipe,
     this.servings = 4,
+    this.baseServings,
     this.preferredLanguageCode,
     this.startBilingual,
+    this.initialStepIndex,
+    this.initialStepSecondsRemaining,
+    this.initialRecipeTotalSeconds,
+    this.initialIsStepTimerRunning,
+    this.initialIsStepTimerPaused,
+    this.initialSecondaryLanguageCode,
+    this.initialStartBilingual,
   });
 
   @override
@@ -36,6 +55,8 @@ class _CookModeScreenState extends State<CookModeScreen> {
   bool _isStepTimerRunning = false;
   bool _isStepTimerPaused = false;
 
+  int _lastPersistMillis = 0;
+
   // Language / presentation
   bool _languageInitialized = false;
   String _secondaryLanguageCode = 'en';
@@ -45,10 +66,83 @@ class _CookModeScreenState extends State<CookModeScreen> {
   bool _checkingSufficiency = false;
   List<Map<String, dynamic>> _missingItems = const [];
 
+  double get _scalingFactor {
+    final base = (widget.baseServings != null && widget.baseServings! > 0)
+        ? widget.baseServings!
+        : (widget.servings > 0 ? widget.servings : 1);
+    return base > 0 ? (widget.servings / base) : 1.0;
+  }
+
+  List<Map<String, dynamic>> _ingredientsForSufficiencyPayload() {
+    return widget.recipe.ingredientsUsed
+        .where((i) => i.canonicalName.trim().isNotEmpty)
+        .map(
+          (i) => {
+            'name': i.canonicalName.trim(),
+            'quantity': i.amount,
+            'unit': i.unit,
+          },
+        )
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _ingredientsForDeductPayload() {
+    final factor = _scalingFactor;
+    return widget.recipe.ingredientsUsed
+        .where((i) => i.canonicalName.trim().isNotEmpty)
+        .map(
+          (i) => {
+            'name': i.canonicalName.trim(),
+            'quantity': i.amount * factor,
+            'unit': i.unit,
+          },
+        )
+        .toList();
+  }
+
   @override
   void initState() {
     super.initState();
+    _restoreInitialStateIfProvided();
     _startRecipeTimer();
+    // Ensure a session exists even if user immediately leaves.
+    Future.microtask(() => _persistSession(force: true));
+  }
+
+  void _restoreInitialStateIfProvided() {
+    final stepIndex = widget.initialStepIndex;
+    if (stepIndex != null && stepIndex >= 0 && stepIndex < widget.recipe.steps.length) {
+      _currentStepIndex = stepIndex;
+    }
+
+    final recipeSeconds = widget.initialRecipeTotalSeconds;
+    if (recipeSeconds != null && recipeSeconds >= 0) {
+      _recipeTotalSeconds = recipeSeconds;
+    }
+
+    final stepSeconds = widget.initialStepSecondsRemaining;
+    if (stepSeconds != null && stepSeconds > 0) {
+      _stepSecondsRemaining = stepSeconds;
+    }
+
+    final running = widget.initialIsStepTimerRunning;
+    final paused = widget.initialIsStepTimerPaused;
+    if ((running == true) || _stepSecondsRemaining > 0) {
+      _isStepTimerRunning = true;
+      _isStepTimerPaused = paused ?? true;
+      _startStepTimerFromExistingRemaining();
+    }
+
+    final secLang = widget.initialSecondaryLanguageCode;
+    if (secLang != null && secLang.trim().isNotEmpty) {
+      _secondaryLanguageCode = secLang.trim();
+    }
+    if (widget.initialStartBilingual != null) {
+      _languageMode = widget.initialStartBilingual == true
+          ? _CookLanguageMode.bilingual
+          : _CookLanguageMode.english;
+      _languageInitialized = true;
+    }
   }
 
   @override
@@ -126,9 +220,36 @@ class _CookModeScreenState extends State<CookModeScreen> {
 
   @override
   void dispose() {
+    _persistSession(force: true);
     _stepTimer?.cancel();
     _recipeTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _persistSession({bool force = false}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && (now - _lastPersistMillis) < 1500) return;
+    _lastPersistMillis = now;
+
+    final session = ActiveCookSession(
+      recipe: widget.recipe,
+      servings: widget.servings,
+      baseServings: widget.baseServings,
+      currentStepIndex: _currentStepIndex,
+      stepSecondsRemaining: _stepSecondsRemaining,
+      recipeTotalSeconds: _recipeTotalSeconds,
+      isStepTimerRunning: _isStepTimerRunning,
+      isStepTimerPaused: _isStepTimerPaused,
+      secondaryLanguageCode: _secondaryLanguageCode,
+      languageMode: _languageMode == _CookLanguageMode.bilingual ? 'bilingual' : 'english',
+      savedAtMillis: now,
+    );
+
+    try {
+      await session.save();
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   String _uuidV4() {
@@ -144,16 +265,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
   }
 
   Future<void> _deductInventory(ApiClient apiClient) async {
-    final ingredients = widget.recipe.ingredientsUsed
-        .where((i) => i.canonicalName.trim().isNotEmpty)
-        .map(
-          (i) => {
-            'name': i.canonicalName.trim(),
-            'quantity': i.amount,
-            'unit': i.unit,
-          },
-        )
-        .toList();
+    final ingredients = _ingredientsForDeductPayload();
 
     if (ingredients.isEmpty) {
       if (!mounted) return;
@@ -223,6 +335,35 @@ class _CookModeScreenState extends State<CookModeScreen> {
       setState(() {
         _recipeTotalSeconds++;
       });
+      _persistSession();
+    });
+  }
+
+  void _startStepTimerFromExistingRemaining() {
+    if (_stepSecondsRemaining <= 0) {
+      setState(() {
+        _isStepTimerRunning = false;
+        _isStepTimerPaused = false;
+      });
+      return;
+    }
+
+    _stepTimer?.cancel();
+    _stepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        if (_isStepTimerPaused) return;
+        if (_stepSecondsRemaining > 0) {
+          _stepSecondsRemaining--;
+          _persistSession();
+          return;
+        }
+
+        _isStepTimerRunning = false;
+        _isStepTimerPaused = false;
+        _stepTimer?.cancel();
+        _persistSession(force: true);
+        _showStepCompleteDialog();
+      });
     });
   }
 
@@ -236,18 +377,22 @@ class _CookModeScreenState extends State<CookModeScreen> {
       _isStepTimerPaused = false;
     });
 
+    _persistSession(force: true);
+
     _stepTimer?.cancel();
     _stepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       setState(() {
         if (_isStepTimerPaused) return;
         if (_stepSecondsRemaining > 0) {
           _stepSecondsRemaining--;
+          _persistSession();
           return;
         }
 
         _isStepTimerRunning = false;
         _isStepTimerPaused = false;
         _stepTimer?.cancel();
+        _persistSession(force: true);
         _showStepCompleteDialog();
       });
     });
@@ -258,6 +403,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
     setState(() {
       _isStepTimerPaused = !_isStepTimerPaused;
     });
+    _persistSession(force: true);
   }
 
   void _resetStepTimer() {
@@ -267,12 +413,14 @@ class _CookModeScreenState extends State<CookModeScreen> {
       _isStepTimerPaused = false;
       _stepSecondsRemaining = 0;
     });
+    _persistSession(force: true);
   }
 
   void _addOneMinute() {
     setState(() {
       _stepSecondsRemaining += 60;
     });
+    _persistSession(force: true);
   }
 
   void _showStepCompleteDialog() {
@@ -305,6 +453,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
         _isStepTimerPaused = false;
         _stepSecondsRemaining = 0;
       });
+      _persistSession(force: true);
     }
   }
 
@@ -317,6 +466,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
         _isStepTimerPaused = false;
         _stepSecondsRemaining = 0;
       });
+      _persistSession(force: true);
     }
   }
 
@@ -332,6 +482,10 @@ class _CookModeScreenState extends State<CookModeScreen> {
       final result = await service.checkSufficiency(
         recipeId: widget.recipe.recipeId,
         servings: widget.servings,
+        recipeServings: (widget.baseServings != null && widget.baseServings! > 0)
+            ? widget.baseServings!
+            : widget.servings,
+        recipeIngredients: _ingredientsForSufficiencyPayload(),
         apiClient: apiClient,
       );
       if (!mounted) return;
@@ -508,6 +662,14 @@ class _CookModeScreenState extends State<CookModeScreen> {
 
       if (!mounted) return;
       final nav = Navigator.of(context);
+
+      // Completed: clear resume state.
+      try {
+        await ActiveCookSession.clear();
+      } catch (_) {
+        // Best-effort only.
+      }
+
       nav.pop();
       if (nav.canPop()) nav.pop();
     } catch (e) {
@@ -557,6 +719,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
                 setState(() {
                   _languageMode = m;
                 });
+                _persistSession(force: true);
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(

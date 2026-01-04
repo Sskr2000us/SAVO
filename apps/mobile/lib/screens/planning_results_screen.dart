@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -114,12 +115,17 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
 
       final List<Map<String, dynamic>> combined = [];
       int successes = 0;
+      String? firstError;
 
       for (final menu in widget.menuPlan.menus) {
         final servings = _extractServings(menu);
         for (final course in menu.courses) {
           if (course.recipeOptions.isEmpty) continue;
           final recipe = course.recipeOptions.first;
+          if (recipe.ingredientsUsed.isEmpty) {
+            firstError ??= 'A recipe is missing ingredient data.';
+            continue;
+          }
           final recipeIngredients = recipe.ingredientsUsed
               .map(
                 (i) => {
@@ -148,6 +154,9 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                 }
               }
             }
+          } else {
+            final err = (result['error'] ?? result['message'] ?? '').toString().trim();
+            if (err.isNotEmpty) firstError ??= err;
           }
         }
       }
@@ -155,7 +164,13 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
       if (!mounted) return;
       if (successes == 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not build shopping list for this plan.')),
+          SnackBar(
+            content: Text(
+              (firstError?.isNotEmpty == true)
+                  ? 'Could not build shopping list: $firstError'
+                  : 'Could not build shopping list for this plan.',
+            ),
+          ),
         );
         return;
       }
@@ -502,6 +517,9 @@ class _RecipeCardState extends State<_RecipeCard> {
   String? get _coverImageUrl {
     final refs = widget.recipe.youtubeReferences;
     if (refs.isNotEmpty) return refs.first.thumbnailUrl;
+
+    // Flutter web fetches NetworkImage via XHR, which often fails for Unsplash due to CORS.
+    if (kIsWeb) return null;
 
     final name = widget.recipe.getLocalizedName('en').trim();
     if (name.isEmpty) {

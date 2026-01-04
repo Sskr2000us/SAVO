@@ -36,6 +36,7 @@ from app.core.database import (
     create_meal_plan,
     get_meal_plan_for_date,
     get_meal_plans,
+    delete_latest_meal_plan,
 )
 from app.middleware.auth import get_current_user
 from app.core.safety_constraints import (
@@ -979,6 +980,25 @@ async def get_latest_plan(
         raise HTTPException(status_code=404, detail="Saved meal plan is stale")
 
     return MenuPlanResponse(**payload)
+
+
+@router.delete("/latest")
+async def delete_latest_plan(
+    user_id: str = Depends(get_current_user),
+    plan_type: str = "daily",
+    plan_date: Optional[str] = None,
+):
+    """Clear the most recent saved plan so the user can regenerate cleanly."""
+    try:
+        parsed_date = _parse_iso_date(plan_date) if plan_date else None
+        deleted = await delete_latest_meal_plan(
+            user_id,
+            plan_type=plan_type,
+            plan_date=parsed_date,
+        )
+        return {"success": True, "deleted": bool(deleted)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete plan: {str(e)}")
 
 
 def _is_breakfast_time(time_str: str, meal_times: dict) -> bool:

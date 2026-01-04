@@ -8,6 +8,7 @@ import '../models/profile_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import 'planning_results_screen.dart';
+import 'plan_screen.dart';
 import 'weekly_planner_screen.dart';
 import 'party_planner_screen.dart';
 import 'scan_ingredients_screen.dart';
@@ -156,10 +157,13 @@ class _HomeScreenState extends State<HomeScreen> {
               title: 'Cook Today',
               subtitle: 'Transform your ingredients into delicious meals',
               primaryButtonText: 'Plan Daily Menu',
-              secondaryButtonText: 'View Recipes',
+              secondaryButtonText: 'View Plan',
               onPrimaryTap: () => _planDaily(context),
               onSecondaryTap: () {
-                // Navigate to recipes (future feature)
+                Navigator.push(
+                  context,
+                  AppMotion.createRoute(const PlanScreen()),
+                );
               },
             ),
             const SizedBox(height: AppSpacing.lg),

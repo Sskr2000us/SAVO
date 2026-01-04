@@ -633,6 +633,39 @@ async def update_meal_plan(meal_plan_id: str, plan_data: Dict[str, Any]) -> Dict
         raise
 
 
+async def delete_latest_meal_plan(
+    user_id: str,
+    *,
+    plan_type: str,
+    plan_date: Optional[date] = None,
+) -> bool:
+    """Delete the most recent saved meal plan for a user/type (optionally restricted to a date)."""
+    try:
+        query = (
+            db.client.table("meal_plans")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("plan_type", plan_type)
+        )
+
+        if plan_date:
+            query = query.eq("plan_date", plan_date.isoformat())
+
+        latest = query.order("planned_at", desc=True).limit(1).execute()
+        if not latest.data:
+            return False
+
+        meal_plan_id = latest.data[0].get("id")
+        if not meal_plan_id:
+            return False
+
+        db.client.table("meal_plans").delete().eq("id", meal_plan_id).execute()
+        return True
+    except APIError as e:
+        logger.error(f"Error deleting meal plan: {e}")
+        raise
+
+
 async def complete_meal_plan(
     meal_plan_id: str,
     rating: Optional[int] = None,

@@ -175,6 +175,23 @@ class Recipe {
       orElse: () => recipeId,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'recipe_id': recipeId,
+      'recipe_name': recipeName,
+      'cuisine': cuisine,
+      'difficulty': difficulty,
+      'estimated_times': estimatedTimes.toJson(),
+      'cooking_method': cookingMethod,
+      'ingredients_used': ingredientsUsed.map((i) => i.toJson()).toList(),
+      'steps': steps.map((s) => s.toJson()).toList(),
+      'nutrition_per_serving': nutritionPerServing,
+      if (healthBenefits != null) 'health_benefits': healthBenefits,
+      'leftover_forecast': leftoverForecast,
+      'youtube_references': youtubeReferences.map((r) => r.toJson()).toList(),
+    };
+  }
 }
 
 class EstimatedTimes {
@@ -194,6 +211,14 @@ class EstimatedTimes {
       cookMinutes: json['cook_minutes'] ?? 0,
       totalMinutes: json['total_minutes'] ?? 0,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'prep_minutes': prepMinutes,
+      'cook_minutes': cookMinutes,
+      'total_minutes': totalMinutes,
+    };
   }
 }
 
@@ -218,6 +243,15 @@ class RecipeIngredient {
       unit: json['unit'] ?? '',
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'inventory_id': inventoryId,
+      'canonical_name': canonicalName,
+      'amount': amount,
+      'unit': unit,
+    };
+  }
 }
 
 class RecipeStep {
@@ -240,6 +274,15 @@ class RecipeStep {
       timeMinutes: json['time_minutes'] ?? 0,
       tips: List<String>.from(json['tips'] ?? []),
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'step': step,
+      'instruction': instruction,
+      'time_minutes': timeMinutes,
+      'tips': tips,
+    };
   }
 
   String getLocalizedInstruction(String languageCode) {

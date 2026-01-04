@@ -110,8 +110,8 @@ class _PlanScreenState extends State<PlanScreen> {
       }
 
       // Only generate when the user taps Generate.
-      final String endpoint = _planType == 'weekly'
-          ? '/plan/weekly'
+        final String endpoint = _planType == 'weekly'
+          ? '/plan/weekly?force_regenerate=true'
           : '/plan/daily?force_regenerate=true';
       final response = await apiClient.post(endpoint, body);
       if (!mounted) return;
@@ -125,6 +125,28 @@ class _PlanScreenState extends State<PlanScreen> {
       if (!mounted) return;
       setState(() {
         _generating = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _clearSavedPlan() async {
+    if (_loading || _generating) return;
+    setState(() {
+      _error = null;
+    });
+
+    final apiClient = Provider.of<ApiClient>(context, listen: false);
+    try {
+      await apiClient.delete('/plan/latest?plan_type=$_planType');
+      if (!mounted) return;
+      setState(() {
+        _latest = null;
+      });
+      await _loadLatest();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
         _error = e.toString();
       });
     }
@@ -183,6 +205,11 @@ class _PlanScreenState extends State<PlanScreen> {
             tooltip: 'Refresh saved plan',
             onPressed: _loading ? null : _loadLatest,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Clear saved plan',
+            onPressed: (_loading || _generating) ? null : _clearSavedPlan,
+            icon: const Icon(Icons.delete_outline),
           ),
           TextButton(
             onPressed: _generating ? null : _generatePlan,
