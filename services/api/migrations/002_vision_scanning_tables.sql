@@ -36,20 +36,37 @@ CREATE TABLE IF NOT EXISTS public.ingredient_scans (
 );
 
 -- Indexes for performance
-CREATE INDEX idx_ingredient_scans_user_created ON public.ingredient_scans(user_id, created_at DESC);
-CREATE INDEX idx_ingredient_scans_status ON public.ingredient_scans(status) WHERE status = 'processing';
-CREATE INDEX idx_ingredient_scans_image_hash ON public.ingredient_scans(image_hash) WHERE image_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ingredient_scans_user_created ON public.ingredient_scans(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ingredient_scans_status ON public.ingredient_scans(status) WHERE status = 'processing';
+CREATE INDEX IF NOT EXISTS idx_ingredient_scans_image_hash ON public.ingredient_scans(image_hash) WHERE image_hash IS NOT NULL;
 
 -- RLS policies
 ALTER TABLE public.ingredient_scans ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view their own scans"
-    ON public.ingredient_scans FOR SELECT
-    USING (auth.uid() = user_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='ingredient_scans' AND policyname='Users can view their own scans'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can view their own scans"
+                ON public.ingredient_scans FOR SELECT
+                USING (auth.uid() = user_id)
+        $sql$;
+    END IF;
 
-CREATE POLICY "Users can insert their own scans"
-    ON public.ingredient_scans FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='ingredient_scans' AND policyname='Users can insert their own scans'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can insert their own scans"
+                ON public.ingredient_scans FOR INSERT
+                WITH CHECK (auth.uid() = user_id)
+        $sql$;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- 2. detected_ingredients: Individual ingredients from each scan
@@ -90,27 +107,51 @@ CREATE TABLE IF NOT EXISTS public.detected_ingredients (
 );
 
 -- Indexes
-CREATE INDEX idx_detected_ingredients_scan ON public.detected_ingredients(scan_id);
-CREATE INDEX idx_detected_ingredients_user ON public.detected_ingredients(user_id, created_at DESC);
-CREATE INDEX idx_detected_ingredients_pending ON public.detected_ingredients(user_id, confirmation_status) 
+CREATE INDEX IF NOT EXISTS idx_detected_ingredients_scan ON public.detected_ingredients(scan_id);
+CREATE INDEX IF NOT EXISTS idx_detected_ingredients_user ON public.detected_ingredients(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_detected_ingredients_pending ON public.detected_ingredients(user_id, confirmation_status) 
     WHERE confirmation_status = 'pending';
-CREATE INDEX idx_detected_ingredients_canonical ON public.detected_ingredients(canonical_name) 
+CREATE INDEX IF NOT EXISTS idx_detected_ingredients_canonical ON public.detected_ingredients(canonical_name) 
     WHERE canonical_name IS NOT NULL;
 
 -- RLS policies
 ALTER TABLE public.detected_ingredients ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view their detected ingredients"
-    ON public.detected_ingredients FOR SELECT
-    USING (auth.uid() = user_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='detected_ingredients' AND policyname='Users can view their detected ingredients'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can view their detected ingredients"
+                ON public.detected_ingredients FOR SELECT
+                USING (auth.uid() = user_id)
+        $sql$;
+    END IF;
 
-CREATE POLICY "Users can insert detected ingredients"
-    ON public.detected_ingredients FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='detected_ingredients' AND policyname='Users can insert detected ingredients'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can insert detected ingredients"
+                ON public.detected_ingredients FOR INSERT
+                WITH CHECK (auth.uid() = user_id)
+        $sql$;
+    END IF;
 
-CREATE POLICY "Users can update their detected ingredients"
-    ON public.detected_ingredients FOR UPDATE
-    USING (auth.uid() = user_id);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='detected_ingredients' AND policyname='Users can update their detected ingredients'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can update their detected ingredients"
+                ON public.detected_ingredients FOR UPDATE
+                USING (auth.uid() = user_id)
+        $sql$;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- 3. user_pantry: Current confirmed pantry inventory
@@ -158,19 +199,29 @@ CREATE TABLE IF NOT EXISTS public.user_pantry (
 );
 
 -- Indexes
-CREATE INDEX idx_user_pantry_user_status ON public.user_pantry(user_id, status) 
+CREATE INDEX IF NOT EXISTS idx_user_pantry_user_status ON public.user_pantry(user_id, status) 
     WHERE status = 'available';
-CREATE INDEX idx_user_pantry_expires ON public.user_pantry(user_id, expires_at) 
+CREATE INDEX IF NOT EXISTS idx_user_pantry_expires ON public.user_pantry(user_id, expires_at) 
     WHERE expires_at IS NOT NULL AND status = 'available';
-CREATE INDEX idx_user_pantry_category ON public.user_pantry(user_id, category) 
+CREATE INDEX IF NOT EXISTS idx_user_pantry_category ON public.user_pantry(user_id, category) 
     WHERE status = 'available';
 
 -- RLS policies
 ALTER TABLE public.user_pantry ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage their pantry"
-    ON public.user_pantry FOR ALL
-    USING (auth.uid() = user_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='user_pantry' AND policyname='Users can manage their pantry'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can manage their pantry"
+                ON public.user_pantry FOR ALL
+                USING (auth.uid() = user_id)
+        $sql$;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- 4. scan_feedback: User corrections and feedback
@@ -214,16 +265,26 @@ CREATE TABLE IF NOT EXISTS public.scan_feedback (
 );
 
 -- Indexes
-CREATE INDEX idx_scan_feedback_user ON public.scan_feedback(user_id, created_at DESC);
-CREATE INDEX idx_scan_feedback_scan ON public.scan_feedback(scan_id);
-CREATE INDEX idx_scan_feedback_type ON public.scan_feedback(feedback_type);
+CREATE INDEX IF NOT EXISTS idx_scan_feedback_user ON public.scan_feedback(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_feedback_scan ON public.scan_feedback(scan_id);
+CREATE INDEX IF NOT EXISTS idx_scan_feedback_type ON public.scan_feedback(feedback_type);
 
 -- RLS policies
 ALTER TABLE public.scan_feedback ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage their feedback"
-    ON public.scan_feedback FOR ALL
-    USING (auth.uid() = user_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public' AND tablename='scan_feedback' AND policyname='Users can manage their feedback'
+    ) THEN
+        EXECUTE $sql$
+            CREATE POLICY "Users can manage their feedback"
+                ON public.scan_feedback FOR ALL
+                USING (auth.uid() = user_id)
+        $sql$;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- 5. scan_corrections: Track detection errors for model improvement
@@ -264,9 +325,9 @@ CREATE TABLE IF NOT EXISTS public.scan_corrections (
 );
 
 -- Indexes
-CREATE INDEX idx_scan_corrections_reviewed ON public.scan_corrections(reviewed) WHERE NOT reviewed;
-CREATE INDEX idx_scan_corrections_count ON public.scan_corrections(occurrence_count DESC);
-CREATE INDEX idx_scan_corrections_detected ON public.scan_corrections(detected_name);
+CREATE INDEX IF NOT EXISTS idx_scan_corrections_reviewed ON public.scan_corrections(reviewed) WHERE NOT reviewed;
+CREATE INDEX IF NOT EXISTS idx_scan_corrections_count ON public.scan_corrections(occurrence_count DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_corrections_detected ON public.scan_corrections(detected_name);
 
 -- RLS: No RLS on corrections - backend-only table
 -- Admin/analytics can access for model improvement
@@ -302,7 +363,7 @@ WHERE s.status = 'completed'
 GROUP BY DATE(s.created_at);
 
 -- Refresh schedule (run daily via cron job)
-CREATE UNIQUE INDEX idx_scanning_metrics_date ON public.scanning_metrics(scan_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scanning_metrics_date ON public.scanning_metrics(scan_date);
 
 -- ============================================================================
 -- 7. Helper functions
@@ -395,11 +456,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_check_scan_completion
-    AFTER UPDATE ON public.detected_ingredients
-    FOR EACH ROW
-    WHEN (OLD.confirmation_status IS DISTINCT FROM NEW.confirmation_status)
-    EXECUTE FUNCTION public.check_scan_completion();
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trigger_check_scan_completion') THEN
+        EXECUTE $sql$
+            CREATE TRIGGER trigger_check_scan_completion
+                AFTER UPDATE ON public.detected_ingredients
+                FOR EACH ROW
+                WHEN (OLD.confirmation_status IS DISTINCT FROM NEW.confirmation_status)
+                EXECUTE FUNCTION public.check_scan_completion()
+        $sql$;
+    END IF;
+END $$;
 
 -- Trigger: Auto-add to pantry when ingredient confirmed
 CREATE OR REPLACE FUNCTION public.auto_add_to_pantry()
@@ -434,11 +502,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_auto_add_to_pantry
-    AFTER UPDATE ON public.detected_ingredients
-    FOR EACH ROW
-    WHEN (OLD.confirmation_status IS DISTINCT FROM NEW.confirmation_status)
-    EXECUTE FUNCTION public.auto_add_to_pantry();
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trigger_auto_add_to_pantry') THEN
+        EXECUTE $sql$
+            CREATE TRIGGER trigger_auto_add_to_pantry
+                AFTER UPDATE ON public.detected_ingredients
+                FOR EACH ROW
+                WHEN (OLD.confirmation_status IS DISTINCT FROM NEW.confirmation_status)
+                EXECUTE FUNCTION public.auto_add_to_pantry()
+        $sql$;
+    END IF;
+END $$;
 
 -- Trigger: Track correction occurrence
 CREATE OR REPLACE FUNCTION public.track_correction()
@@ -470,10 +545,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_track_correction
-    AFTER INSERT ON public.scan_feedback
-    FOR EACH ROW
-    EXECUTE FUNCTION public.track_correction();
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trigger_track_correction') THEN
+        EXECUTE $sql$
+            CREATE TRIGGER trigger_track_correction
+                AFTER INSERT ON public.scan_feedback
+                FOR EACH ROW
+                EXECUTE FUNCTION public.track_correction()
+        $sql$;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- Migration complete
