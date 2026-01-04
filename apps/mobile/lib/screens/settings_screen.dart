@@ -21,6 +21,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   // Family members list
   List<Map<String, dynamic>> _familyMembers = [];
+
+  List<String> _toStringList(dynamic value) {
+    if (value is List) {
+      return value
+          .where((e) => e != null)
+          .map((e) => e.toString())
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+    return <String>[];
+  }
+
+  String _canonicalFamilyMemberKey(Map<String, dynamic> member) {
+    final name = (member['name'] ?? '').toString().trim().toLowerCase();
+    final age = (member['age'] is num) ? (member['age'] as num).toInt() : int.tryParse('${member['age']}') ?? 0;
+    final spice = (member['spice_tolerance'] ?? '').toString().trim().toLowerCase();
+
+    List<String> sortedList(dynamic v) {
+      final list = _toStringList(v);
+      list.sort();
+      return list;
+    }
+
+    final dietary = sortedList(member['dietary_restrictions']);
+    final allergens = sortedList(member['allergens']);
+    final health = sortedList(member['health_conditions']);
+    final medical = sortedList(member['medical_dietary_needs']);
+    final likes = sortedList(member['food_preferences']);
+    final dislikes = sortedList(member['food_dislikes']);
+
+    return [
+      name,
+      '$age',
+      spice,
+      dietary.join(','),
+      allergens.join(','),
+      health.join(','),
+      medical.join(','),
+      likes.join(','),
+      dislikes.join(','),
+    ].join('|');
+  }
+
+  List<Map<String, dynamic>> _dedupeFamilyMembers(List<Map<String, dynamic>> members) {
+    final seen = <String>{};
+    final result = <Map<String, dynamic>>[];
+
+    // Keep first occurrence (members are already ordered by display_order on backend).
+    for (final member in members) {
+      final key = _canonicalFamilyMemberKey(member);
+      if (seen.add(key)) {
+        result.add(member);
+      }
+    }
+
+    return result;
+  }
+
+  Future<void> _ensureHouseholdExists(ApiClient apiClient) async {
+    final householdResponse = await apiClient.get('/profile/household');
+    if (householdResponse?['exists'] == true) return;
+
+    final householdData = {
+      'region': _region,
+      'culture': _culture,
+      'meal_times': {
+        'breakfast': _breakfastTime,
+        'lunch': _lunchTime,
+        'dinner': _dinnerTime,
+      },
+      'breakfast_preferences': [_breakfastStyle],
+      'lunch_preferences': [_lunchStyle],
+      'dinner_preferences': [_dinnerStyle],
+      'favorite_cuisines': _favoriteCuisines,
+      'skill_level': _skillLevel,
+      'dinner_courses': _dinnerCourses,
+      'scan_training_opt_in': _scanTrainingOptIn,
+      'scan_training_retention_days': _scanTrainingRetentionDays,
+    };
+
+    await apiClient.post('/profile/household', householdData);
+  }
   
   // Regional settings
   String _region = 'US';
@@ -204,10 +287,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           }
         }
         
-        // Load family members
+        // Load family members (dedupe exact duplicates to avoid double-render and allow cleanup on next save)
         if (membersResponse != null && membersResponse['members'] is List) {
-          _familyMembers = (membersResponse['members'] as List)
-              .cast<Map<String, dynamic>>();
+          final loaded = (membersResponse['members'] as List).cast<Map<String, dynamic>>();
+          _familyMembers = _dedupeFamilyMembers(loaded);
         }
       });
     } catch (e) {
@@ -296,53 +379,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      
-      // Ensure household profile exists first
-      final householdResponse = await apiClient.get('/profile/household');
-      if (householdResponse?['exists'] != true) {
-        // Create household profile first if it doesn't exist
-        await _saveHouseholdProfile();
-      }
-      
-      // Delete existing members first
-      try {
-        final existingMembers = await apiClient.get('/profile/family-members');
-        
-        if (existingMembers?['members'] is List) {
-          for (var member in existingMembers['members']) {
-            await apiClient.delete('/profile/family-members/${member['id']}');
-          }
+
+      // Ensure household profile exists first.
+      await _ensureHouseholdExists(apiClient);
+
+      // Normalize and dedupe before saving.
+      _familyMembers = _dedupeFamilyMembers(_familyMembers);
+
+      // Fetch existing members.
+      final existingMembersResponse = await apiClient.get('/profile/family-members');
+      final existingMembers = (existingMembersResponse?['members'] is List)
+          ? (existingMembersResponse!['members'] as List).cast<Map<String, dynamic>>()
+          : <Map<String, dynamic>>[];
+
+      final existingById = <String, Map<String, dynamic>>{};
+      for (final member in existingMembers) {
+        final id = member['id']?.toString();
+        if (id != null && id.trim().isNotEmpty) {
+          existingById[id] = member;
         }
-      } catch (e) {
-        // Ignore errors when deleting (members might not exist yet)
-        debugPrint('No existing members to delete: $e');
       }
-      
-      // Add new family members
+
+      // Determine which existing IDs should be deleted (removed from UI or removed by dedupe).
+      final keptIds = <String>{};
+      for (final member in _familyMembers) {
+        final id = member['id']?.toString();
+        if (id != null && id.trim().isNotEmpty) {
+          keptIds.add(id);
+        }
+      }
+
+      for (final existingId in existingById.keys) {
+        if (!keptIds.contains(existingId)) {
+          await apiClient.delete('/profile/family-members/$existingId');
+        }
+      }
+
+      // Upsert current members (PATCH if existing, POST if new).
       for (var i = 0; i < _familyMembers.length; i++) {
         final member = _familyMembers[i];
-        
-        // Convert medical_dietary_needs to array if it's a Map
-        List<String> medicalNeeds = [];
-        if (member['medical_dietary_needs'] is List) {
-          medicalNeeds = List<String>.from(member['medical_dietary_needs']);
-        }
-        
+        final id = member['id']?.toString();
+
         final memberData = {
-          'name': member['name'] ?? 'Family Member',
-          'age': member['age'] ?? 30,
-          'age_category': member['age_category'] ?? 'adult',
-          'dietary_restrictions': member['dietary_restrictions'] ?? [],
-          'allergens': member['allergens'] ?? [],
-          'health_conditions': member['health_conditions'] ?? [],
-          'medical_dietary_needs': medicalNeeds,
-          'spice_tolerance': member['spice_tolerance'] ?? 'medium',
-          'food_preferences': member['food_preferences'] ?? [],
-          'food_dislikes': member['food_dislikes'] ?? [],
+          'name': (member['name'] ?? 'Family Member').toString(),
+          'age': (member['age'] is num)
+              ? (member['age'] as num).toInt()
+              : int.tryParse('${member['age']}') ?? 30,
+          'dietary_restrictions': _toStringList(member['dietary_restrictions']),
+          'allergens': _toStringList(member['allergens']),
+          'health_conditions': _toStringList(member['health_conditions']),
+          'medical_dietary_needs': _toStringList(member['medical_dietary_needs']),
+          'spice_tolerance': (member['spice_tolerance'] ?? 'medium').toString(),
+          'food_preferences': _toStringList(member['food_preferences']),
+          'food_dislikes': _toStringList(member['food_dislikes']),
           'display_order': i,
         };
-        
-        await apiClient.post('/profile/family-members', memberData);
+
+        if (id != null && id.trim().isNotEmpty && existingById.containsKey(id)) {
+          await apiClient.patch('/profile/family-members/$id', memberData);
+        } else {
+          final created = await apiClient.post('/profile/family-members', memberData);
+          final createdId = created['member']?['id']?.toString();
+          if (createdId != null && createdId.trim().isNotEmpty) {
+            _familyMembers[i]['id'] = createdId;
+          }
+        }
+      }
+
+      // Reload to reflect server state and cleaned duplicates.
+      if (mounted) {
+        await _loadConfiguration();
       }
       
       if (mounted) {
