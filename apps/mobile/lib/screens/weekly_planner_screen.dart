@@ -31,6 +31,95 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
   bool _avoidWaste = false;
   bool _useLeftovers = true;
 
+  Future<List<Map<String, dynamic>>> _fetchVerifyItems(ApiClient apiClient) async {
+    try {
+      final res = await apiClient.get('/api/scanning/pantry/summary?max_verify=5');
+      if (res is Map && res['verify'] is List) {
+        return (res['verify'] as List)
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
+      }
+    } catch (_) {
+      // Best-effort only.
+    }
+    return const [];
+  }
+
+  Future<Map<String, bool>?> _askQuickInventoryCheck(List<Map<String, dynamic>> verify) async {
+    if (verify.isEmpty) return const {};
+
+    final Map<String, bool> selections = {};
+    for (final item in verify) {
+      final id = item['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      selections[id] = true; // default: assume they still have it
+    }
+
+    return showDialog<Map<String, bool>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Quick inventory check'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Confirm a few items so the plan is more accurate.'),
+                    const SizedBox(height: 12),
+                    for (final item in verify)
+                      Builder(
+                        builder: (_) {
+                          final id = item['id']?.toString() ?? '';
+                          if (id.isEmpty) return const SizedBox.shrink();
+                          final label = (item['display_name']?.toString().trim().isNotEmpty == true)
+                              ? item['display_name'].toString().trim()
+                              : (item['ingredient_name']?.toString() ?? 'Item');
+                          final checked = selections[id] ?? true;
+                          return CheckboxListTile(
+                            value: checked,
+                            onChanged: (v) => setLocal(() => selections[id] = (v ?? true)),
+                            title: Text(label),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Skip'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, selections),
+                  child: const Text('Continue'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _applyInventorySelections(ApiClient apiClient, List<Map<String, dynamic>> verify, Map<String, bool> selections) async {
+    for (final item in verify) {
+      final id = item['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+
+      final stillHave = selections[id] ?? true;
+      if (!stillHave) {
+        await apiClient.patch('/inventory-db/items/$id', {
+          'is_current': false,
+        });
+      }
+    }
+  }
+
   Future<void> _selectStartDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -51,6 +140,16 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      // Best-effort: verify up to 5 uncertain items (prevents planning on stale pantry state).
+      final verify = await _fetchVerifyItems(apiClient);
+      if (verify.isNotEmpty && mounted) {
+        final selections = await _askQuickInventoryCheck(verify);
+        if (selections != null && selections.isNotEmpty) {
+          await _applyInventorySelections(apiClient, verify, selections);
+        }
+      }
+
       final profileState = Provider.of<ProfileState>(context, listen: false);
       final body = <String, dynamic>{
         'start_date': DateFormat('yyyy-MM-dd').format(_startDate),

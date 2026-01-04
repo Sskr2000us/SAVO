@@ -1148,6 +1148,7 @@ async def pantry_summary(
                 continue
 
             entry = {
+                "id": item.get("id"),
                 "ingredient_name": item.get("canonical_name"),
                 "display_name": item.get("display_name") or _titleize(item.get("canonical_name") or ""),
                 "quantity": item.get("quantity"),

@@ -17,6 +17,7 @@ class PantryOverviewScreen extends StatefulWidget {
 class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
   bool _loading = true;
   List<InventoryItem> _items = const [];
+  bool _cleaning = false;
 
   @override
   void initState() {
@@ -57,6 +58,39 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading pantry: $e')),
       );
+    }
+  }
+
+  Future<void> _weeklyCleanup() async {
+    if (_cleaning) return;
+    setState(() => _cleaning = true);
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final res = await apiClient.post(
+        '/api/scanning/pantry/weekly-cleanup?stale_days=30',
+        const {},
+      );
+
+      if (!mounted) return;
+
+      final msg = (res is Map && res['message'] != null)
+          ? res['message'].toString()
+          : 'Cleanup complete.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cleanup failed: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() => _cleaning = false);
     }
   }
 
@@ -107,6 +141,13 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Pantry'),
+          actions: [
+            IconButton(
+              tooltip: 'Weekly cleanup',
+              onPressed: _cleaning ? null : _weeklyCleanup,
+              icon: Icon(_cleaning ? Icons.hourglass_top : Icons.cleaning_services_outlined),
+            ),
+          ],
           bottom: const TabBar(
             tabs: [
               Tab(text: 'UseSoon'),
