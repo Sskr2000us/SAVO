@@ -136,6 +136,140 @@ class VisionAPIClient:
                 "error": str(e),
                 "ingredients": []
             }
+
+    async def analyze_receipt(
+        self,
+        image_data: bytes,
+        user_preferences: Optional[Dict] = None,
+    ) -> Dict:
+        """Analyze a receipt image and extract purchased grocery items.
+
+        Returns:
+            {
+                "success": bool,
+                "items": [
+                    {
+                        "raw_name": str,
+                        "canonical_name": str,
+                        "quantity": Optional[float],
+                        "unit": Optional[str],
+                        "confidence": Decimal,
+                        "raw_line": Optional[str],
+                    }
+                ],
+                "metadata": {...}
+            }
+        """
+        import time
+
+        start_time = time.time()
+
+        try:
+            image_hash, image_size = self._process_image(image_data)
+
+            prompt = """You are an expert receipt-parsing AI for SAVO, a cooking assistant app.
+
+TASK: Read this grocery receipt image and extract ONLY food/ingredient items that belong in a pantry.
+
+RULES:
+- Ignore store header/address, cashier info, loyalty messages, coupons, payment details, totals, taxes, fees.
+- Ignore non-food items (paper towels, detergent, toiletries, etc.).
+- Expand abbreviations when obvious (e.g., "TOM" -> "tomatoes"), otherwise keep a best-effort grocery name.
+- If the receipt shows weight/volume units (lb, oz, g, kg, l, ml), include them.
+- If quantity is not clear, set quantity to null (do not guess).
+
+OUTPUT FORMAT (JSON only):
+{
+  "items": [
+    {
+      "name": "string",
+      "quantity": 2.0,
+      "unit": "pounds|ounces|grams|kilograms|liters|milliliters|pieces|null",
+      "confidence": 0.0,
+      "raw_line": "string (optional)"
+    }
+  ]
+}
+"""
+
+            base64_image = base64.b64encode(image_data).decode("utf-8")
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=1800,
+                temperature=0.2,
+            )
+
+            content = response.choices[0].message.content
+            parsed = self._parse_detection_response(content)
+
+            from .ingredient_normalization import IngredientNormalizer
+
+            normalizer = IngredientNormalizer()
+
+            items_out = []
+            for item in (parsed.get("items") or []):
+                if not isinstance(item, dict):
+                    continue
+
+                raw_name = (item.get("name") or "").strip()
+                if not raw_name:
+                    continue
+
+                canonical_name = normalizer.normalize_name(raw_name)
+                if not canonical_name:
+                    continue
+
+                qty = item.get("quantity")
+                unit = item.get("unit")
+
+                conf_val = item.get("confidence", 0.0)
+                try:
+                    confidence = Decimal(str(conf_val))
+                except Exception:
+                    confidence = Decimal("0")
+
+                items_out.append(
+                    {
+                        "raw_name": raw_name,
+                        "canonical_name": canonical_name,
+                        "quantity": qty,
+                        "unit": unit,
+                        "confidence": confidence,
+                        "raw_line": item.get("raw_line"),
+                    }
+                )
+
+            processing_time = int((time.time() - start_time) * 1000)
+
+            return {
+                "success": True,
+                "items": items_out,
+                "metadata": {
+                    "image_hash": image_hash,
+                    "image_size": image_size,
+                    "processing_time_ms": processing_time,
+                    "total_items_detected": len(items_out),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Receipt analysis failed: {e}")
+            return {"success": False, "error": str(e), "items": []}
     
     def _process_image(self, image_data: bytes) -> Tuple[str, Tuple[int, int]]:
         """

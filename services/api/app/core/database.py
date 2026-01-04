@@ -135,9 +135,21 @@ async def get_household_profile(user_id: str) -> Optional[Dict[str, Any]]:
 async def create_household_profile(user_id: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create new household profile"""
     try:
+        profile_data = dict(profile_data)
         profile_data["user_id"] = user_id
-        result = db.client.table("household_profiles").insert(profile_data).execute()
-        return result.data[0]
+        profile_data = _drop_none_values(profile_data)
+
+        try:
+            result = db.client.table("household_profiles").insert(profile_data).execute()
+            return result.data[0]
+        except APIError as e:
+            missing = _extract_missing_column_name(e)
+            if missing and missing in profile_data:
+                logger.warning(f"Dropping unknown household_profiles column '{missing}' and retrying insert")
+                profile_data.pop(missing, None)
+                result = db.client.table("household_profiles").insert(profile_data).execute()
+                return result.data[0]
+            raise
     except APIError as e:
         logger.error(f"Error creating household profile for user {user_id}: {e}")
         logger.error(f"Profile data: {profile_data}")
@@ -147,8 +159,19 @@ async def create_household_profile(user_id: str, profile_data: Dict[str, Any]) -
 async def update_household_profile(user_id: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update existing household profile"""
     try:
-        result = db.client.table("household_profiles").update(profile_data).eq("user_id", user_id).execute()
-        return result.data[0] if result.data else None
+        profile_data = _drop_none_values(dict(profile_data))
+
+        try:
+            result = db.client.table("household_profiles").update(profile_data).eq("user_id", user_id).execute()
+            return result.data[0] if result.data else None
+        except APIError as e:
+            missing = _extract_missing_column_name(e)
+            if missing and missing in profile_data:
+                logger.warning(f"Dropping unknown household_profiles column '{missing}' and retrying update")
+                profile_data.pop(missing, None)
+                result = db.client.table("household_profiles").update(profile_data).eq("user_id", user_id).execute()
+                return result.data[0] if result.data else None
+            raise
     except APIError as e:
         logger.error(f"Error updating household profile: {e}")
         raise

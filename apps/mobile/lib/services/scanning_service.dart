@@ -146,10 +146,42 @@ class ScanningService {
           retryCount: retryCount + 1,
         );
       } else {
-        final error = json.decode(response.body);
+        dynamic decoded;
+        try {
+          decoded = json.decode(response.body);
+        } catch (_) {
+          decoded = null;
+        }
+
+        if (decoded is Map) {
+          final detail = decoded['detail'];
+          if (detail is Map) {
+            final code = detail['code']?.toString();
+            final message = detail['message']?.toString();
+            final issues = detail['issues'];
+            final metrics = detail['metrics'];
+
+            return {
+              'success': false,
+              'error': (message != null && message.trim().isNotEmpty)
+                  ? message.trim()
+                  : 'Analysis failed. Please try again.',
+              if (code != null && code.trim().isNotEmpty) 'error_code': code.trim(),
+              if (issues is List) 'quality_issues': issues,
+              if (metrics is Map) 'quality_metrics': Map<String, dynamic>.from(metrics),
+            };
+          }
+
+          final msg = (detail ?? decoded['message'] ?? '').toString().trim();
+          return {
+            'success': false,
+            'error': msg.isNotEmpty ? msg : 'Analysis failed. Please try again.',
+          };
+        }
+
         return {
           'success': false,
-          'error': error['detail'] ?? 'Analysis failed. Please try again.',
+          'error': 'Analysis failed. Please try again.',
         };
       }
     } on TimeoutException catch (_) {

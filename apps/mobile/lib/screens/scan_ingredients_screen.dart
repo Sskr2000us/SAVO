@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
+import '../services/metrics_service.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
   const ScanIngredientsScreen({super.key});
@@ -54,6 +55,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       final status = response['status'];
       if (status != 'ok') {
         final msg = response['error_message']?.toString() ?? 'Scan failed';
+
+        final lower = msg.toLowerCase();
+        if (lower.contains('too dark') || lower.contains('too blurry') || lower.contains('glare')) {
+          fireAndForget(MetricsService.instance.recordEvent('pantry_scan_retake'));
+        }
+
         _showError(msg);
         setState(() => _loading = false);
         return;

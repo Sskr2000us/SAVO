@@ -771,18 +771,31 @@ class _CookModeScreenState extends State<CookModeScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // Progress indicator
-          LinearProgressIndicator(
-            value: (_currentStepIndex + 1) / widget.recipe.steps.length,
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragEnd: (details) {
+          final vx = details.primaryVelocity ?? 0;
+          if (vx.abs() < 250) return;
+          if (vx < 0) {
+            // swipe left -> next
+            _nextStep();
+          } else {
+            // swipe right -> previous
+            _previousStep();
+          }
+        },
+        child: Column(
+          children: [
+            // Progress indicator
+            LinearProgressIndicator(
+              value: (_currentStepIndex + 1) / widget.recipe.steps.length,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                   // Step counter
                   Text(
                     'Step ${_currentStepIndex + 1} of ${widget.recipe.steps.length}',
@@ -936,11 +949,12 @@ class _CookModeScreenState extends State<CookModeScreen> {
                       ),
                     ],
                   ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

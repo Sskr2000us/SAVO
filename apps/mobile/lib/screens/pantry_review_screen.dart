@@ -6,6 +6,18 @@ import '../services/scanning_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 
+class _ReviewItem {
+  final String detectedId;
+  final String name;
+  final String action;
+
+  const _ReviewItem({
+    required this.detectedId,
+    required this.name,
+    required this.action,
+  });
+}
+
 class PantryReviewScreen extends StatefulWidget {
   final String scanId;
 
@@ -27,26 +39,89 @@ class PantryReviewScreen extends StatefulWidget {
 
 class _PantryReviewScreenState extends State<PantryReviewScreen> {
   bool _saving = false;
+  late Map<String, Map<String, dynamic>> _choices;
 
   @override
   void initState() {
     super.initState();
     fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Confirm'));
+    _choices = Map<String, Map<String, dynamic>>.from(widget.choices);
   }
 
   int _itemCount() {
     var count = 0;
-    for (final entry in widget.choices.values) {
+    for (final entry in _choices.values) {
       final action = entry['action']?.toString();
       if (action == 'confirmed' || action == 'modified') count++;
     }
     return count;
   }
 
+  List<_ReviewItem> _reviewItems() {
+    final out = <_ReviewItem>[];
+    _choices.forEach((detectedId, payload) {
+      final action = payload['action']?.toString();
+      if (action != 'confirmed' && action != 'modified') return;
+      final name = payload['confirmed_name']?.toString().trim();
+      if (name == null || name.isEmpty) return;
+      out.add(_ReviewItem(detectedId: detectedId, name: name, action: action!));
+    });
+    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return out;
+  }
+
+  Future<void> _editItemName(_ReviewItem item) async {
+    final controller = TextEditingController(text: item.name);
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Edit ingredient'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Name'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    final next = res?.trim();
+    if (next == null || next.isEmpty) return;
+    setState(() {
+      _choices[item.detectedId] = {
+        'action': 'modified',
+        'confirmed_name': next,
+      };
+    });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_review_item_edited'));
+  }
+
+  void _removeItem(_ReviewItem item) {
+    setState(() {
+      _choices[item.detectedId] = {
+        'action': 'rejected',
+      };
+    });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_review_item_removed'));
+  }
+
   List<Map<String, dynamic>> _buildConfirmations() {
     final confirmations = <Map<String, dynamic>>[];
 
-    widget.choices.forEach((detectedId, payload) {
+    _choices.forEach((detectedId, payload) {
       final action = payload['action']?.toString();
       if (action == null) return;
 
@@ -116,6 +191,7 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
     }
 
     final count = _itemCount();
+    final items = _reviewItems();
 
     return Scaffold(
       appBar: AppBar(
@@ -127,10 +203,54 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Adding $count items',
+              'Review pantry update',
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            const Spacer(),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Adding $count items',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Expanded(
+              child: items.isEmpty
+                  ? ListView(
+                      children: [
+                        Text(
+                          'No items selected.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    )
+                  : ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return Card(
+                          child: ListTile(
+                            title: Text(item.name),
+                            subtitle: Text(item.action == 'modified' ? 'Edited' : 'Confirmed'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Edit',
+                                  icon: const Icon(Icons.edit),
+                                  onPressed: _saving ? null : () => _editItemName(item),
+                                ),
+                                IconButton(
+                                  tooltip: 'Remove',
+                                  icon: const Icon(Icons.close),
+                                  onPressed: _saving ? null : () => _removeItem(item),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
             SizedBox(
               width: double.infinity,
               child: FilledButton(

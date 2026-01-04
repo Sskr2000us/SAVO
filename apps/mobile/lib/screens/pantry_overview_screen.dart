@@ -166,6 +166,8 @@ class _PantryList extends StatelessWidget {
               children: [
                 _FreshnessIndicator(item: item),
                 const SizedBox(width: AppSpacing.md),
+                _StorageIcon(item: item),
+                const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: Text(
                     item.displayLabel,
@@ -177,6 +179,46 @@ class _PantryList extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _StorageIcon extends StatelessWidget {
+  final InventoryItem item;
+
+  const _StorageIcon({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    final storage = item.storage.trim().toLowerCase();
+    IconData icon;
+    String label;
+
+    if (storage == 'fridge' || storage == 'refrigerator') {
+      icon = Icons.kitchen_outlined;
+      label = 'Fridge';
+    } else if (storage == 'freezer') {
+      icon = Icons.ac_unit;
+      label = 'Freezer';
+    } else {
+      icon = Icons.inventory_2_outlined;
+      label = 'Pantry';
+    }
+
+    return Tooltip(
+      message: label,
+      child: Container(
+        width: 40,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: Icon(icon, size: 18, color: cs.onSurfaceVariant),
+      ),
     );
   }
 }

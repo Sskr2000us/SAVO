@@ -3,6 +3,7 @@
 from datetime import date, datetime
 import logging
 import hashlib
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -60,6 +61,290 @@ from app.models.inventory import InventoryItem
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_cuisine_id(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if not v:
+        return None
+    # Normalize common UI inputs like "South Indian" -> "south_indian".
+    v = v.replace(" ", "_")
+    v = v.replace("-", "_")
+    # Drop punctuation/diacritics-ish separators into underscores.
+    v = re.sub(r"[^a-z0-9_]+", "_", v)
+    v = v.strip("_")
+    while "__" in v:
+        v = v.replace("__", "_")
+    return v
+
+
+def _allowed_cuisines_from_profile_and_request(req: Any, household: Any) -> set[str]:
+    """Strict allow-list for cuisine selection.
+
+    Priority:
+    1) request.cuisine_preferences (explicit user intent)
+    2) household favorites/regional cuisines (defaults)
+    """
+    allow: set[str] = set()
+
+    prefs = getattr(req, "cuisine_preferences", None)
+    if isinstance(prefs, list) and prefs:
+        for p in prefs:
+            cid = _normalize_cuisine_id(p)
+            if cid:
+                allow.add(cid)
+        if allow:
+            return allow
+
+    if isinstance(household, dict):
+        # Existing schema variants.
+        for key in ("favorite_cuisines", "favoriteCuisines", "regional_cuisines", "regionalCuisines"):
+            v = household.get(key)
+            if isinstance(v, list) and v:
+                for p in v:
+                    cid = _normalize_cuisine_id(p)
+                    if cid:
+                        allow.add(cid)
+
+    return allow
+
+
+def _regional_profile_candidates(regional_profile: Any, *, max_results: int = 8) -> List[Dict[str, Any]]:
+    """Recommend candidate cuisines from a regional profile.
+
+    This is intentionally generic: no hard-coded mappings. It uses CUISINE_METADATA
+    fields (countries/languages/region/subregion/name/characteristics) to score
+    likely fits for the given location/language context.
+    """
+    if not isinstance(regional_profile, dict) or not regional_profile:
+        return []
+
+    def _as_str(x: Any) -> str:
+        return x.strip() if isinstance(x, str) else ""
+
+    def _norm_lang(x: str) -> str:
+        # Accept BCP47-ish tags (en-US) and underscore variants (en_US).
+        raw = x.strip().lower().replace("_", "-")
+        if not raw:
+            return ""
+        return raw.split("-")[0].strip()
+
+    def _lang_keys(value: Any) -> set[str]:
+        out: set[str] = set()
+        for s in _as_str_list(value):
+            raw = s.strip().lower()
+            if raw:
+                out.add(raw)
+            base = _norm_lang(s)
+            if base:
+                out.add(base)
+        return out
+
+    def _country_codes(value: Any) -> set[str]:
+        # Prefer ISO-3166 alpha-2 codes, but don't assume inputs are validated.
+        out: set[str] = set()
+        for s in _as_str_list(value):
+            code = s.strip().upper()
+            if len(code) == 2 and code.isalpha():
+                out.add(code)
+        return out
+
+    def _as_str_list(x: Any) -> List[str]:
+        if isinstance(x, list):
+            return [s.strip() for s in x if isinstance(s, str) and s.strip()]
+        if isinstance(x, str) and x.strip():
+            return [x.strip()]
+        return []
+
+    # Pull generic inputs.
+    countries = _country_codes(regional_profile.get("countries") or regional_profile.get("country"))
+    languages = _lang_keys(regional_profile.get("languages") or regional_profile.get("language"))
+
+    token_sources = [
+        regional_profile.get("region"),
+        regional_profile.get("subregion"),
+        regional_profile.get("country"),
+        regional_profile.get("countries"),
+        regional_profile.get("state"),
+        regional_profile.get("province"),
+        regional_profile.get("city"),
+        regional_profile.get("locality"),
+        regional_profile.get("area"),
+        regional_profile.get("tags"),
+    ]
+    tokens: List[str] = []
+    for src in token_sources:
+        if isinstance(src, list):
+            tokens.extend([_as_str(s) for s in src])
+        else:
+            v = _as_str(src)
+            if v:
+                tokens.append(v)
+
+    # Normalize tokens for substring matching.
+    tokens_norm = [re.sub(r"\s+", " ", t).strip().lower() for t in tokens if t.strip()]
+    tokens_norm = [t for t in tokens_norm if t and len(t) >= 3]
+
+    scored: List[Dict[str, Any]] = []
+    for cuisine_id, meta in CUISINE_METADATA.items():
+        if not isinstance(meta, dict):
+            continue
+
+        score = 0
+        reasons: List[str] = []
+
+        meta_countries = {s.upper() for s in (meta.get("countries") or []) if isinstance(s, str)}
+        meta_langs = {s.lower() for s in (meta.get("languages") or []) if isinstance(s, str)}
+        meta_lang_names = {s.lower() for s in (meta.get("language_names") or []) if isinstance(s, str)}
+        meta_region = (meta.get("region") or "") if isinstance(meta.get("region"), str) else ""
+        meta_subregion = (meta.get("subregion") or "") if isinstance(meta.get("subregion"), str) else ""
+        meta_name = (meta.get("name") or "") if isinstance(meta.get("name"), str) else ""
+        meta_chars = meta.get("characteristics") if isinstance(meta.get("characteristics"), list) else []
+        meta_aliases = meta.get("aliases") if isinstance(meta.get("aliases"), list) else []
+        meta_keywords = meta.get("keywords") if isinstance(meta.get("keywords"), list) else []
+        meta_country_names = meta.get("country_names") if isinstance(meta.get("country_names"), list) else []
+
+        if countries and meta_countries:
+            inter = countries & meta_countries
+            if inter:
+                score += 3
+                reasons.append(f"country:{','.join(sorted(inter))}")
+
+        if languages and meta_langs:
+            inter = languages & meta_langs
+            if inter:
+                score += 2
+                reasons.append(f"lang:{','.join(sorted(inter))}")
+
+        if languages and meta_lang_names:
+            inter = languages & meta_lang_names
+            if inter:
+                score += 1
+                reasons.append(f"lang_name:{','.join(sorted(inter))}")
+
+        hay = " ".join(
+            [
+                meta_region.lower(),
+                meta_subregion.lower(),
+                meta_name.lower(),
+                " ".join([c.lower() for c in meta_chars if isinstance(c, str)]),
+                " ".join([a.lower() for a in meta_aliases if isinstance(a, str)]),
+                " ".join([k.lower() for k in meta_keywords if isinstance(k, str)]),
+                " ".join([cn.lower() for cn in meta_country_names if isinstance(cn, str)]),
+                " ".join(sorted(list(meta_lang_names))),
+            ]
+        )
+
+        for tok in tokens_norm:
+            if tok and tok in hay:
+                score += 1
+                reasons.append(f"match:{tok}")
+
+        if score <= 0:
+            continue
+
+        scored.append(
+            {
+                "cuisine_id": cuisine_id,
+                "name": meta_name or cuisine_id,
+                "score": score,
+                "reasons": reasons[:6],
+            }
+        )
+
+    scored.sort(key=lambda x: int(x.get("score", 0)), reverse=True)
+    return scored[:max_results]
+
+
+def _allowed_cuisines_from_regional_profile(household: Any) -> set[str]:
+    if not isinstance(household, dict):
+        return set()
+    rp = household.get("regional_profile")
+    candidates = _regional_profile_candidates(rp)
+    out: set[str] = set()
+    for c in candidates:
+        cid = _normalize_cuisine_id(c.get("cuisine_id"))
+        if cid:
+            out.add(cid)
+    return out
+
+
+def _recipe_cuisine_id(recipe: Any) -> Optional[str]:
+    if not isinstance(recipe, dict):
+        return None
+    for key in ("cuisine_id", "cuisineId", "cuisine"):
+        val = recipe.get(key)
+        cid = _normalize_cuisine_id(val)
+        if cid:
+            return cid
+    return None
+
+
+def _enforce_allowed_cuisines_in_payload(payload: Dict[str, Any], allowed: set[str]) -> Dict[str, Any]:
+    """Filter recipe options to allowed cuisines.
+
+    Keeps at least one option per course to avoid empty UI.
+    """
+    if not allowed:
+        return payload
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    excluded: list[str] = []
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list) or not opts:
+                continue
+
+            original = list(opts)
+            kept: list[dict] = []
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                cid = _recipe_cuisine_id(opt)
+                # If cuisine is missing, keep (LLM sometimes omits it).
+                if cid is None or cid in allowed:
+                    kept.append(opt)
+                else:
+                    excluded.append(cid)
+
+            if not kept and original:
+                kept = [original[0]]
+            course["recipe_options"] = kept
+
+    # Annotate variety_log for transparency/debugging.
+    try:
+        v = payload.get("variety_log")
+        if not isinstance(v, dict):
+            v = {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}}
+            payload["variety_log"] = v
+        rules = v.get("rules_applied")
+        if not isinstance(rules, list):
+            rules = []
+            v["rules_applied"] = rules
+        rules.append({"rule": "strict_cuisine_allowlist", "allowed": sorted(list(allowed))})
+        if excluded:
+            v["excluded_by_cuisine_allowlist"] = sorted(list({c for c in excluded if c}))
+    except Exception:
+        pass
+
+    return payload
 
 
 def _recipe_dedupe_key(recipe: Any) -> Optional[str]:
@@ -145,6 +430,100 @@ def _dedupe_menu_plan_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             course["recipe_options"] = new_opts
 
     payload["menus"] = menus
+    return payload
+
+
+def _recent_history_keys(history: Any, keep_last_n: int) -> set[str]:
+    if not isinstance(history, list) or keep_last_n <= 0:
+        return set()
+
+    out: set[str] = set()
+    for row in history[:keep_last_n]:
+        if not isinstance(row, dict):
+            continue
+        rn = row.get("recipe_name") or row.get("name")
+        if isinstance(rn, str) and rn.strip():
+            out.add(f"name:{rn.strip().lower()}")
+        rid = row.get("recipe_id") or row.get("id")
+        if isinstance(rid, str) and rid.strip():
+            out.add(f"id:{rid.strip().lower()}")
+    return out
+
+
+def _exclude_recent_recipes_from_payload(
+    payload: Dict[str, Any],
+    history: Any,
+    *,
+    cooldown_last_n: int = 3,
+) -> Dict[str, Any]:
+    """Exclude recently cooked recipes from the returned menu plan.
+
+    This is a defensive layer on top of prompt-level variety instructions.
+    """
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    recent_keys = _recent_history_keys(history, cooldown_last_n)
+    if not recent_keys:
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    excluded: List[str] = []
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list) or not opts:
+                continue
+
+            original = list(opts)
+            kept: list[dict] = []
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                key = _recipe_dedupe_key(opt)
+                if key and key in recent_keys:
+                    excluded.append(key)
+                    continue
+                kept.append(opt)
+
+            if not kept and original:
+                # Never return an empty course.
+                kept = [original[0]]
+
+            course["recipe_options"] = kept
+
+    # Best-effort: capture exclusions for debugging/analytics.
+    try:
+        v = payload.get("variety_log")
+        if not isinstance(v, dict):
+            v = {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}}
+            payload["variety_log"] = v
+        ex = v.get("excluded_recent")
+        if not isinstance(ex, list):
+            ex = []
+            v["excluded_recent"] = ex
+        # Dedup while keeping stable order.
+        seen: set[str] = set(ex)
+        for k in excluded:
+            if k in seen:
+                continue
+            seen.add(k)
+            ex.append(k)
+    except Exception:
+        pass
+
     return payload
 
 
@@ -645,6 +1024,24 @@ def _build_planning_context(
         **orch_context
     }
 
+    # Surface household regional profile for culturally authentic planning.
+    # Stored on household_profiles as JSONB.
+    try:
+        app_cfg = context.get("app_configuration")
+        household = None
+        if isinstance(app_cfg, dict):
+            db_profile = app_cfg.get("db_profile")
+            if isinstance(db_profile, dict) and isinstance(db_profile.get("household"), dict):
+                household = db_profile.get("household")
+            else:
+                household = app_cfg.get("household_profile") or app_cfg.get("household")
+        if isinstance(household, dict):
+            regional_profile = household.get("regional_profile")
+            if isinstance(regional_profile, dict) and regional_profile:
+                context["regional_profile"] = regional_profile
+    except Exception:
+        pass
+
     # Prompt-pack compatibility aliases.
     # The prompt instructions refer to UPPERCASE bindings like SESSION_REQUEST and INVENTORY.
     # Our context JSON is lower_snake_case; provide aliases so the model reliably finds inputs.
@@ -657,6 +1054,8 @@ def _build_planning_context(
         context["OUTPUT_LANGUAGE"] = context.get("output_language")
         context["MEASUREMENT_SYSTEM"] = context.get("measurement_system")
         context["NOW_UTC"] = context.get("now_utc")
+        if "regional_profile" in context:
+            context["REGIONAL_PROFILE"] = context.get("regional_profile")
         if "feature_flags" in context:
             context["FEATURE_FLAGS"] = context.get("feature_flags")
     except Exception:
@@ -712,6 +1111,13 @@ async def post_daily(
         if isinstance(db_favs, list) and db_favs:
             req.cuisine_preferences = db_favs
     req.cuisine_preferences = _normalize_cuisine_preferences(req.cuisine_preferences)
+
+    # STRICT enforcement (default):
+    # - If user provided cuisine preferences (directly or via household favorites), use them as allow-list.
+    # - Otherwise, derive an allow-list from regional_profile (generic metadata-based matching; no hard-coded examples).
+    allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
+    if not allowed_cuisines:
+        allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
 
     # Reuse an existing saved plan for the day unless the request changed
     # AND the inventory snapshot hasn't materially changed.
@@ -807,6 +1213,16 @@ async def post_daily(
         history_override=db_history,
         app_configuration_override=app_config_dict,
     )
+
+    # Provide metadata-based cuisine candidates for the LLM to pick from.
+    try:
+        rp = household.get("regional_profile") if isinstance(household, dict) else None
+        candidates = _regional_profile_candidates(rp)
+        if candidates:
+            context["regional_cuisine_candidates"] = candidates
+            context["REGIONAL_CUISINE_CANDIDATES"] = candidates
+    except Exception:
+        pass
     context["time_available_minutes"] = req.time_available_minutes
     context["servings"] = req.servings
     
@@ -906,9 +1322,17 @@ async def post_daily(
         logger.exception("plan_daily crashed user_id=%s", user_id)
         raise
 
+    # Enforce cuisine allow-list on output (hard guarantee).
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
     # Avoid duplicated recipes in the returned menu.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
+
+    # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
 
     # Persist inventory snapshot hash inside the stored payload (response model ignores unknown keys).
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -1079,7 +1503,16 @@ async def post_party(
     if getattr(req, "party_course_counts", None) is not None:
         context["party_course_counts"] = req.party_course_counts.model_dump()
     
+    # Use request preferences first; otherwise derive from household regional_profile.
+    allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
+    if not allowed_cuisines:
+        allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
     result = await plan_party(context)
+    # Enforce a recent-recipe cooldown so users see variety across parties.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
     return MenuPlanResponse(**result)
 
 
@@ -1161,6 +1594,16 @@ async def post_weekly(
 
     # Persist successful plan (keyed by start_date)
     if isinstance(result, dict) and result.get("status") == "ok":
+        # Enforce a recent-recipe cooldown so weekly plans don't repeat recent cooks.
+        if isinstance(result, dict) and result.get("status") == "ok":
+            result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
+
+        # Enforce cuisine allow-list on output.
+        allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
+        if not allowed_cuisines:
+            allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
+        if isinstance(result, dict) and result.get("status") == "ok":
+            result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
         try:
             await create_meal_plan(
                 user_id,

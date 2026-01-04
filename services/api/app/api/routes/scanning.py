@@ -10,8 +10,11 @@ from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 import logging
+import io
 
 from pydantic import BaseModel, Field
+
+from PIL import Image, ImageFilter, ImageStat
 
 from app.middleware.auth import get_current_user
 from app.core.database import get_db_client
@@ -49,6 +52,66 @@ def _scan_type_to_storage_location(scan_type: Optional[str]) -> str:
 
 def _titleize(name: str) -> str:
     return (name or "").replace("_", " ").strip().title()
+
+
+def _assess_image_quality(image_data: bytes) -> Dict[str, Any]:
+    """Return lightweight image quality signals for capture gating.
+
+    Uses only Pillow (no numpy/opencv) to keep deps minimal.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_data))
+        img = img.convert("RGB")
+    except Exception:
+        return {"ok": False, "issues": ["unreadable"], "metrics": {}}
+
+    # Downscale for speed/consistency.
+    try:
+        img.thumbnail((640, 640))
+    except Exception:
+        pass
+
+    gray = img.convert("L")
+    stat = ImageStat.Stat(gray)
+
+    brightness_mean = float(stat.mean[0]) if stat.mean else 0.0
+    contrast_stddev = float(stat.stddev[0]) if stat.stddev else 0.0
+
+    # Blur proxy: strength of high-frequency content.
+    # Lower edge mean => likely blur / out-of-focus.
+    try:
+        edges = gray.filter(ImageFilter.FIND_EDGES)
+        edge_stat = ImageStat.Stat(edges)
+        edge_mean = float(edge_stat.mean[0]) if edge_stat.mean else 0.0
+        edge_stddev = float(edge_stat.stddev[0]) if edge_stat.stddev else 0.0
+    except Exception:
+        edge_mean = 0.0
+        edge_stddev = 0.0
+
+    issues: List[str] = []
+
+    # Thresholds tuned conservatively to avoid blocking valid images.
+    if brightness_mean < 55:
+        issues.append("too_dark")
+    elif brightness_mean > 215:
+        issues.append("too_bright")
+
+    if contrast_stddev < 18:
+        issues.append("low_contrast")
+
+    if edge_mean < 9.5 and edge_stddev < 18:
+        issues.append("too_blurry")
+
+    return {
+        "ok": len(issues) == 0,
+        "issues": issues,
+        "metrics": {
+            "brightness_mean": round(brightness_mean, 2),
+            "contrast_stddev": round(contrast_stddev, 2),
+            "edge_mean": round(edge_mean, 2),
+            "edge_stddev": round(edge_stddev, 2),
+        },
+    }
 
 
 # ============================================================================
@@ -134,6 +197,16 @@ class SubmitFeedbackRequest(BaseModel):
     comment: Optional[str] = None
 
 
+class ScanReceiptResponse(BaseModel):
+    success: bool
+    receipt_id: str
+    added_count: int
+    updated_count: int
+    pantry_items: List[Dict]
+    metadata: Dict
+    message: Optional[str] = None
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -164,6 +237,32 @@ async def analyze_image(
         
         if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
             raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
+
+        # Capture-quality gate (prevents wasting Vision calls on unusable frames).
+        quality = _assess_image_quality(image_data)
+        if not quality.get("ok"):
+            issues = quality.get("issues") or []
+            metrics = quality.get("metrics") or {}
+
+            # Keep message short and actionable.
+            if "too_dark" in issues:
+                msg = "Too dark — turn on lights and retake."
+            elif "too_blurry" in issues:
+                msg = "Too blurry — hold steady and retake."
+            elif "too_bright" in issues:
+                msg = "Too bright/glare — adjust angle and retake."
+            else:
+                msg = "Image quality too low — please retake."
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "image_quality",
+                    "message": msg,
+                    "issues": issues,
+                    "metrics": metrics,
+                },
+            )
         
         # Get user profile for context
         profile = await get_full_profile(user_id)
@@ -576,6 +675,211 @@ async def confirm_ingredients(
     except Exception as e:
         logger.error(f"Ingredient confirmation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Confirmation failed: {str(e)}")
+
+
+@router.post("/scan-receipt", response_model=ScanReceiptResponse)
+async def scan_receipt(
+    image: UploadFile = File(..., description="Receipt image file (JPEG/PNG)"),
+    storage_location: str = Form(default="pantry"),
+    user_id: str = Depends(get_current_user),
+):
+    """Scan a grocery receipt and upsert items into inventory."""
+    try:
+        if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG or PNG.")
+
+        image_data = await image.read()
+        if len(image_data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
+
+        db = get_db_client()
+        normalizer = get_normalizer()
+
+        # Use a receipt_id as an event id for last_seen_scan_id.
+        receipt_id = str(uuid4())
+        now_iso = datetime.utcnow().isoformat()
+
+        # Best-effort upload to storage for traceability (optional).
+        image_url = None
+        try:
+            image_url = upload_inventory_image(
+                user_id=user_id,
+                content=image_data,
+                content_type=image.content_type,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to upload receipt image: {e}")
+
+        # User profile context (optional; can help disambiguate items).
+        profile = None
+        try:
+            profile = await get_full_profile(user_id)
+        except Exception:
+            profile = None
+
+        vision_client = get_vision_client()
+        analysis = await vision_client.analyze_receipt(
+            image_data=image_data,
+            user_preferences=profile,
+        )
+
+        if not analysis.get("success"):
+            raise HTTPException(status_code=500, detail=f"Receipt analysis failed: {analysis.get('error')}")
+
+        storage = _scan_type_to_storage_location(storage_location)
+        item_state = "raw"
+
+        added_count = 0
+        updated_count = 0
+        pantry_items: List[Dict] = []
+
+        from app.core.unit_converter import UnitConverter
+
+        for item in analysis.get("items", []):
+            canonical = (item.get("canonical_name") or "").strip()
+            if not canonical:
+                # Fallback normalize if needed
+                canonical = normalizer.normalize_name(item.get("raw_name") or "")
+            if not canonical:
+                continue
+
+            incoming_qty = item.get("quantity")
+            try:
+                incoming_qty_f = float(incoming_qty) if incoming_qty is not None else 1.0
+            except Exception:
+                incoming_qty_f = 1.0
+
+            incoming_unit = _normalize_unit(item.get("unit"))
+
+            existing = (
+                db.table("inventory_items")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("canonical_name", canonical)
+                .eq("storage_location", storage)
+                .eq("item_state", item_state)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            merged_qty = incoming_qty_f
+            merged_unit = incoming_unit
+
+            confidence = item.get("confidence")
+            try:
+                confidence_f = float(confidence) if confidence is not None else None
+            except Exception:
+                confidence_f = None
+
+            if existing.data:
+                existing_item = existing.data[0]
+                existing_qty = float(existing_item.get("quantity") or 0)
+                existing_unit = _normalize_unit(existing_item.get("unit") or "pieces")
+
+                update_payload = {
+                    "display_name": existing_item.get("display_name") or _titleize(canonical),
+                    "source": "receipt",
+                    "is_current": True,
+                    "last_seen_at": now_iso,
+                    "last_seen_scan_id": receipt_id,
+                }
+                if image_url and not existing_item.get("image_url"):
+                    update_payload["image_url"] = image_url
+
+                if incoming_unit == existing_unit:
+                    merged_qty = existing_qty + incoming_qty_f
+                    merged_unit = existing_unit
+                    update_payload.update({"quantity": merged_qty, "unit": merged_unit})
+                    if confidence_f is not None:
+                        update_payload["scan_confidence"] = confidence_f
+                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    updated_count += 1
+                elif UnitConverter.can_convert(incoming_unit, existing_unit):
+                    converted = UnitConverter.convert(incoming_qty_f, incoming_unit, existing_unit)
+                    merged_qty = existing_qty + float(converted)
+                    merged_unit = existing_unit
+                    update_payload.update({"quantity": merged_qty, "unit": merged_unit})
+                    if confidence_f is not None:
+                        update_payload["scan_confidence"] = confidence_f
+                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    updated_count += 1
+                else:
+                    created = (
+                        db.table("inventory_items")
+                        .insert(
+                            {
+                                "user_id": user_id,
+                                "canonical_name": canonical,
+                                "display_name": _titleize(canonical),
+                                "quantity": incoming_qty_f,
+                                "unit": incoming_unit,
+                                "storage_location": storage,
+                                "item_state": item_state,
+                                "source": "receipt",
+                                "scan_confidence": confidence_f,
+                                "image_url": image_url,
+                                "is_current": True,
+                                "last_seen_at": now_iso,
+                                "last_seen_scan_id": receipt_id,
+                            }
+                        )
+                        .execute()
+                    )
+                    _ = created.data[0] if created.data else None
+                    added_count += 1
+
+            else:
+                created = (
+                    db.table("inventory_items")
+                    .insert(
+                        {
+                            "user_id": user_id,
+                            "canonical_name": canonical,
+                            "display_name": _titleize(canonical),
+                            "quantity": incoming_qty_f,
+                            "unit": incoming_unit,
+                            "storage_location": storage,
+                            "item_state": item_state,
+                            "source": "receipt",
+                            "scan_confidence": confidence_f,
+                            "image_url": image_url,
+                            "is_current": True,
+                            "last_seen_at": now_iso,
+                            "last_seen_scan_id": receipt_id,
+                        }
+                    )
+                    .execute()
+                )
+                _ = created.data[0] if created.data else None
+                added_count += 1
+
+            pantry_items.append(
+                {
+                    "name": canonical,
+                    "display_name": _titleize(canonical),
+                    "quantity": merged_qty,
+                    "unit": merged_unit,
+                    "source": "receipt",
+                }
+            )
+
+        message = f"Receipt scanned. Added {added_count}, updated {updated_count} items."
+
+        return ScanReceiptResponse(
+            success=True,
+            receipt_id=receipt_id,
+            added_count=added_count,
+            updated_count=updated_count,
+            pantry_items=pantry_items,
+            metadata=analysis.get("metadata") or {},
+            message=message,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Receipt scan failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Receipt scan failed: {str(e)}")
 
 
 @router.get("/history", response_model=ScanHistoryResponse)
@@ -1044,12 +1348,46 @@ async def check_recipe_sufficiency(
             name = (item.get("canonical_name") or "").strip()
             if not name:
                 continue
+            # Always normalize to ensure stable matching with recipe_ingredients.
+            key = normalizer.normalize_name(name)
+            if not key:
+                continue
             try:
                 qty = float(item.get("quantity") or 0)
             except Exception:
                 qty = 0.0
             unit = _normalize_unit(item.get("unit") or "pieces")
-            pantry_dict[name] = {"quantity": qty, "unit": unit}
+
+            existing = pantry_dict.get(key)
+            if not isinstance(existing, dict):
+                pantry_dict[key] = {"quantity": qty, "unit": unit}
+                continue
+
+            # Aggregate quantities for duplicate keys (best-effort).
+            try:
+                from app.core.unit_converter import UnitConverter
+
+                existing_unit = _normalize_unit(existing.get("unit") or unit)
+                existing_qty = float(existing.get("quantity") or 0)
+
+                if existing_unit and unit and existing_unit != unit:
+                    if UnitConverter.can_convert(unit, existing_unit):
+                        qty = UnitConverter.convert(qty, unit, existing_unit)
+                        unit = existing_unit
+                    elif UnitConverter.can_convert(existing_unit, unit):
+                        existing_qty = UnitConverter.convert(existing_qty, existing_unit, unit)
+                        existing_unit = unit
+                    else:
+                        # Different categories; keep the larger quantity to avoid inflation.
+                        existing["quantity"] = max(existing_qty, qty)
+                        existing["unit"] = existing_unit
+                        continue
+
+                existing["quantity"] = float(existing_qty) + float(qty)
+                existing["unit"] = existing_unit
+            except Exception:
+                # Fallback: last write wins (still normalized).
+                pantry_dict[key] = {"quantity": qty, "unit": unit}
 
         logger.info(
             "check_sufficiency inventory uid_suffix=%s pantry_items=%s",

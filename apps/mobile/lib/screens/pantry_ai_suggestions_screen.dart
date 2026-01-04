@@ -30,8 +30,47 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
 
     fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Suggest'));
 
+    // High-confidence speed-up: pre-confirm HIGH items, but still require
+    // an explicit review+save path (trust-first).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _preconfirmHighConfidence();
+    });
+
     // Default behavior: do not auto-save; user reviews explicitly.
     // We do not auto-confirm here to match trust-first flow.
+  }
+
+  void _preconfirmHighConfidence() {
+    var changed = false;
+    var any = false;
+
+    for (var index = 0; index < widget.items.length; index++) {
+      final raw = widget.items[index];
+      if (raw is! Map) continue;
+      final item = raw.cast<String, dynamic>();
+      final id = _idFor(item, index);
+
+      final conf = item['confidence_category']?.toString().toLowerCase().trim();
+      if (conf != 'high') continue;
+
+      any = true;
+      if (_choices.containsKey(id)) continue;
+
+      final name = _labelFor(item);
+      _choices[id] = {
+        'action': 'confirmed',
+        'confirmed_name': name,
+      };
+      changed = true;
+    }
+
+    if (!mounted) return;
+    if (any) {
+      fireAndForget(MetricsService.instance.recordEvent('pantry_ai_autoconfirm_high'));
+    }
+    if (changed) {
+      setState(() {});
+    }
   }
 
   String _idFor(Map<String, dynamic> item, int index) {
@@ -53,6 +92,27 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
     return 'LOW';
   }
 
+  String? _quantityGuessFor(Map<String, dynamic> item) {
+    final q = item['quantity'];
+    final unit = item['unit']?.toString().trim();
+
+    if (q == null) return null;
+    if (q is num) {
+      final n = q.toDouble();
+      if (n == 0) return null;
+
+      // Show ints cleanly.
+      final qText = (n % 1 == 0) ? n.toInt().toString() : n.toStringAsFixed(1);
+      if (unit != null && unit.isNotEmpty) return '$qText $unit';
+      return qText;
+    }
+
+    final s = q.toString().trim();
+    if (s.isEmpty) return null;
+    if (unit != null && unit.isNotEmpty) return '$s $unit';
+    return s;
+  }
+
   Color _confidenceColor(BuildContext context, String label) {
     final cs = Theme.of(context).colorScheme;
     switch (label) {
@@ -72,6 +132,8 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
         'confirmed_name': name,
       };
     });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_ai_item_confirmed'));
   }
 
   void _remove(String id) {
@@ -80,6 +142,8 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
         'action': 'rejected',
       };
     });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_ai_item_removed'));
   }
 
   Future<void> _edit(String id, String currentName) async {
@@ -120,6 +184,8 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
         'confirmed_name': next,
       };
     });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_ai_item_edited'));
   }
 
   @override
@@ -161,6 +227,7 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
                   final name = _labelFor(item);
                   final confidence = _confidenceFor(item);
                   final confColor = _confidenceColor(context, confidence);
+                  final qty = _quantityGuessFor(item);
 
                   final choice = _choices[id];
                   final action = choice?['action']?.toString();
@@ -201,6 +268,13 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
                               ),
                             ],
                           ),
+                          if (qty != null) ...[
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              'Qty: $qty',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                           const SizedBox(height: AppSpacing.sm),
                           Row(
                             children: [

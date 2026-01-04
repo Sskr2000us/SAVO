@@ -6,8 +6,6 @@ import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import '../models/market_config_state.dart';
 import 'admin_market_screen.dart';
-import 'inventory_screen.dart';
-import 'settings/active_sessions_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -32,6 +30,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           .toList();
     }
     return <String>[];
+  }
+
+  List<String> _parseCsvList(String value) {
+    return value
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
   }
 
   String _canonicalFamilyMemberKey(Map<String, dynamic> member) {
@@ -87,6 +93,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final householdData = {
       'region': _region,
       'culture': _culture,
+      'primary_language': _primaryLanguage,
+      'regional_profile': {
+        'state': _stateOrProvince,
+        'city': _cityOrArea,
+        'languages': _parseCsvList(_languagesCsv),
+      },
       'meal_times': {
         'breakfast': _breakfastTime,
         'lunch': _lunchTime,
@@ -108,6 +120,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Regional settings
   String _region = 'US';
   String _culture = 'western';
+  String _primaryLanguage = 'en-US';
+
+  // Fine-grained location/language context for culturally authentic planning
+  String _stateOrProvince = '';
+  String _cityOrArea = '';
+  String _languagesCsv = '';
   
   // Meal times
   String _breakfastTime = '07:00-09:00';
@@ -241,6 +259,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final profile = householdResponse['profile'] as Map<String, dynamic>;
           _region = profile['region'] ?? 'US';
           _culture = profile['culture'] ?? 'western';
+          _primaryLanguage = profile['primary_language'] ?? 'en-US';
+
+          final regionalProfile = profile['regional_profile'] as Map<String, dynamic>?;
+          if (regionalProfile != null) {
+            _stateOrProvince = (regionalProfile['state'] ?? '').toString();
+            _cityOrArea = (regionalProfile['city'] ?? '').toString();
+
+            final langs = regionalProfile['languages'];
+            if (langs is List) {
+              final parsed = langs
+                  .whereType<String>()
+                  .map((s) => s.trim())
+                  .where((s) => s.isNotEmpty)
+                  .toList();
+              _languagesCsv = parsed.join(', ');
+            }
+          }
 
           final fav = profile['favorite_cuisines'] as List?;
           if (fav != null) {
@@ -329,6 +364,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final householdData = {
         'region': _region,
         'culture': _culture,
+        'primary_language': _primaryLanguage,
+        'regional_profile': {
+          'state': _stateOrProvince,
+          'city': _cityOrArea,
+          'languages': _parseCsvList(_languagesCsv),
+        },
         'meal_times': {
           'breakfast': _breakfastTime,
           'lunch': _lunchTime,
@@ -564,6 +605,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           value: _culture,
                           items: const ['western', 'indian', 'asian', 'middle_eastern', 'mediterranean'],
                           onChanged: (value) => setState(() => _culture = value!),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'Primary language',
+                          value: _primaryLanguage,
+                          hint: 'en-US',
+                          onChanged: (value) => _primaryLanguage = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'State / Province (optional)',
+                          value: _stateOrProvince,
+                          hint: 'Louisiana',
+                          onChanged: (value) => _stateOrProvince = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'City / Area (optional)',
+                          value: _cityOrArea,
+                          hint: 'New Orleans',
+                          onChanged: (value) => _cityOrArea = value,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildTextField(
+                          label: 'Languages (comma-separated, optional)',
+                          value: _languagesCsv,
+                          hint: 'en, fr',
+                          onChanged: (value) => _languagesCsv = value,
                         ),
                         const SizedBox(height: AppSpacing.md),
                         SizedBox(

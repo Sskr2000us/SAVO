@@ -11,10 +11,11 @@ import 'shopping_list_screen.dart';
 import 'settings/device_security_screen.dart';
 import '../models/market_config_state.dart';
 
-/// Account and app settings screen
-/// Contains inventory, sessions, sign out, and link to profile settings
-class AccountSettingsScreen extends StatelessWidget {
-  const AccountSettingsScreen({super.key});
+/// User profile hub (v1: UserProfile).
+///
+/// Hosts profile preferences and related account controls.
+class UserProfileScreen extends StatelessWidget {
+  const UserProfileScreen({super.key});
 
   Future<void> _handleSignOut(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -66,7 +67,7 @@ class AccountSettingsScreen extends StatelessWidget {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text('User profile'),
       ),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -79,7 +80,7 @@ class AccountSettingsScreen extends StatelessWidget {
             icon: Icons.family_restroom,
             iconColor: theme.colorScheme.primary,
             title: 'Family Profile',
-            subtitle: 'Edit household and family members',
+            subtitle: 'Household, cuisines, skill, dietary needs',
             onTap: () {
               Navigator.push(context, AppMotion.createRoute(const SettingsScreen()));
             },

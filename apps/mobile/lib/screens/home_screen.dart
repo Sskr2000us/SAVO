@@ -11,6 +11,7 @@ import '../widgets/savo_widgets.dart';
 import 'plan_screen.dart';
 import 'cook_now_entry_screen.dart';
 import 'pantry_update_entry_screen.dart';
+import 'account_settings_screen.dart';
 import 'onboarding/onboarding_coordinator.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -94,6 +95,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('SAVO'),
+        actions: [
+          IconButton(
+            tooltip: 'User profile',
+            icon: const Icon(Icons.person_outline),
+            onPressed: () {
+              Navigator.push(
+                context,
+                AppMotion.createRoute(const UserProfileScreen()),
+              );
+            },
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.md),

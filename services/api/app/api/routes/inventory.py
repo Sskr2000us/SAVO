@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 import base64
+import io
 import re
 import uuid
 
@@ -25,7 +26,57 @@ from app.core.llm_client import GoogleClient, get_vision_client
 from app.middleware.auth import get_current_user_optional
 from app.core.media_storage import upload_inventory_image
 
+from PIL import Image, ImageFilter, ImageStat
+
 router = APIRouter()
+
+
+def _assess_image_quality(image_data: bytes) -> dict:
+    """Lightweight capture-quality signals for scan gating (Pillow only)."""
+    try:
+        img = Image.open(io.BytesIO(image_data)).convert("RGB")
+    except Exception:
+        return {"ok": False, "issues": ["unreadable"], "metrics": {}}
+
+    try:
+        img.thumbnail((640, 640))
+    except Exception:
+        pass
+
+    gray = img.convert("L")
+    stat = ImageStat.Stat(gray)
+    brightness_mean = float(stat.mean[0]) if stat.mean else 0.0
+    contrast_stddev = float(stat.stddev[0]) if stat.stddev else 0.0
+
+    try:
+        edges = gray.filter(ImageFilter.FIND_EDGES)
+        edge_stat = ImageStat.Stat(edges)
+        edge_mean = float(edge_stat.mean[0]) if edge_stat.mean else 0.0
+        edge_stddev = float(edge_stat.stddev[0]) if edge_stat.stddev else 0.0
+    except Exception:
+        edge_mean = 0.0
+        edge_stddev = 0.0
+
+    issues: list[str] = []
+    if brightness_mean < 55:
+        issues.append("too_dark")
+    elif brightness_mean > 215:
+        issues.append("too_bright")
+    if contrast_stddev < 18:
+        issues.append("low_contrast")
+    if edge_mean < 9.5 and edge_stddev < 18:
+        issues.append("too_blurry")
+
+    return {
+        "ok": len(issues) == 0,
+        "issues": issues,
+        "metrics": {
+            "brightness_mean": round(brightness_mean, 2),
+            "contrast_stddev": round(contrast_stddev, 2),
+            "edge_mean": round(edge_mean, 2),
+            "edge_stddev": round(edge_stddev, 2),
+        },
+    }
 
 
 @router.get("", response_model=List[InventoryItem])
@@ -210,6 +261,25 @@ async def post_scan_ingredients(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Image too large (max 5MB)",
+        )
+
+    quality = _assess_image_quality(raw)
+    if not quality.get("ok"):
+        issues = quality.get("issues") or []
+        if "too_dark" in issues:
+            msg = "Too dark — turn on lights and retake."
+        elif "too_blurry" in issues:
+            msg = "Too blurry — hold steady and retake."
+        elif "too_bright" in issues:
+            msg = "Too bright/glare — adjust angle and retake."
+        else:
+            msg = "Image quality too low — please retake."
+
+        return ScanIngredientsResponse(
+            status="error",
+            scanned_items=[],
+            image_url=None,
+            error_message=msg,
         )
 
     stored_image_ref: Optional[str] = None

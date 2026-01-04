@@ -9,7 +9,6 @@ import 'screens/plan_screen.dart';
 import 'screens/cook_now_entry_screen.dart';
 import 'screens/pantry_overview_screen.dart';
 import 'screens/landing_screen.dart';
-import 'screens/account_settings_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
 import 'services/api_client.dart';
@@ -141,7 +140,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     CookNowEntryScreen(),
     PlanScreen(),
     PantryOverviewScreen(),
-    AccountSettingsScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -177,11 +175,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             icon: Icon(Icons.kitchen_outlined),
             selectedIcon: Icon(Icons.kitchen),
             label: 'Pantry',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
           ),
         ],
       ),

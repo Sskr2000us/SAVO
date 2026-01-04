@@ -28,6 +28,11 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
   bool _initializing = true;
   bool _processing = false;
 
+  bool _hintStreamActive = false;
+  int _lastHintMillis = 0;
+  String _lightingHint = 'Good lighting';
+  String _densityHint = 'Item density looks good';
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +63,10 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
         _controller = controller;
         _initializing = false;
       });
+
+      // Start a lightweight image stream to update status hints.
+      // This is NOT auto-scanning; it's just heuristics for lighting and clutter.
+      _startHintStream();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -67,8 +76,94 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
     }
   }
 
+  void _startHintStream() {
+    final controller = _controller;
+    if (controller == null) return;
+    if (_hintStreamActive) return;
+
+    // Some platforms may not support image streaming; fail silently.
+    try {
+      _hintStreamActive = true;
+      controller.startImageStream((image) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastHintMillis < 800) return;
+        _lastHintMillis = now;
+
+        // Lighting + density heuristics from luma plane.
+        // This keeps CPU low by subsampling.
+        final plane = image.planes.isNotEmpty ? image.planes.first : null;
+        final bytes = plane?.bytes;
+        if (bytes == null || bytes.isEmpty) return;
+
+        // Mean luminance (0..255)
+        int sum = 0;
+        int samples = 0;
+        final step = (bytes.length ~/ 6000).clamp(8, 64);
+        for (var i = 0; i < bytes.length; i += step) {
+          sum += bytes[i];
+          samples++;
+        }
+        final mean = samples == 0 ? 0.0 : (sum / samples);
+
+        // Edge ratio (rough clutter measure)
+        int edgeCount = 0;
+        int edgeSamples = 0;
+        const edgeThreshold = 26;
+        for (var i = 0; i + step < bytes.length; i += step) {
+          final a = bytes[i];
+          final b = bytes[i + step];
+          final diff = (a - b).abs();
+          if (diff > edgeThreshold) edgeCount++;
+          edgeSamples++;
+        }
+        final edgeRatio = edgeSamples == 0 ? 0.0 : (edgeCount / edgeSamples);
+
+        String lighting;
+        if (mean < 70) {
+          lighting = 'Too dark — turn on lights';
+        } else if (mean > 210) {
+          lighting = 'Too bright — avoid glare';
+        } else {
+          lighting = 'Good lighting';
+        }
+
+        String density;
+        if (edgeRatio > 0.22) {
+          density = 'Too many items — move closer';
+        } else {
+          density = 'Item density looks good';
+        }
+
+        if (!mounted) return;
+        if (lighting == _lightingHint && density == _densityHint) return;
+        setState(() {
+          _lightingHint = lighting;
+          _densityHint = density;
+        });
+      });
+    } catch (_) {
+      _hintStreamActive = false;
+    }
+  }
+
+  Future<void> _stopHintStream() async {
+    final controller = _controller;
+    if (controller == null) return;
+    if (!_hintStreamActive) return;
+    try {
+      await controller.stopImageStream();
+    } catch (_) {
+      // Best-effort only.
+    } finally {
+      _hintStreamActive = false;
+    }
+  }
+
   @override
   void dispose() {
+    // Stop stream first, then dispose controller.
+    // ignore: discarded_futures
+    _stopHintStream();
     _controller?.dispose();
     super.dispose();
   }
@@ -79,6 +174,8 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
     setState(() => _processing = true);
 
     try {
+      // camera: cannot takePicture while streaming.
+      await _stopHintStream();
       final xfile = await _controller!.takePicture();
       final file = File(xfile.path);
 
@@ -102,7 +199,14 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
           ),
         );
       } else {
+        final code = res['error_code']?.toString();
         final msg = res['error']?.toString() ?? 'Scan failed';
+
+        if (code == 'image_quality') {
+          // High-ROI capture gating: prompt retake instead of wasting user effort.
+          fireAndForget(MetricsService.instance.recordEvent('pantry_scan_retake'));
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
         );
@@ -113,7 +217,11 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
         SnackBar(content: Text('Scan failed: $e')),
       );
     } finally {
-      if (mounted) setState(() => _processing = false);
+      if (!mounted) return;
+      setState(() => _processing = false);
+
+      // Resume hint stream so the user gets live guidance for the retake.
+      _startHintStream();
     }
   }
 
@@ -163,7 +271,10 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
                       left: AppSpacing.md,
                       right: AppSpacing.md,
                       top: AppSpacing.md,
-                      child: _StatusHints(),
+                      child: _StatusHints(
+                        lighting: _lightingHint,
+                        density: _densityHint,
+                      ),
                     ),
                   ],
                 ),
@@ -188,6 +299,14 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
 }
 
 class _StatusHints extends StatelessWidget {
+  final String lighting;
+  final String density;
+
+  const _StatusHints({
+    required this.lighting,
+    required this.density,
+  });
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -206,7 +325,7 @@ class _StatusHints extends StatelessWidget {
                 Icon(Icons.wb_sunny_outlined, color: cs.onSurfaceVariant),
                 const SizedBox(width: AppSpacing.xs),
                 Text(
-                  'Lighting',
+                  lighting,
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
               ],
@@ -218,7 +337,7 @@ class _StatusHints extends StatelessWidget {
                 Icon(Icons.grid_view, color: cs.onSurfaceVariant),
                 const SizedBox(width: AppSpacing.xs),
                 Text(
-                  'Item density',
+                  density,
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
               ],

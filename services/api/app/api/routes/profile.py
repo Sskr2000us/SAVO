@@ -39,6 +39,10 @@ class HouseholdProfileCreate(BaseModel):
     primary_language: str = Field(default="en-US", description="Primary language")
     measurement_system: str = Field(default="imperial", description="metric or imperial")
     timezone: str = Field(default="UTC", description="Timezone")
+
+    # Fine-grained location + language context (e.g., {state, city, languages, tags}).
+    # Used to guide culturally authentic planning and strict cuisine enforcement.
+    regional_profile: dict = Field(default_factory=dict)
     
     meal_times: Optional[dict] = Field(default=None, description="Meal time preferences")
     breakfast_preferences: List[str] = Field(default_factory=list)
@@ -72,6 +76,8 @@ class HouseholdProfileUpdate(BaseModel):
     primary_language: Optional[str] = None
     measurement_system: Optional[str] = None
     timezone: Optional[str] = None
+
+    regional_profile: Optional[dict] = None
     
     meal_times: Optional[dict] = None
     breakfast_preferences: Optional[List[str]] = None
