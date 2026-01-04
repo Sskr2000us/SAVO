@@ -17,6 +17,7 @@ class _AdminMarketScreenState extends State<AdminMarketScreen> {
 
   bool _shoppingList = true;
   bool _shoppingCart = false;
+  bool _shareableRecipes = false;
 
   @override
   void didChangeDependencies() {
@@ -25,6 +26,7 @@ class _AdminMarketScreenState extends State<AdminMarketScreen> {
     _region = market.region;
     _shoppingList = market.isEnabled('shopping_list', defaultValue: true);
     _shoppingCart = market.isEnabled('shopping_cart', defaultValue: false);
+    _shareableRecipes = market.isEnabled('shareable_recipes', defaultValue: false);
   }
 
   Future<void> _save() async {
@@ -45,6 +47,7 @@ class _AdminMarketScreenState extends State<AdminMarketScreen> {
 
       await upsert('shopping_list', _shoppingList);
       await upsert('shopping_cart', _shoppingCart);
+      await upsert('shareable_recipes', _shareableRecipes);
 
       final market = Provider.of<MarketConfigState>(context, listen: false);
       await market.refresh(api);
@@ -116,6 +119,12 @@ class _AdminMarketScreenState extends State<AdminMarketScreen> {
             onChanged: _saving ? null : (v) => setState(() => _shoppingCart = v),
             title: const Text('Shopping Cart'),
             subtitle: const Text('Enable retailer-based cart features (future)'),
+          ),
+          SwitchListTile(
+            value: _shareableRecipes,
+            onChanged: _saving ? null : (v) => setState(() => _shareableRecipes = v),
+            title: const Text('Shareable Recipes'),
+            subtitle: const Text('Enable share links (/r/...) and public recipe pages'),
           ),
           const SizedBox(height: 12),
           Text(

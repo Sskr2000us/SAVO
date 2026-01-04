@@ -39,3 +39,8 @@ create unique index if not exists app_retailers_region_name
 -- insert into public.app_feature_flags (region, feature_key, enabled)
 -- values ('US', 'shopping_cart', true)
 -- on conflict (region, feature_key) do update set enabled = excluded.enabled, updated_at = now();
+
+-- Example: enable shareable recipe links in US
+-- insert into public.app_feature_flags (region, feature_key, enabled)
+-- values ('US', 'shareable_recipes', true)
+-- on conflict (region, feature_key) do update set enabled = excluded.enabled, updated_at = now();

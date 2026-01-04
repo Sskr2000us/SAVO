@@ -9,9 +9,12 @@ import '../services/api_client.dart';
 import '../services/scanning_service.dart';
 import '../models/planning.dart';
 import '../models/profile_state.dart';
+import '../models/market_config_state.dart';
 import '../models/youtube.dart';
 import 'cook_mode_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
+import '../services/recipe_share_service.dart';
 
 enum _RecipeLanguageMode { english, bilingual }
 
@@ -41,11 +44,47 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   String _recipeLanguageCode = 'en';
   bool _showBilingual = false;
 
+  bool _sharing = false;
+
   @override
   void initState() {
     super.initState();
     _loadYouTubeVideos();
     _targetServings = 4; // Default to 4 servings
+  }
+
+  Future<void> _shareRecipe() async {
+    if (_sharing) return;
+
+    setState(() {
+      _sharing = true;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final shareService = RecipeShareService();
+      final shareId = await shareService.createShare(apiClient, widget.recipe);
+
+      final origin = Uri.base.origin;
+      final link = origin.isNotEmpty ? '$origin/r/$shareId' : '/r/$shareId';
+      final title = widget.recipe.getLocalizedName('en');
+      await Share.share('$title\n$link');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not create share link: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sharing = false;
+        });
+      }
+    }
   }
 
   @override
@@ -566,10 +605,25 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final market = Provider.of<MarketConfigState>(context, listen: true);
+    final canShare = market.isEnabled('shareable_recipes');
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.recipe.getLocalizedName('en')),
         actions: [
+          if (canShare)
+            IconButton(
+              tooltip: 'Share recipe',
+              onPressed: _sharing ? null : _shareRecipe,
+              icon: _sharing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.share),
+            ),
           PopupMenuButton<_RecipeLanguageMode>(
             tooltip: 'Recipe language',
             initialValue:
@@ -1185,7 +1239,12 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => CookModeScreen(recipe: widget.recipe),
+                builder: (_) => CookModeScreen(
+                  recipe: widget.recipe,
+                  servings: _targetServings,
+                  preferredLanguageCode: _recipeLanguageCode,
+                  startBilingual: _showBilingual,
+                ),
               ),
             );
           },

@@ -19,6 +19,7 @@ import 'models/profile_state.dart';
 import 'models/market_config_state.dart';
 import 'theme/app_theme.dart';
 import 'config/app_config.dart';
+import 'screens/shared_recipe_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -94,7 +95,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
       child: MaterialApp(
         title: 'SAVO',
         theme: AppTheme.darkTheme,
-        home: const AppStartupScreen(),
+        home: const _WebDeepLinkGate(),
         routes: {
           '/landing': (context) => const LandingScreen(),
           '/login': (context) => const OnboardingLoginScreen(),
@@ -103,6 +104,24 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
         },
       ),
     );
+  }
+}
+
+class _WebDeepLinkGate extends StatelessWidget {
+  const _WebDeepLinkGate();
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb) {
+      final segments = Uri.base.pathSegments;
+      if (segments.isNotEmpty && segments.first == 'r' && segments.length >= 2) {
+        final shareId = segments[1];
+        if (shareId.trim().isNotEmpty) {
+          return SharedRecipeScreen(shareId: shareId);
+        }
+      }
+    }
+    return const AppStartupScreen();
   }
 }
 

@@ -1,7 +1,10 @@
-"""
-Recipe endpoints - image generation, details, etc.
-"""
+"""Recipe endpoints - image generation, import, and sharing."""
+
+from datetime import datetime, timedelta, timezone
+import html as _html
+
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from uuid import uuid4
 from typing import Any, Optional
@@ -16,8 +19,10 @@ from openai import AsyncOpenAI
 from app.middleware.auth import get_current_user
 from fastapi import Depends
 from app.core.llm_client import get_reasoning_client
+from app.core.database import get_db_client
 
 router = APIRouter()
+public_router = APIRouter()
 
 
 def _recipe_schema() -> dict[str, Any]:
@@ -187,6 +192,11 @@ class RecipeImportRequest(BaseModel):
     secondary_language: Optional[str] = Field(default=None, description="Secondary language for bilingual output")
 
 
+class RecipeShareRequest(BaseModel):
+    recipe: dict[str, Any]
+    expires_hours: int = Field(default=24 * 7, ge=1, le=24 * 30)
+
+
 @router.post("/import")
 async def import_recipe(
     req: RecipeImportRequest,
@@ -250,6 +260,168 @@ async def import_recipe(
 
     recipe = await _translate_recipe_fields(recipe=recipe, target_language=req.secondary_language or "")
     return {"recipe": recipe}
+
+
+@router.post("/share")
+async def share_recipe(
+    req: RecipeShareRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Create a shareable recipe link.
+
+    Stores the recipe payload server-side and returns a share id.
+    """
+
+    supabase = get_db_client()
+    share_id = str(uuid4())
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=req.expires_hours)
+
+    # Ensure recipe id exists for client-side convenience.
+    recipe = dict(req.recipe or {})
+    if not (recipe.get("recipe_id") or "").strip():
+        recipe["recipe_id"] = str(uuid4())
+
+    payload = {
+        "id": share_id,
+        "owner_user_id": user_id,
+        "recipe": recipe,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+    try:
+        supabase.table("shared_recipes").insert(payload).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create share link: {e}")
+
+    return {
+        "success": True,
+        "share_id": share_id,
+        "expires_at": expires_at.isoformat(),
+        "share_path": f"/r/{share_id}",
+    }
+
+
+@router.get("/shared/{share_id}")
+async def get_shared_recipe(share_id: str):
+    """Fetch a shared recipe payload (public)."""
+
+    supabase = get_db_client()
+    try:
+        result = (
+            supabase.table("shared_recipes")
+            .select("id,recipe,expires_at")
+            .eq("id", share_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load shared recipe: {e}")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Shared recipe not found")
+
+    row = result.data[0]
+    expires_at = row.get("expires_at")
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                raise HTTPException(status_code=404, detail="Shared recipe expired")
+        except HTTPException:
+            raise
+        except Exception:
+            # If parse fails, do not hard-fail; treat as valid.
+            pass
+
+    recipe = row.get("recipe") or {}
+    return {"success": True, "recipe": recipe, "share_id": row.get("id")}
+
+
+@public_router.get("/r/{share_id}", response_class=HTMLResponse)
+async def shared_recipe_page(share_id: str):
+    """Simple shareable recipe page (public HTML)."""
+
+    data = await get_shared_recipe(share_id)
+    recipe = data.get("recipe") or {}
+
+    def esc(v: Any) -> str:
+        return _html.escape(str(v or ""))
+
+    name = recipe.get("recipe_name") or {}
+    title = esc((name.get("en") if isinstance(name, dict) else str(name)) or "Shared Recipe")
+
+    ingredients = recipe.get("ingredients_used") or []
+    steps = recipe.get("steps") or []
+
+    ing_items = []
+    if isinstance(ingredients, list):
+        for it in ingredients:
+            if not isinstance(it, dict):
+                continue
+            canonical = esc(it.get("canonical_name"))
+            amt = it.get("amount")
+            unit = esc(it.get("unit"))
+            amt_txt = esc(amt) if amt is not None else ""
+            line = (f"{amt_txt} {unit} {canonical}").strip()
+            if line:
+                ing_items.append(f"<li>{line}</li>")
+
+    step_items = []
+    if isinstance(steps, list):
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            instr = s.get("instruction") or {}
+            text = ""
+            if isinstance(instr, dict):
+                text = instr.get("en") or next(iter(instr.values()), "")
+            else:
+                text = str(instr)
+            text = esc(text)
+            if text:
+                step_items.append(f"<li>{text}</li>")
+
+    body = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>{title} - SAVO</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b0b0c; color: #f2f2f3; }}
+    .wrap {{ max-width: 820px; margin: 0 auto; padding: 24px; }}
+    h1 {{ margin: 0 0 8px; font-size: 24px; }}
+    .sub {{ opacity: .8; margin-bottom: 16px; }}
+    .card {{ background: rgba(255,255,255,.06); border-radius: 12px; padding: 16px; margin: 16px 0; }}
+    a {{ color: #9fd3ff; }}
+  </style>
+</head>
+<body>
+  <div class=\"wrap\">
+    <h1>{title}</h1>
+    <div class=\"sub\">Shared via SAVO</div>
+
+    <div class=\"card\">
+      <h2 style=\"margin-top:0\">Ingredients</h2>
+      <ul>{''.join(ing_items) if ing_items else '<li>(No ingredients listed)</li>'}</ul>
+    </div>
+
+    <div class=\"card\">
+      <h2 style=\"margin-top:0\">Steps</h2>
+      <ol>{''.join(step_items) if step_items else '<li>(No steps listed)</li>'}</ol>
+    </div>
+
+    <div class=\"sub\">Tip: if you have the SAVO app, open this link there for the full experience.</div>
+  </div>
+</body>
+</html>"""
+
+    return HTMLResponse(content=body)
 
 
 @router.post("/import/image")

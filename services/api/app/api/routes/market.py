@@ -107,6 +107,7 @@ def _flags_defaults_for_region(region: str) -> Dict[str, bool]:
     return {
         "shopping_list": True,
         "shopping_cart": region in {"US", "CA", "GB", "UK", "AU", "NZ"},
+        "shareable_recipes": False,
     }
 
 

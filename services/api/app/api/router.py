@@ -8,7 +8,7 @@ from app.api.routes.planning import router as planning_router
 from app.api.routes.youtube import router as youtube_router
 from app.api.routes.youtube_search import router as youtube_search_router
 from app.api.routes.training import router as training_router
-from app.api.routes.recipes import router as recipes_router
+from app.api.routes.recipes import router as recipes_router, public_router as recipes_public_router
 from app.api.routes.nutrition import router as nutrition_router
 from app.api.routes.profile import router as profile_router
 from app.api.routes.inventory_db import router as inventory_db_router
@@ -28,6 +28,7 @@ api_router.include_router(youtube_router, prefix="/youtube", tags=["youtube"])
 api_router.include_router(youtube_search_router, prefix="/youtube", tags=["youtube"])
 api_router.include_router(training_router, prefix="/training", tags=["training"])
 api_router.include_router(recipes_router, prefix="/recipes", tags=["recipes"])
+api_router.include_router(recipes_public_router, tags=["recipes"])
 api_router.include_router(nutrition_router, tags=["nutrition"])
 api_router.include_router(profile_router, tags=["profile"])
 api_router.include_router(inventory_db_router, prefix="/inventory-db", tags=["inventory-db"])
