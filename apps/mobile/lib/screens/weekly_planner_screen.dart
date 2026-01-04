@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../models/planning.dart';
 import 'planning_results_screen.dart';
@@ -50,10 +51,23 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
       final body = <String, dynamic>{
         'start_date': DateFormat('yyyy-MM-dd').format(_startDate),
         'num_days': _numDays,
       };
+
+      final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : 'en';
+      body['output_language'] = outputLang;
+
+      final measurementSystem = profileState.measurementSystem;
+      if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {
+        body['measurement_system'] = measurementSystem.trim();
+      }
 
       if (_planningGoal != 'balanced') {
         body['planning_goal'] = _planningGoal;

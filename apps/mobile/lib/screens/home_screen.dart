@@ -334,6 +334,18 @@ class _HomeScreenState extends State<HomeScreen> {
         body['cuisine_preferences'] = preferred;
       }
 
+      final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : 'en';
+      body['output_language'] = outputLang;
+
+      final measurementSystem = profileState.measurementSystem;
+      if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {
+        body['measurement_system'] = measurementSystem.trim();
+      }
+
       final response = await apiClient.post('/plan/daily', body);
       if (!context.mounted) return;
       Navigator.pop(context); // Close loading
