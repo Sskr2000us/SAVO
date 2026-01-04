@@ -15,6 +15,42 @@ from app.core.llm_client import get_reasoning_client
 router = APIRouter()
 
 
+def _fetch_transcript(video_id: str, preferred_lang: str = "en") -> list[dict]:
+    """Fetch a YouTube transcript in a version-tolerant way.
+
+    Some environments may have older/newer variants of youtube-transcript-api where
+    `YouTubeTranscriptApi.get_transcript` is missing. Fall back to list_transcripts().
+    """
+    vid = (video_id or "").strip()
+    if not vid:
+        raise ValueError("video_id is required")
+
+    lang = (preferred_lang or "en").strip().lower()
+    lang_candidates = [lang] if lang else []
+    for l in ["en", "en-US", "en-GB"]:
+        if l not in lang_candidates:
+            lang_candidates.append(l)
+
+    # Preferred path
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):
+        try:
+            return YouTubeTranscriptApi.get_transcript(vid, languages=lang_candidates)
+        except TypeError:
+            # Some versions don't support languages=...
+            return YouTubeTranscriptApi.get_transcript(vid)
+
+    # Fallback path
+    if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+        try:
+            transcript = transcript_list.find_transcript(lang_candidates)
+        except Exception:
+            transcript = transcript_list.find_generated_transcript(lang_candidates)
+        return transcript.fetch()
+
+    raise RuntimeError("youtube-transcript-api missing transcript methods")
+
+
 class YouTubeSummaryRequest(BaseModel):
     video_id: str
     recipe_name: str
@@ -99,7 +135,7 @@ async def post_summary(req: YouTubeSummaryRequest):
     """Generate AI summary of YouTube video for cooking"""
     try:
         # Fetch transcript
-        transcript_list = YouTubeTranscriptApi.get_transcript(req.video_id)
+        transcript_list = _fetch_transcript(req.video_id, preferred_lang=req.output_language)
         
         # Combine transcript into full text
         full_transcript = " ".join([entry['text'] for entry in transcript_list])
