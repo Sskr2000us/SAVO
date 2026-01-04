@@ -81,6 +81,7 @@ class OpenAIClient(LlmClient):
         self.vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # gpt-4o has best vision + text reading
         self.timeout = timeout  # Increased timeout for large responses
         self.base_url = "https://api.openai.com/v1"
+        self.json_max_output_tokens = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "8192"))
     
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON using OpenAI with structured output"""
@@ -91,7 +92,7 @@ class OpenAIClient(LlmClient):
             "content": (
                 f"You MUST return a JSON object that EXACTLY matches this schema structure. "
                 f"All field names, types, and nesting must be EXACTLY as specified:\n\n"
-                f"{json.dumps(schema, indent=2)}\n\n"
+                f"{json.dumps(schema, separators=(",", ":"), ensure_ascii=False)}\n\n"
                 f"CRITICAL RULES:\n"
                 f"- Use EXACT field names from schema (e.g., 'total_calories_kcal' not 'total_calories')\n"
                 f"- If schema says 'array', return [], not an object\n"
@@ -120,7 +121,7 @@ class OpenAIClient(LlmClient):
                             "messages": enhanced_messages,
                             "response_format": {"type": "json_object"},
                             "temperature": 0.5,  # Lower temperature = faster, more deterministic
-                            "max_tokens": 8192,  # Increased to handle full meal plans
+                            "max_tokens": self.json_max_output_tokens,
                         }
                     )
                     
@@ -133,10 +134,28 @@ class OpenAIClient(LlmClient):
                     # Check if response was truncated
                     finish_reason = result["choices"][0].get("finish_reason")
                     if finish_reason == "length":
-                        logger.warning(f"OpenAI response truncated (finish_reason=length). Increase max_tokens.")
+                        # In practice, OpenAI can return valid JSON but still report finish_reason=length.
+                        # Attempt best-effort parse; schema validation happens upstream.
+                        try:
+                            parsed = _parse_json_from_text(content)
+                            if isinstance(parsed, dict):
+                                logger.warning(
+                                    "OpenAI response reported finish_reason=length but JSON parsed successfully; proceeding."
+                                )
+                                return parsed
+                        except Exception:
+                            pass
+
+                        logger.warning(
+                            "OpenAI response truncated (finish_reason=length) and JSON could not be parsed. "
+                            "Consider increasing OPENAI_JSON_MAX_TOKENS or reducing response verbosity."
+                        )
                         raise ValueError("Response truncated - increase max_tokens")
-                    
-                    return json.loads(content)
+
+                    parsed = _parse_json_from_text(content)
+                    if not isinstance(parsed, dict):
+                        raise json.JSONDecodeError("Expected JSON object", str(content), 0)
+                    return parsed
                     
                 except httpx.HTTPStatusError as e:
                     # Log error details for debugging

@@ -333,6 +333,29 @@ async def _try_provider(
                 messages.append({"role": "assistant", "content": "I will return valid JSON."})
                 messages.append({"role": "user", "content": correction})
                 continue
+
+        except ValueError as e:
+            # Provider can surface truncation (finish_reason=length) as a ValueError.
+            # Retry with explicit instructions to reduce verbosity.
+            if "Response truncated" in str(e):
+                last_error = f"Response truncated: {str(e)}"
+                logger.warning(
+                    f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}"
+                )
+
+                if attempt < max_retries:
+                    correction = (
+                        "CORRECTION REQUIRED: Your previous response was truncated due to length. "
+                        "Return a STRICTLY schema-valid JSON response, but make it MUCH smaller: "
+                        "use the minimum number of items needed; keep all free-text fields short; "
+                        "for each recipe keep steps to 1-2 items and tips=[]; youtube_references=[]; "
+                        "new_ingredients_optional=[]; leftover_forecast.reuse_ideas=[]. "
+                        "IMPORTANT: Use minified JSON (no newlines) and do NOT include any extra keys."
+                    )
+                    messages.append({"role": "assistant", "content": "I will return a shorter, schema-valid response."})
+                    messages.append({"role": "user", "content": correction})
+                    continue
+            raise
                 
         except Exception as e:
             last_error = f"Unexpected error: {str(e)}"
