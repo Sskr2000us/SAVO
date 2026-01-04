@@ -11,6 +11,7 @@ import 'planning_results_screen.dart';
 import 'weekly_planner_screen.dart';
 import 'party_planner_screen.dart';
 import 'scan_ingredients_screen.dart';
+import 'inventory_screen.dart';
 import 'settings_screen.dart';
 import 'onboarding/login_screen.dart';
 import 'onboarding/household_screen.dart';
@@ -208,11 +209,29 @@ class _HomeScreenState extends State<HomeScreen> {
               description: 'Add items from photo',
               icon: Icons.camera_alt,
               color: AppColors.accent,
-              onTap: () {
-                Navigator.push(
+              onTap: () async {
+                final added = await Navigator.push<bool>(
                   context,
                   AppMotion.createRoute(const ScanIngredientsScreen()),
                 );
+
+                if (!context.mounted) return;
+                if (added == true) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Saved scanned items to inventory'),
+                      action: SnackBarAction(
+                        label: 'View',
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const InventoryScreen()),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                }
               },
             ),
             const SizedBox(height: AppSpacing.md),
@@ -340,6 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ? profileState.primaryLanguage!.trim()
               : 'en';
       body['output_language'] = outputLang;
+        body['output_languages'] = outputLang == 'en' ? ['en'] : ['en', outputLang];
 
       final measurementSystem = profileState.measurementSystem;
       if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {

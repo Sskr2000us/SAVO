@@ -18,12 +18,14 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   bool _loading = false;
   XFile? _image;
   List<_Candidate> _candidates = [];
+  String? _scanImageUrl;
 
   Future<void> _pickAndScan({required ImageSource source}) async {
     setState(() {
       _loading = true;
       _candidates = [];
       _image = null;
+      _scanImageUrl = null;
     });
 
     try {
@@ -57,6 +59,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       final items = response['scanned_items'];
+      final imageUrl = response['image_url']?.toString();
       final parsed = <_Candidate>[];
       if (items is List) {
         for (final item in items) {
@@ -70,6 +73,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       setState(() {
         _candidates = parsed;
+        _scanImageUrl = (imageUrl != null && imageUrl.trim().isNotEmpty) ? imageUrl.trim() : null;
         _loading = false;
       });
     } catch (e) {
@@ -122,6 +126,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           'storage_location': json['storage'] ?? 'pantry',  // Match database field name
           'source': 'scan',  // Mark as scanned item
           'scan_confidence': (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null,
+          if (_scanImageUrl != null) 'image_url': _scanImageUrl,
         });
       }
 

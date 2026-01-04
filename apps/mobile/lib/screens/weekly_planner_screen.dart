@@ -63,6 +63,7 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
               ? profileState.primaryLanguage!.trim()
               : 'en';
       body['output_language'] = outputLang;
+        body['output_languages'] = outputLang == 'en' ? ['en'] : ['en', outputLang];
 
       final measurementSystem = profileState.measurementSystem;
       if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {

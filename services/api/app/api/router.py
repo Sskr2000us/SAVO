@@ -13,6 +13,7 @@ from app.api.routes.nutrition import router as nutrition_router
 from app.api.routes.profile import router as profile_router
 from app.api.routes.inventory_db import router as inventory_db_router
 from app.api.routes.scanning import router as scanning_router
+from app.api.routes.barcode import router as barcode_router
 from app.api.routes.security import router as security_router
 from app.api.routes.debug import router as debug_router
 from app.api.routes.market import router as market_router, admin_router as admin_market_router
@@ -33,6 +34,7 @@ api_router.include_router(nutrition_router, tags=["nutrition"])
 api_router.include_router(profile_router, tags=["profile"])
 api_router.include_router(inventory_db_router, prefix="/inventory-db", tags=["inventory-db"])
 api_router.include_router(scanning_router, tags=["scanning"])
+api_router.include_router(barcode_router, prefix="/barcode", tags=["barcode"])
 api_router.include_router(security_router, tags=["security"])
 api_router.include_router(debug_router, prefix="/debug", tags=["debug"])
 api_router.include_router(market_router, tags=["market"])

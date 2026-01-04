@@ -7,7 +7,7 @@ import base64
 import re
 import uuid
 
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Depends
 from pydantic import ValidationError
 
 from app.models.inventory import (
@@ -22,7 +22,8 @@ from app.core.storage import get_storage
 from app.core.orchestrator import normalize_inventory
 from app.core.settings import settings
 from app.core.llm_client import GoogleClient, get_vision_client
-from app.core.settings import settings
+from app.middleware.auth import get_current_user_optional
+from app.core.media_storage import upload_inventory_image
 
 router = APIRouter()
 
@@ -185,6 +186,7 @@ async def post_scan_ingredients(
     storage_hint: Optional[str] = Form(
         None, description="Optional hint: pantry|refrigerator|freezer"
     ),
+    user_id: Optional[str] = Depends(get_current_user_optional),
 ):
     """Scan an image and return ingredient candidates.
 
@@ -210,6 +212,17 @@ async def post_scan_ingredients(
             detail="Image too large (max 5MB)",
         )
 
+    stored_image_ref: Optional[str] = None
+    if user_id:
+        try:
+            stored_image_ref = upload_inventory_image(
+                user_id=user_id,
+                content=raw,
+                content_type=image.content_type,
+            )
+        except Exception:
+            stored_image_ref = None
+
     # Use vision provider (google or openai)
     provider = (settings.vision_provider or "mock").lower()
 
@@ -217,6 +230,7 @@ async def post_scan_ingredients(
     if provider == "mock":
         return ScanIngredientsResponse(
             status="ok",
+            image_url=stored_image_ref,
             scanned_items=[
                 {"ingredient": "tomato", "quantity_estimate": "4 pcs", "confidence": 0.91, "storage_hint": "fridge"},
                 {"ingredient": "onion", "quantity_estimate": "2 pcs", "confidence": 0.88, "storage_hint": "pantry"},
@@ -282,7 +296,7 @@ async def post_scan_ingredients(
         if not isinstance(scanned_items, list):
             scanned_items = []
 
-        return ScanIngredientsResponse(status="ok", scanned_items=scanned_items)
+        return ScanIngredientsResponse(status="ok", scanned_items=scanned_items, image_url=stored_image_ref)
     except Exception as e:
-        return ScanIngredientsResponse(status="error", scanned_items=[], error_message=str(e))
+        return ScanIngredientsResponse(status="error", scanned_items=[], image_url=stored_image_ref, error_message=str(e))
 

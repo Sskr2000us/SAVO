@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../services/scanning_service.dart';
+import 'package:provider/provider.dart';
+import '../../services/api_client.dart';
 import '../../widgets/quantity_picker.dart';
 
 /// Screen for manually adding ingredients without scanning
@@ -11,7 +12,6 @@ class ManualEntryScreen extends StatefulWidget {
 }
 
 class _ManualEntryScreenState extends State<ManualEntryScreen> {
-  final ScanningService _scanningService = ScanningService();
   final TextEditingController _ingredientController = TextEditingController();
   final FocusNode _ingredientFocus = FocusNode();
   
@@ -57,6 +57,12 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
     _ingredientController.dispose();
     _ingredientFocus.dispose();
     super.dispose();
+  }
+
+  String _canonicalizeName(String display) {
+    final trimmed = display.trim().toLowerCase();
+    final collapsed = trimmed.replaceAll(RegExp(r'\s+'), '_');
+    return collapsed;
   }
 
   void _onIngredientChanged() {
@@ -107,41 +113,40 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
     });
 
     try {
-      final result = await _scanningService.manualAddIngredient(
-        ingredientName: ingredientName,
-        quantity: _quantity,
-        unit: _unit,
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.post('/inventory-db/items', {
+        'canonical_name': _canonicalizeName(ingredientName),
+        'display_name': ingredientName,
+        'quantity': _quantity,
+        'unit': _unit,
+        'storage_location': 'pantry',
+        'item_state': 'raw',
+        'source': 'manual',
+        'notes': null,
+      });
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Item added to inventory'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
       );
 
-      if (mounted) {
-        if (result['success'] == true) {
-          // Show success message
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(result['message'] ?? 'Ingredient added!'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
+      setState(() {
+        _ingredientController.clear();
+        _quantity = 1.0;
+        _unit = 'pieces';
+        _showSuggestions = false;
+      });
 
-          // Clear form for next entry
-          setState(() {
-            _ingredientController.clear();
-            _quantity = 1.0;
-            _unit = 'pieces';
-            _showSuggestions = false;
-          });
-          
-          // Return to previous screen after brief delay
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) {
-              Navigator.of(context).pop(true);
-            }
-          });
-        } else {
-          _showError(result['error'] ?? 'Failed to add ingredient');
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          Navigator.of(context).pop(true);
         }
-      }
+      });
     } catch (e) {
       _showError('Failed to add ingredient: $e');
     } finally {

@@ -4,6 +4,7 @@ Planning models for daily/party/weekly planning (E4)
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Literal, Optional, Any, Dict
 from datetime import date
+import re
 
 
 class AgeGroupCounts(BaseModel):
@@ -49,6 +50,10 @@ class SessionRequest(BaseModel):
     selected_cuisine: Optional[str] = Field(None, description="Cuisine selection, 'auto' for automatic")
     cuisine_preferences: Optional[List[str]] = Field(None, description="List of preferred cuisines")
     output_language: Optional[str] = Field(None, pattern="^[a-z]{2}(-[A-Z]{2})?$")
+    output_languages: Optional[List[str]] = Field(
+        None,
+        description="Languages to include in multilingual fields (e.g. ['en','hi']). English is always preferred first.",
+    )
     measurement_system: Optional[Literal["metric", "imperial"]] = None
     inventory: Optional[Dict[str, Any]] = Field(None, description="Inventory with available_ingredients list")
     family_profile: Optional[Dict[str, Any]] = Field(None, description="Family profile with members, dietary restrictions")
@@ -76,6 +81,35 @@ class SessionRequest(BaseModel):
         None,
         description="If false, do not schedule leftover reuse even when available",
     )
+
+    @field_validator("output_languages")
+    @classmethod
+    def validate_output_languages(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("output_languages must be a list of language codes")
+
+        cleaned: List[str] = []
+        seen = set()
+        pattern = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")
+
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            lang = raw.strip()
+            if not lang or not pattern.match(lang):
+                continue
+            if lang in seen:
+                continue
+            cleaned.append(lang)
+            seen.add(lang)
+
+        # Always prefer English first when present.
+        if "en" in seen:
+            cleaned = ["en"] + [l for l in cleaned if l != "en"]
+
+        return cleaned or None
 
 
 class DailyPlanRequest(SessionRequest):

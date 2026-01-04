@@ -40,7 +40,7 @@ class _RecipeImportScreenState extends State<RecipeImportScreen> {
             : null;
     if (lang == null || lang.isEmpty) return null;
     if (lang.toLowerCase() == 'en') return null;
-    return lang.toLowerCase();
+    return lang;
   }
 
   Future<void> _importFromUrl() async {

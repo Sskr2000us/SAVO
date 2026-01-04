@@ -183,6 +183,7 @@ SUPABASE_SERVICE_KEY=your-service-key-here  # For admin operations
 - Purchase tracking
 
 #### **inventory_usage**
+- `004_add_user_pantry_confidence.sql` - Adds `user_pantry.confidence` (0..1) for compatibility with confidence-writing code paths
 - History of ingredient usage
 - Links to recipes/meal plans
 - Tracks manual adjustments

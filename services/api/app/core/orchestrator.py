@@ -166,11 +166,36 @@ def _build_messages(*, task_name: str, context: Dict[str, Any]) -> list[dict[str
 
     system = "\n".join(system_lines)
     task_instructions = "\n".join(task.get("prompt", []))
+
+    extra_instructions: list[dict[str, str]] = []
+    try:
+        output_languages = context.get("output_languages")
+        if isinstance(output_languages, list):
+            langs = [l.strip() for l in output_languages if isinstance(l, str) and l.strip()]
+            if "en" in langs and len(langs) > 1:
+                preferred = next((l for l in langs if l != "en"), None)
+                if preferred:
+                    extra_instructions.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "BILINGUAL_OUTPUT:\n"
+                                f"- Include BOTH 'en' and '{preferred}' values for all multilingual fields (e.g., recipe_name and steps[].instruction).\n"
+                                "- Always include a non-empty English ('en') string.\n"
+                                f"- Also include a non-empty '{preferred}' string.\n"
+                                "- Keep both strings semantically equivalent; do not mix languages in one value.\n"
+                            ),
+                        }
+                    )
+    except Exception:
+        # Best-effort only; do not break prompt generation.
+        pass
     context_json = json.dumps(context, ensure_ascii=False)
 
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": task_instructions},
+        *extra_instructions,
         {"role": "user", "content": f"CONTEXT_JSON={context_json}"},
     ]
 

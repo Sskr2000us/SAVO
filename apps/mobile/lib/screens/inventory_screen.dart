@@ -6,6 +6,7 @@ import '../models/inventory.dart';
 import '../widgets/quantity_picker.dart';
 import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
+import 'barcode_scan_screen.dart';
 import 'realtime_scan_screen_stub.dart'
     if (dart.library.io) 'realtime_scan_screen.dart';
 
@@ -20,6 +21,209 @@ class _InventoryScreenState extends State<InventoryScreen> {
   List<InventoryItem> _items = [];
   bool _loading = true;
   bool _mergingDuplicates = false;
+
+  static const List<String> _storageOptions = ['pantry', 'fridge', 'freezer', 'counter'];
+
+  Future<void> _saveRealtimeScanResults(List<String> ingredients) async {
+    if (ingredients.isEmpty) return;
+
+    setState(() => _loading = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      final rawItems = ingredients
+          .where((i) => i.trim().isNotEmpty)
+          .map((i) => {
+                'display_name': i.trim(),
+                'quantity_estimate': null,
+                'confidence': 1.0,
+                'storage_hint': 'pantry',
+              })
+          .toList();
+
+      final normalized = await apiClient.post('/inventory/normalize', {
+        'raw_items': rawItems,
+        'measurement_system': 'metric',
+        'output_language': 'en',
+      });
+
+      final normItems = normalized['normalized_inventory'];
+      if (normItems is! List) {
+        throw Exception('Normalization response missing normalized_inventory');
+      }
+
+      if (!mounted) return;
+
+      // Require explicit confirmation before saving (prevents auto-save for uncertain cases).
+      final confirmedToSave = await _showConfirmNormalizedItemsDialog(normItems);
+      if (confirmedToSave == null || confirmedToSave.isEmpty) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+
+      for (final payload in confirmedToSave) {
+        await apiClient.post('/inventory-db/items', payload);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved ${confirmedToSave.length} scanned items to inventory')),
+      );
+      await _loadInventory();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save scan results: $e')),
+      );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>?> _showConfirmNormalizedItemsDialog(List normItems) async {
+    final candidates = <_NormalizedCandidate>[];
+    for (final item in normItems) {
+      if (item is! Map) continue;
+      final json = Map<String, dynamic>.from(item);
+      final display = (json['display_name'] ?? '').toString().trim();
+      if (display.isEmpty) continue;
+      final qty = (json['quantity'] is num) ? (json['quantity'] as num).toDouble() : 1.0;
+      final unit = (json['unit'] ?? 'pcs').toString();
+      final storage = (json['storage'] ?? 'pantry').toString();
+      final state = (json['state'] ?? 'raw').toString();
+      final confidence = (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null;
+      candidates.add(
+        _NormalizedCandidate(
+          nameController: TextEditingController(text: display),
+          quantity: qty,
+          unit: unit,
+          storage: _storageOptions.contains(storage) ? storage : 'pantry',
+          state: state,
+          scanConfidence: confidence,
+        ),
+      );
+    }
+
+    if (candidates.isEmpty) return null;
+
+    return showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Review scanned items'),
+              content: SizedBox(
+                width: 520,
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: candidates.length,
+                  separatorBuilder: (_, __) => const Divider(height: 12),
+                  itemBuilder: (context, index) {
+                    final c = candidates[index];
+                    final availableUnits = getSmartUnitSuggestions(null, c.nameController.text);
+                    final mergedUnits = <String>{c.unit, ...availableUnits}.toList();
+
+                    return Opacity(
+                      opacity: c.include ? 1.0 : 0.5,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Checkbox(
+                                value: c.include,
+                                onChanged: (v) {
+                                  setDialogState(() => c.include = v ?? true);
+                                },
+                              ),
+                              Expanded(
+                                child: TextField(
+                                  controller: c.nameController,
+                                  enabled: c.include,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Name',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (_) {
+                                    setDialogState(() {});
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Center(
+                            child: QuantityPicker(
+                              initialQuantity: c.quantity,
+                              initialUnit: c.unit,
+                              availableUnits: mergedUnits,
+                              enabled: c.include,
+                              onChanged: (newQty, newUnit) {
+                                setDialogState(() {
+                                  c.quantity = newQty;
+                                  c.unit = newUnit;
+                                });
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          DropdownButtonFormField<String>(
+                            value: c.storage,
+                            decoration: const InputDecoration(
+                              labelText: 'Storage',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: _storageOptions
+                                .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                                .toList(),
+                            onChanged: c.include
+                                ? (value) {
+                                    setDialogState(() => c.storage = value ?? 'pantry');
+                                  }
+                                : null,
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final payloads = <Map<String, dynamic>>[];
+                    for (final c in candidates) {
+                      if (!c.include) continue;
+                      final display = c.nameController.text.trim();
+                      if (display.isEmpty) continue;
+                      payloads.add(
+                        {
+                          'canonical_name': _canonicalizeName(display),
+                          'display_name': display,
+                          'quantity': c.quantity,
+                          'unit': c.unit,
+                          'item_state': c.state,
+                          'storage_location': c.storage,
+                          'source': 'scan',
+                          'scan_confidence': c.scanConfidence,
+                        },
+                      );
+                    }
+                    Navigator.pop(context, payloads);
+                  },
+                  child: const Text('Save to inventory'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 
   @override
   void initState() {
@@ -195,6 +399,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Future<void> _showEditItemSheet(InventoryItem item) async {
     final nameController = TextEditingController(text: _prettyName(item.displayLabel));
+    final categoryController = TextEditingController(text: item.category ?? '');
     final notesController = TextEditingController(text: item.notes ?? '');
 
     double qty = item.quantity;
@@ -250,6 +455,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         });
                       },
                       enabled: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: categoryController,
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Category (optional)',
+                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -367,6 +581,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             final updates = <String, dynamic>{
                               'display_name': display,
                               'canonical_name': _canonicalizeName(display),
+                              'category': categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
                               'quantity': qty,
                               'unit': unit,
                               'storage_location': storage,
@@ -411,6 +626,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   void _showAddItemDialog() {
     final nameController = TextEditingController();
+    final categoryController = TextEditingController();
     final quantityController = TextEditingController();
     final unitController = TextEditingController();
     String selectedStorage = 'fridge';
@@ -427,6 +643,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: nameController,
                 decoration: const InputDecoration(labelText: 'Name'),
+              ),
+              TextField(
+                controller: categoryController,
+                decoration: const InputDecoration(labelText: 'Category (optional)'),
               ),
               TextField(
                 controller: quantityController,
@@ -470,6 +690,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               final item = {
                 'canonical_name': nameController.text,
                 'display_name': nameController.text,
+                'category': categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
                 'quantity': double.tryParse(quantityController.text) ?? 1.0,
                 'unit': unitController.text,
                 'storage_location': selectedStorage,  // Match database field name
@@ -504,6 +725,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final notExpiring = _items.where((i) => !i.isExpiringSoon).toList();
     notExpiring.sort((a, b) => a.displayLabel.toLowerCase().compareTo(b.displayLabel.toLowerCase()));
 
+    final Map<String, List<InventoryItem>> byStorage = {
+      'pantry': [],
+      'fridge': [],
+      'freezer': [],
+      'counter': [],
+    };
+    for (final item in notExpiring) {
+      final storage = byStorage.containsKey(item.storage) ? item.storage : 'pantry';
+      byStorage[storage]!.add(item);
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventory'),
@@ -520,12 +752,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     builder: (_) => const RealtimeScanScreen(),
                   ),
                 );
-                // TODO: Process realtime scan results
                 if (result != null && result is List<String>) {
-                  // Show ingredients were scanned
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Scanned ${result.length} ingredients')),
-                  );
+                  if (!context.mounted) return;
+                  await _saveRealtimeScanResults(result);
+                }
+              } else if (value == 'barcode' && !kIsWeb) {
+                final added = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const BarcodeScanScreen(),
+                  ),
+                );
+                if (added == true) {
+                  if (!context.mounted) return;
                   _loadInventory();
                 }
               } else {
@@ -536,6 +775,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   ),
                 );
                 if (added == true) {
+                  if (!context.mounted) return;
                   _loadInventory();
                 }
               }
@@ -549,6 +789,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Icon(Icons.videocam),
                       SizedBox(width: 8),
                       Text('Real-time Scan'),
+                    ],
+                  ),
+                ),
+              if (!kIsWeb)
+                const PopupMenuItem(
+                  value: 'barcode',
+                  child: Row(
+                    children: [
+                      Icon(Icons.qr_code_scanner),
+                      SizedBox(width: 8),
+                      Text('Barcode Scan'),
                     ],
                   ),
                 ),
@@ -630,12 +881,26 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                       ),
                     ),
-                    ...notExpiring.map((item) => _InventoryCard(
-                          item: item,
-                          prettyName: _prettyName,
-                          onEdit: () => _showEditItemSheet(item),
-                          onDelete: () => _deleteItem(item.inventoryId),
-                        )),
+                    ..._storageOptions.expand((storage) {
+                      final items = byStorage[storage] ?? const <InventoryItem>[];
+                      if (items.isEmpty) return const <Widget>[];
+                      final title = storage[0].toUpperCase() + storage.substring(1);
+                      return <Widget>[
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8, bottom: 8),
+                          child: Text(
+                            title,
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        ...items.map((item) => _InventoryCard(
+                              item: item,
+                              prettyName: _prettyName,
+                              onEdit: () => _showEditItemSheet(item),
+                              onDelete: () => _deleteItem(item.inventoryId),
+                            )),
+                      ];
+                    }),
                   ],
                 ),
       floatingActionButton: Column(
@@ -669,6 +934,25 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ),
     );
   }
+}
+
+class _NormalizedCandidate {
+  final TextEditingController nameController;
+  double quantity;
+  String unit;
+  String storage;
+  final String state;
+  final double? scanConfidence;
+  bool include = true;
+
+  _NormalizedCandidate({
+    required this.nameController,
+    required this.quantity,
+    required this.unit,
+    required this.storage,
+    required this.state,
+    required this.scanConfidence,
+  });
 }
 
 class _InventoryCard extends StatelessWidget {

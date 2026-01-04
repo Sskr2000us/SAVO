@@ -54,6 +54,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   // Cooking skill level
   int _skillLevel = 2; // 1=Beginner, 2=Basic, 3=Intermediate, 4=Multi-step, 5=Advanced
+
+  // Privacy: explicit opt-in for using confirmed scan labels to improve recognition
+  bool _scanTrainingOptIn = false;
+  int _scanTrainingRetentionDays = 90;
   
   bool _isLoading = false;
   bool _isSaving = false;
@@ -189,6 +193,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Load skill level and dinner courses
           _skillLevel = profile['skill_level'] ?? 2;
           _dinnerCourses = profile['dinner_courses'] ?? 2;
+
+          // Load scan training consent settings
+          _scanTrainingOptIn = profile['scan_training_opt_in'] == true;
+          final retention = profile['scan_training_retention_days'];
+          if (retention is int) {
+            _scanTrainingRetentionDays = retention;
+          } else if (retention is num) {
+            _scanTrainingRetentionDays = retention.toInt();
+          }
         }
         
         // Load family members
@@ -244,6 +257,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'favorite_cuisines': _favoriteCuisines,
         'skill_level': _skillLevel,
         'dinner_courses': _dinnerCourses,
+
+        // Privacy
+        'scan_training_opt_in': _scanTrainingOptIn,
+        'scan_training_retention_days': _scanTrainingRetentionDays,
       };
       
       // Create or update household profile in database
@@ -659,6 +676,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onPressed: _saveHouseholdProfile,
                             icon: const Icon(Icons.save),
                             label: const Text('Save Skill Level'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Privacy Section
+                  _buildSectionHeader('Privacy'),
+                  SavoCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Help improve recognition'),
+                          subtitle: const Text(
+                            'Allow confirmed scan labels to be used to improve ingredient recognition.',
+                          ),
+                          value: _scanTrainingOptIn,
+                          onChanged: (value) {
+                            setState(() {
+                              _scanTrainingOptIn = value;
+                              if (_scanTrainingRetentionDays <= 0) {
+                                _scanTrainingRetentionDays = 90;
+                              }
+                            });
+                          },
+                        ),
+                        if (_scanTrainingOptIn) ...[
+                          const SizedBox(height: AppSpacing.sm),
+                          _buildDropdown(
+                            label: 'Retention',
+                            value: _scanTrainingRetentionDays.toString(),
+                            items: const ['30', '90', '365'],
+                            onChanged: (value) =>
+                                setState(() => _scanTrainingRetentionDays = int.parse(value!)),
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _saveHouseholdProfile,
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save Privacy Settings'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.primary,
                               padding: const EdgeInsets.symmetric(vertical: 12),

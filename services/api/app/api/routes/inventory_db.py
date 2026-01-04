@@ -46,6 +46,13 @@ class InventoryItemCreate(BaseModel):
     source: str = Field(default="manual", description="manual|scan|import")
     scan_confidence: Optional[float] = Field(None, ge=0, le=1)
     
+    # Optional packaged-good metadata (barcode lookups)
+    barcode: Optional[str] = None
+    product_name: Optional[str] = None
+    brand: Optional[str] = None
+    image_url: Optional[str] = None
+    package_size_text: Optional[str] = None
+
     notes: Optional[str] = None
 
 
@@ -65,6 +72,13 @@ class InventoryItemUpdate(BaseModel):
     expiry_date: Optional[date] = None
     low_stock_threshold: Optional[float] = None
     
+    # Optional packaged-good metadata
+    barcode: Optional[str] = None
+    product_name: Optional[str] = None
+    brand: Optional[str] = None
+    image_url: Optional[str] = None
+    package_size_text: Optional[str] = None
+
     notes: Optional[str] = None
 
 
@@ -82,7 +96,8 @@ class InventoryDeductionRequest(BaseModel):
 async def list_inventory(
     user_id: str = Depends(get_current_user),
     low_stock_only: bool = False,
-    category: Optional[str] = None
+    category: Optional[str] = None,
+    include_inactive: bool = False,
 ):
     """
     Get user's inventory items.
@@ -93,9 +108,13 @@ async def list_inventory(
     """
     try:
         if category:
-            items = await get_inventory_by_category(user_id, category)
+            items = await get_inventory_by_category(user_id, category, include_inactive=include_inactive)
         else:
-            items = await get_inventory(user_id, include_low_stock_only=low_stock_only)
+            items = await get_inventory(
+                user_id,
+                include_low_stock_only=low_stock_only,
+                include_inactive=include_inactive,
+            )
         
         return {
             "count": len(items),

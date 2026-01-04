@@ -430,6 +430,20 @@ def _build_planning_context(
     # Determine output settings
     output_lang = request.output_language or config.global_settings.primary_language
     measurement = request.measurement_system or config.global_settings.measurement_system
+
+    output_languages = getattr(request, "output_languages", None)
+    if not isinstance(output_languages, list) or not output_languages:
+        output_languages = ["en"] if output_lang == "en" else ["en", output_lang]
+    else:
+        # Ensure english-first ordering and ensure the primary output language is present.
+        normalized = [x for x in output_languages if isinstance(x, str) and x.strip()]
+        if "en" in normalized:
+            normalized = ["en"] + [l for l in normalized if l != "en"]
+        else:
+            normalized = ["en"] + normalized
+        if output_lang and output_lang not in normalized:
+            normalized.append(output_lang)
+        output_languages = normalized
     
     inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
 
@@ -465,6 +479,7 @@ def _build_planning_context(
             "recent_recipes": [h for h in history[:20]],
         },
         "output_language": output_lang,
+        "output_languages": output_languages,
         "measurement_system": measurement,
         "now_utc": datetime.utcnow().isoformat(),
         **orch_context
@@ -790,7 +805,9 @@ async def generate_combination_recipe(
     ingredients: List[str],
     user_id: str,
     cuisine: Optional[str] = None,
-    meal_type: Optional[str] = "dinner"
+    meal_type: Optional[str] = "dinner",
+    output_language: str = "en",
+    secondary_language: Optional[str] = None,
 ):
     """
     Generate a recipe using multiple ingredients intelligently.
@@ -901,6 +918,52 @@ async def generate_combination_recipe(
             detail="Failed to generate recipe"
         )
     
+    # Normalize recipe into the bilingual-capable shape (recipe_name/lang maps).
+    try:
+        if isinstance(recipe, dict):
+            # recipe_name
+            if isinstance(recipe.get("recipe_name"), str):
+                recipe["recipe_name"] = {"en": recipe.get("recipe_name")}
+            elif not isinstance(recipe.get("recipe_name"), dict):
+                # Common alias
+                name = recipe.get("name")
+                if isinstance(name, str) and name.strip():
+                    recipe["recipe_name"] = {"en": name.strip()}
+                else:
+                    recipe.setdefault("recipe_name", {"en": ""})
+
+            # steps[].instruction
+            steps = recipe.get("steps")
+            if isinstance(steps, list):
+                normalized_steps = []
+                for s in steps:
+                    if not isinstance(s, dict):
+                        continue
+                    instr = s.get("instruction")
+                    if isinstance(instr, str):
+                        s["instruction"] = {"en": instr}
+                    elif not isinstance(instr, dict):
+                        s["instruction"] = {"en": ""}
+                    normalized_steps.append(s)
+                recipe["steps"] = normalized_steps
+    except Exception:
+        # Best-effort only
+        pass
+
+    # Force english-first output; add bilingual translation when requested.
+    try:
+        from app.api.routes.recipes import _translate_recipe_fields
+
+        # We always treat English as the canonical first language for bilingual payloads.
+        _ = output_language  # reserved; primary generation uses the prompt content.
+        if isinstance(secondary_language, str) and secondary_language.strip():
+            lang = secondary_language.strip()
+            if lang.lower() != "en":
+                recipe = await _translate_recipe_fields(recipe=recipe, target_language=lang)
+    except Exception:
+        # Translation is best-effort; still return the base recipe.
+        pass
+
     # Validate recipe safety
     is_safe, violations = await validate_recipe_safety(recipe, profile)
     

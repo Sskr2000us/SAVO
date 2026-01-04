@@ -12,6 +12,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from app.core.media_storage import to_signed_url
+
 
 class SupabaseDB:
     """Singleton database client for Supabase operations"""
@@ -255,29 +257,59 @@ async def delete_family_member(member_id: str) -> None:
 # INVENTORY OPERATIONS
 # ============================================================================
 
-async def get_inventory(user_id: str, include_low_stock_only: bool = False) -> List[Dict[str, Any]]:
-    """Get user's inventory items"""
+async def get_inventory(
+    user_id: str,
+    include_low_stock_only: bool = False,
+    include_inactive: bool = False,
+) -> List[Dict[str, Any]]:
+    """Get user's inventory items.
+
+    By default, returns only current items. Pass include_inactive=True to include items
+    from previous scan sets that were marked inactive.
+    """
     try:
         query = db.client.table("inventory_items").select("*").eq("user_id", user_id)
+
+        if not include_inactive:
+            query = query.eq("is_current", True)
         
         if include_low_stock_only:
             query = query.eq("is_low_stock", True)
         
         result = query.order("updated_at", desc=True).execute()
-        return result.data or []
+        items = result.data or []
+        for item in items:
+            if isinstance(item, dict) and item.get("image_url"):
+                item["image_url"] = to_signed_url(item.get("image_url"))
+        return items
     except APIError as e:
         logger.error(f"Error getting inventory: {e}")
         raise
 
 
-async def get_inventory_by_category(user_id: str, category: str) -> List[Dict[str, Any]]:
-    """Get inventory items by category"""
+async def get_inventory_by_category(
+    user_id: str,
+    category: str,
+    include_inactive: bool = False,
+) -> List[Dict[str, Any]]:
+    """Get inventory items by category."""
     try:
-        result = db.client.table("inventory_items").select("*").eq(
-            "user_id", user_id
-        ).eq("category", category).execute()
-        
-        return result.data or []
+        query = (
+            db.client.table("inventory_items")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("category", category)
+        )
+        if not include_inactive:
+            query = query.eq("is_current", True)
+
+        result = query.execute()
+
+        items = result.data or []
+        for item in items:
+            if isinstance(item, dict) and item.get("image_url"):
+                item["image_url"] = to_signed_url(item.get("image_url"))
+        return items
     except APIError as e:
         logger.error(f"Error getting inventory by category: {e}")
         raise
@@ -293,7 +325,10 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
             item_data["low_stock_threshold"] = 1.0
         
         result = db.client.table("inventory_items").insert(item_data).execute()
-        return result.data[0]
+        created = result.data[0]
+        if isinstance(created, dict) and created.get("image_url"):
+            created["image_url"] = to_signed_url(created.get("image_url"))
+        return created
     except APIError as e:
         logger.error(f"Error adding inventory item: {e}")
         raise
@@ -303,7 +338,10 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
     """Update existing inventory item"""
     try:
         result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
-        return result.data[0] if result.data else None
+        updated = result.data[0] if result.data else None
+        if isinstance(updated, dict) and updated.get("image_url"):
+            updated["image_url"] = to_signed_url(updated.get("image_url"))
+        return updated
     except APIError as e:
         logger.error(f"Error updating inventory item: {e}")
         raise

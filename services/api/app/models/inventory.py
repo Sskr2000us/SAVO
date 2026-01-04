@@ -96,4 +96,5 @@ class ScanIngredientsResponse(BaseModel):
 
     status: Literal["ok", "error"] = "ok"
     scanned_items: List[ScannedIngredientCandidate] = Field(default_factory=list)
+    image_url: Optional[str] = None
     error_message: Optional[str] = None

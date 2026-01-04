@@ -10,7 +10,7 @@ from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFoun
 
 from app.models.youtube import YouTubeRankRequest, YouTubeRankResponse
 from app.core.orchestrator import youtube_rank
-from app.core.llm_client import get_llm_client
+from app.core.llm_client import get_reasoning_client
 
 router = APIRouter()
 
@@ -24,6 +24,7 @@ class YouTubeSummaryRequest(BaseModel):
 class YouTubeSummaryResponse(BaseModel):
     video_id: str
     summary: str
+    condensed_summary: str
     key_techniques: list[str]
     timestamp_highlights: list[dict[str, str]]  # [{"time": "2:30", "description": "..."}]
     watch_time_estimate: str
@@ -103,33 +104,70 @@ async def post_summary(req: YouTubeSummaryRequest):
         # Combine transcript into full text
         full_transcript = " ".join([entry['text'] for entry in transcript_list])
         
-        # Use LLM to generate summary
-        llm_client = get_llm_client()
-        
-        prompt = f"""You are a cooking video analyst. Summarize this YouTube cooking video transcript in under 1 minute of reading time.
+        # Use LLM to generate summary (schema-enforced)
+        llm_client = get_reasoning_client()
 
-Recipe: {req.recipe_name}
+        schema = {
+            "type": "object",
+            "required": [
+                "summary",
+                "condensed_summary",
+                "key_techniques",
+                "timestamp_highlights",
+                "watch_time_estimate",
+            ],
+            "properties": {
+                "summary": {"type": "string"},
+                "condensed_summary": {"type": "string"},
+                "key_techniques": {"type": "array", "items": {"type": "string"}},
+                "timestamp_highlights": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["time", "description"],
+                        "properties": {
+                            "time": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "watch_time_estimate": {"type": "string"},
+            },
+            "additionalProperties": False,
+        }
 
-Transcript:
-{full_transcript[:8000]}
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a cooking video analyst. Return JSON only. "
+                    "Write all text in the requested output_language."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Recipe: {req.recipe_name}\n"
+                    f"output_language: {req.output_language}\n\n"
+                    "Transcript (may be truncated):\n"
+                    f"{full_transcript[:8000]}\n\n"
+                    "Instructions:\n"
+                    "- summary: 2-3 sentences, practical and specific.\n"
+                    "- condensed_summary: EXACTLY 3-4 lines separated by '\\n'. Each line should be a short actionable takeaway.\n"
+                    "- key_techniques: 3-5 items.\n"
+                    "- timestamp_highlights: 2-4 items, approximate times like '2:30'.\n"
+                    "- watch_time_estimate: e.g. 'Full video (12 min)' or 'Skip to 3:20'."
+                ),
+            },
+        ]
 
-Provide a JSON response with:
-1. "summary": A concise 2-3 sentence summary of what the video teaches
-2. "key_techniques": Array of 3-5 key cooking techniques shown
-3. "timestamp_highlights": Array of 2-4 important moments with approximate timestamps and descriptions
-4. "watch_time_estimate": How long to watch (e.g., "Full video (12 min)", "First 5 minutes", "Skip to 3:20")
-
-Focus on practical cooking tips and techniques relevant to making {req.recipe_name}."""
-
-        summary_json = await llm_client.generate_json(
-            prompt=prompt,
-            temperature=0.3,
-            max_tokens=800
-        )
+        summary_json = await llm_client.generate_json(messages=messages, schema=schema)
         
         return YouTubeSummaryResponse(
             video_id=req.video_id,
             summary=summary_json.get("summary", "Summary not available"),
+            condensed_summary=summary_json.get("condensed_summary", ""),
             key_techniques=summary_json.get("key_techniques", []),
             timestamp_highlights=summary_json.get("timestamp_highlights", []),
             watch_time_estimate=summary_json.get("watch_time_estimate", "Full video")

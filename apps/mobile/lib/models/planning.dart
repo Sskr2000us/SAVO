@@ -162,7 +162,18 @@ class Recipe {
   }
 
   String getLocalizedName(String languageCode) {
-    return recipeName[languageCode] ?? recipeName['en'] ?? recipeId;
+    if (recipeName.isEmpty) return recipeId;
+
+    final en = recipeName['en'];
+    if (en != null && en.trim().isNotEmpty) return en;
+
+    final preferred = recipeName[languageCode];
+    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
+
+    return recipeName.values.firstWhere(
+      (v) => v.trim().isNotEmpty,
+      orElse: () => recipeId,
+    );
   }
 }
 
@@ -232,7 +243,18 @@ class RecipeStep {
   }
 
   String getLocalizedInstruction(String languageCode) {
-    return instruction[languageCode] ?? instruction['en'] ?? '';
+    if (instruction.isEmpty) return '';
+
+    final en = instruction['en'];
+    if (en != null && en.trim().isNotEmpty) return en;
+
+    final preferred = instruction[languageCode];
+    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
+
+    return instruction.values.firstWhere(
+      (v) => v.trim().isNotEmpty,
+      orElse: () => '',
+    );
   }
 }
 

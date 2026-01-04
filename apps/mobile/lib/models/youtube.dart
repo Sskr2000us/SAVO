@@ -148,6 +148,7 @@ class TimestampHighlight {
 class YouTubeSummary {
   final String videoId;
   final String summary;
+  final String condensedSummary;
   final List<String> keyTechniques;
   final List<TimestampHighlight> timestampHighlights;
   final String watchTimeEstimate;
@@ -155,6 +156,7 @@ class YouTubeSummary {
   YouTubeSummary({
     required this.videoId,
     required this.summary,
+    this.condensedSummary = '',
     required this.keyTechniques,
     required this.timestampHighlights,
     required this.watchTimeEstimate,
@@ -164,6 +166,7 @@ class YouTubeSummary {
     return YouTubeSummary(
       videoId: json['video_id'] ?? '',
       summary: json['summary'] ?? '',
+      condensedSummary: json['condensed_summary'] ?? '',
       keyTechniques: List<String>.from(json['key_techniques'] ?? []),
       timestampHighlights: (json['timestamp_highlights'] as List?)
               ?.map((h) => TimestampHighlight.fromJson(h))

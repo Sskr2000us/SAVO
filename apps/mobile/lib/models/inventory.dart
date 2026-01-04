@@ -2,6 +2,7 @@ class InventoryItem {
   final String inventoryId;
   final String canonicalName;
   final String? displayName;
+  final String? category;
   final double quantity;
   final String unit;
   final String state; // raw, cooked, leftover, frozen
@@ -10,10 +11,18 @@ class InventoryItem {
   final DateTime? expiryDate;
   final String? notes;
 
+  // Optional packaged-good metadata
+  final String? barcode;
+  final String? productName;
+  final String? brand;
+  final String? imageUrl;
+  final String? packageSizeText;
+
   InventoryItem({
     required this.inventoryId,
     required this.canonicalName,
     this.displayName,
+    this.category,
     required this.quantity,
     required this.unit,
     this.state = 'raw',
@@ -21,6 +30,11 @@ class InventoryItem {
     this.freshnessDaysRemaining,
     this.expiryDate,
     this.notes,
+    this.barcode,
+    this.productName,
+    this.brand,
+    this.imageUrl,
+    this.packageSizeText,
   });
 
   static DateTime? _tryParseDate(dynamic value) {
@@ -72,6 +86,7 @@ class InventoryItem {
       inventoryId: (json['inventory_id'] ?? json['id'] ?? '').toString(),
       canonicalName: json['canonical_name'] ?? '',
       displayName: json['display_name'],
+      category: json['category']?.toString(),
       quantity: (json['quantity'] ?? 0).toDouble(),
       unit: json['unit'] ?? '',
       // inventory-db uses `item_state` and `storage_location`
@@ -80,6 +95,12 @@ class InventoryItem {
       freshnessDaysRemaining: freshnessDays,
       expiryDate: expiry,
       notes: json['notes'],
+
+      barcode: json['barcode']?.toString(),
+      productName: json['product_name']?.toString(),
+      brand: json['brand']?.toString(),
+      imageUrl: json['image_url']?.toString(),
+      packageSizeText: json['package_size_text']?.toString(),
     );
   }
 
@@ -88,6 +109,7 @@ class InventoryItem {
       'inventory_id': inventoryId,
       'canonical_name': canonicalName,
       'display_name': displayName,
+      'category': category,
       'quantity': quantity,
       'unit': unit,
       'state': state,
@@ -95,6 +117,12 @@ class InventoryItem {
       'freshness_days_remaining': freshnessDaysRemaining,
       'expiry_date': expiryDate?.toIso8601String().split('T').first,
       'notes': notes,
+
+      'barcode': barcode,
+      'product_name': productName,
+      'brand': brand,
+      'image_url': imageUrl,
+      'package_size_text': packageSizeText,
     };
   }
 

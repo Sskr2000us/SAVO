@@ -20,17 +20,22 @@
 #### 3. **Review & Confirm**
 - App shows detected ingredients list
 - Each ingredient has:
-  - ✅ Checkbox to confirm
+   - ✅ Confirm / modify / reject
   - Quantity and unit (auto-detected)
   - Expiration date (if visible)
   - Storage location (pantry/fridge)
-- **Tap checkboxes** to select what you want to store
-- Click **"Add to Inventory"** button
+- Confirm the items you want to store
 
 #### 4. **Stored in Database**
-- Selected ingredients → Saved to Supabase database
+- Confirmed ingredients → Saved to Supabase database (`inventory_items`)
 - Linked to your user profile
 - Available in **Inventory** screen
+
+**Multi-scan behavior (single source of truth):**
+- A new scan confirmation will *merge* into an existing inventory row when it matches:
+   - `canonical_name` + `storage_location` + `item_state`
+- If units match (or can be converted), quantities are added.
+- If units can’t be converted, a new inventory row is created.
 
 #### 5. **Use for Recipe Generation**
 - Go to Home → **"Plan Daily Menu"**
@@ -134,6 +139,10 @@ If LLM generates "Paneer Tikka Masala":
 7. START COOKING
    ↓
    [Cook Mode] → Step-by-step guided cooking → Timer alerts
+
+8. INVENTORY UPDATES
+   ↓
+   [After cooking / completion] → Deduct used ingredients from `inventory_items`
 ```
 
 ---

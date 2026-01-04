@@ -52,6 +52,18 @@ class HouseholdProfileCreate(BaseModel):
     skill_level: int = Field(default=2, ge=1, le=5, description="Cooking skill level (1-5)")
     dinner_courses: int = Field(default=2, ge=1, le=5, description="Number of dinner courses (1-5)")
 
+    # Privacy: explicit opt-in for using confirmed scan labels to improve recognition
+    scan_training_opt_in: bool = Field(
+        default=False,
+        description="If true, allow confirmed scan labels to be used to improve recognition",
+    )
+    scan_training_retention_days: int = Field(
+        default=90,
+        ge=0,
+        le=3650,
+        description="Retention window (days) for training samples captured after opt-in",
+    )
+
 
 class HouseholdProfileUpdate(BaseModel):
     """Request model for updating household profile"""
@@ -72,6 +84,9 @@ class HouseholdProfileUpdate(BaseModel):
     nutrition_targets: Optional[dict] = None
     skill_level: Optional[int] = Field(None, ge=1, le=5)
     dinner_courses: Optional[int] = Field(None, ge=1, le=5)
+
+    scan_training_opt_in: Optional[bool] = None
+    scan_training_retention_days: Optional[int] = Field(None, ge=0, le=3650)
 
 
 class FamilyMemberCreate(BaseModel):
@@ -189,6 +204,11 @@ async def create_household(
         
         # Create profile
         profile_data = profile.model_dump(exclude_unset=True)
+
+        # Set opt-in timestamp if enabled at creation
+        if profile_data.get("scan_training_opt_in") is True:
+            profile_data["scan_training_opt_in_at"] = datetime.utcnow().isoformat()
+
         created_profile = await create_household_profile(user_id, profile_data)
         
         return {
@@ -229,6 +249,15 @@ async def update_household(
         profile_data = profile.model_dump(exclude_unset=True)
         if not profile_data:
             raise HTTPException(status_code=400, detail="No fields to update")
+
+        # If user toggles scan training opt-in, stamp the opt-in time.
+        if "scan_training_opt_in" in profile_data:
+            new_value = profile_data.get("scan_training_opt_in")
+            old_value = bool(existing.get("scan_training_opt_in"))
+            if new_value is True and not old_value:
+                profile_data["scan_training_opt_in_at"] = datetime.utcnow().isoformat()
+            elif new_value is False and old_value:
+                profile_data["scan_training_opt_in_at"] = None
         
         # Get old values for audit
         old_values = {k: existing.get(k) for k in profile_data.keys()}

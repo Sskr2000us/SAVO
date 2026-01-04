@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import List, Dict, Optional
 from uuid import UUID, uuid4
 from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 import logging
 
@@ -17,10 +18,37 @@ from app.core.database import get_db_client
 from app.core.vision_api import get_vision_client
 from app.core.ingredient_normalization import get_normalizer
 from app.api.routes.profile import get_full_profile
+from app.core.media_storage import upload_inventory_image
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scanning", tags=["scanning"])
+
+
+def _normalize_unit(unit: Optional[str]) -> str:
+    u = (unit or "").strip().lower()
+    if not u:
+        return "pieces"
+    if u in {"pcs", "pc", "piece"}:
+        return "pieces"
+    if u == "g":
+        return "grams"
+    if u == "l":
+        return "liters"
+    return u
+
+
+def _scan_type_to_storage_location(scan_type: Optional[str]) -> str:
+    st = (scan_type or "").strip().lower()
+    if st in {"pantry", "fridge", "freezer", "counter"}:
+        return st
+    if st in {"shopping", "other"}:
+        return "pantry"
+    return "pantry"
+
+
+def _titleize(name: str) -> str:
+    return (name or "").replace("_", " ").strip().title()
 
 
 # ============================================================================
@@ -155,9 +183,17 @@ async def analyze_image(
         # Create scan record in database
         db = get_db_client()
         scan_id = str(uuid4())
-        
-        # TODO: Upload image to storage (Supabase Storage or S3)
-        image_url = None  # Placeholder
+
+        # Upload image to Supabase Storage (best-effort)
+        image_url = None
+        try:
+            image_url = upload_inventory_image(
+                user_id=user_id,
+                content=image_data,
+                content_type=image.content_type,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to upload scan image: {e}")
         
         # Estimate API cost
         api_cost = await vision_client.estimate_api_cost(image_data)
@@ -272,12 +308,54 @@ async def confirm_ingredients(
     Confirmed ingredients are automatically added to user's pantry
     """
     try:
+        from app.core.unit_converter import UnitConverter
+
         db = get_db_client()
+        normalizer = get_normalizer()
         
         # Verify scan belongs to user
         scan = db.table("ingredient_scans").select("*").eq("id", request.scan_id).eq("user_id", user_id).execute()
         if not scan.data:
             raise HTTPException(status_code=404, detail="Scan not found")
+
+        scan_record = scan.data[0]
+        storage_location = _scan_type_to_storage_location(scan_record.get("scan_type"))
+        item_state = "raw"
+        scan_image_url = scan_record.get("image_url")
+
+        # Latest-scan semantics: when a new scan is confirmed, consider the prior scan
+        # set for that storage location inactive (scan-sourced raw items only).
+        now_iso = datetime.utcnow().isoformat()
+        try:
+            (
+                db.table("inventory_items")
+                .update({"is_current": False})
+                .eq("user_id", user_id)
+                .eq("source", "scan")
+                .eq("storage_location", storage_location)
+                .eq("item_state", item_state)
+                .eq("is_current", True)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning(f"Failed to deactivate previous scan inventory set: {e}")
+
+        # Training consent + retention (best-effort)
+        training_opt_in = False
+        retention_days = 0
+        try:
+            hp = (
+                db.table("household_profiles")
+                .select("scan_training_opt_in, scan_training_retention_days")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if hp.data:
+                training_opt_in = bool(hp.data[0].get("scan_training_opt_in"))
+                retention_days = int(hp.data[0].get("scan_training_retention_days") or 0)
+        except Exception as e:
+            logger.warning(f"Failed to read training consent settings: {e}")
         
         confirmed_count = 0
         rejected_count = 0
@@ -307,27 +385,163 @@ async def confirm_ingredients(
             }
             
             if action in ["confirmed", "modified"]:
-                # Set confirmed name
+                # Determine final confirmed name
+                final_name = None
                 if action == "modified" and confirmed_name:
-                    update_data["confirmed_name"] = confirmed_name
+                    final_name = confirmed_name
                     modified_count += 1
                 else:
-                    update_data["confirmed_name"] = detected_item["canonical_name"] or detected_item["detected_name"]
+                    final_name = detected_item.get("canonical_name") or detected_item.get("detected_name")
                     confirmed_count += 1
+
+                canonical_name = normalizer.normalize_name(final_name or "")
+                update_data["confirmed_name"] = canonical_name
+
+                # Store ground-truth training label (only if explicitly opted-in)
+                if training_opt_in and retention_days > 0:
+                    try:
+                        expires_at = (datetime.utcnow() + timedelta(days=retention_days)).isoformat()
+                        db.table("scan_training_labels").insert(
+                            {
+                                "user_id": user_id,
+                                "scan_id": request.scan_id,
+                                "detected_id": detected_id,
+                                "confirmed_name": canonical_name,
+                                "original_detected_name": detected_item.get("detected_name"),
+                                "bbox": detected_item.get("bbox"),
+                                "image_url": scan_image_url,
+                                "expires_at": expires_at,
+                            }
+                        ).execute()
+                    except Exception as e:
+                        logger.warning(f"Failed to store training label: {e}")
                 
                 # Update quantity if provided (user-entered)
                 if quantity is not None:
                     update_data["detected_quantity"] = quantity
                     update_data["detected_unit"] = unit
                     update_data["quantity_confidence"] = 1.0  # User-entered = 100% confident
+
+                # Upsert into canonical inventory (inventory_items)
+                incoming_qty = None
+                if quantity is not None:
+                    incoming_qty = float(quantity)
+                elif detected_item.get("detected_quantity") is not None:
+                    incoming_qty = float(detected_item.get("detected_quantity"))
+                else:
+                    incoming_qty = 1.0
+
+                incoming_unit = _normalize_unit(unit or detected_item.get("detected_unit") or "pieces")
+
+                existing = (
+                    db.table("inventory_items")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .eq("canonical_name", canonical_name)
+                    .eq("storage_location", storage_location)
+                    .eq("item_state", item_state)
+                    .order("updated_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+
+                merged_qty = incoming_qty
+                merged_unit = incoming_unit
+
+                if existing.data:
+                    existing_item = existing.data[0]
+                    existing_qty = float(existing_item.get("quantity") or 0)
+                    existing_unit = _normalize_unit(existing_item.get("unit") or "pieces")
+
+                    if incoming_unit == existing_unit:
+                        merged_qty = existing_qty + incoming_qty
+                        merged_unit = existing_unit
+                        update_payload = {
+                            "quantity": merged_qty,
+                            "unit": merged_unit,
+                            "display_name": existing_item.get("display_name")
+                            or _titleize(canonical_name),
+                            "source": "scan",
+                            "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                            "is_current": True,
+                            "last_seen_at": now_iso,
+                            "last_seen_scan_id": request.scan_id,
+                        }
+                        if scan_image_url and not existing_item.get("image_url"):
+                            update_payload["image_url"] = scan_image_url
+                        db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    elif UnitConverter.can_convert(incoming_unit, existing_unit):
+                        converted = UnitConverter.convert(incoming_qty, incoming_unit, existing_unit)
+                        merged_qty = existing_qty + float(converted)
+                        merged_unit = existing_unit
+                        update_payload = {
+                            "quantity": merged_qty,
+                            "unit": merged_unit,
+                            "display_name": existing_item.get("display_name")
+                            or _titleize(canonical_name),
+                            "source": "scan",
+                            "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                            "is_current": True,
+                            "last_seen_at": now_iso,
+                            "last_seen_scan_id": request.scan_id,
+                        }
+                        if scan_image_url and not existing_item.get("image_url"):
+                            update_payload["image_url"] = scan_image_url
+                        db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    else:
+                        created = (
+                            db.table("inventory_items")
+                            .insert(
+                                {
+                                    "user_id": user_id,
+                                    "canonical_name": canonical_name,
+                                    "display_name": _titleize(final_name or canonical_name),
+                                    "quantity": incoming_qty,
+                                    "unit": incoming_unit,
+                                    "storage_location": storage_location,
+                                    "item_state": item_state,
+                                    "source": "scan",
+                                    "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                                    "image_url": scan_image_url,
+                                    "is_current": True,
+                                    "last_seen_at": now_iso,
+                                    "last_seen_scan_id": request.scan_id,
+                                }
+                            )
+                            .execute()
+                        )
+                        existing_item = created.data[0] if created.data else None
+                else:
+                    created = (
+                        db.table("inventory_items")
+                        .insert(
+                            {
+                                "user_id": user_id,
+                                "canonical_name": canonical_name,
+                                "display_name": _titleize(final_name or canonical_name),
+                                "quantity": incoming_qty,
+                                "unit": incoming_unit,
+                                "storage_location": storage_location,
+                                "item_state": item_state,
+                                "source": "scan",
+                                "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                                "image_url": scan_image_url,
+                                "is_current": True,
+                                "last_seen_at": now_iso,
+                                "last_seen_scan_id": request.scan_id,
+                            }
+                        )
+                        .execute()
+                    )
+                    existing_item = created.data[0] if created.data else None
                 
                 # Add to pantry (trigger will handle this automatically)
                 # But we'll track for response
                 pantry_items_added.append({
-                    "name": update_data["confirmed_name"],
-                    "display_name": update_data["confirmed_name"].replace("_", " ").title(),
-                    "quantity": quantity,
-                    "unit": unit,
+                    "name": canonical_name,
+                    "display_name": _titleize(final_name or canonical_name),
+                    "quantity": merged_qty,
+                    "unit": merged_unit,
                     "source": "scan"
                 })
                 
@@ -337,7 +551,11 @@ async def confirm_ingredients(
             # Update detected ingredient
             db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
         
-        # Scan completion will be handled by trigger
+        # Mark scan as completed (best-effort)
+        try:
+            db.table("ingredient_scans").update({"status": "completed"}).eq("id", request.scan_id).execute()
+        except Exception:
+            pass
         
         # Build response message
         message = f"Confirmed {confirmed_count}, modified {modified_count}, rejected {rejected_count} ingredients."
@@ -423,15 +641,36 @@ async def get_user_pantry(
     """
     try:
         db = get_db_client()
-        
-        # Call database function
-        result = db.rpc("get_user_pantry", {"p_user_id": user_id}).execute()
-        
-        return {
-            "success": True,
-            "pantry": result.data,
-            "total_items": len(result.data)
-        }
+
+        # Canonical inventory is inventory_items; expose a backward-compatible pantry shape.
+        items = (
+            db.table("inventory_items")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        pantry = []
+        for item in items.data or []:
+            if not isinstance(item, dict):
+                continue
+            pantry.append(
+                {
+                    "id": item.get("id"),
+                    "ingredient_name": item.get("canonical_name"),
+                    "display_name": item.get("display_name") or _titleize(item.get("canonical_name") or ""),
+                    "quantity": item.get("quantity"),
+                    "unit": item.get("unit"),
+                    "storage_location": item.get("storage_location"),
+                    "item_state": item.get("item_state"),
+                    "source": item.get("source"),
+                    "status": "available",
+                    "notes": item.get("notes"),
+                    "expiry_date": item.get("expiry_date"),
+                }
+            )
+
+        return {"success": True, "pantry": pantry, "total_items": len(pantry)}
         
     except Exception as e:
         logger.error(f"Failed to get pantry: {e}", exc_info=True)
@@ -507,23 +746,25 @@ async def remove_from_pantry(
     """
     try:
         db = get_db_client()
+
+        normalizer = get_normalizer()
+        canonical_name = normalizer.normalize_name(ingredient_name)
         
-        # Update pantry item status
-        result = db.table("user_pantry") \
-            .update({
-                "status": "removed",
-                "removed_at": datetime.utcnow().isoformat()
-            }) \
-            .eq("user_id", user_id) \
-            .eq("ingredient_name", ingredient_name) \
+        # Canonical inventory is inventory_items; delete matching items.
+        result = (
+            db.table("inventory_items")
+            .delete()
+            .eq("user_id", user_id)
+            .eq("canonical_name", canonical_name)
             .execute()
+        )
         
         if not result.data:
             raise HTTPException(status_code=404, detail="Ingredient not found in pantry")
         
         return {
             "success": True,
-            "message": f"Removed {ingredient_name} from pantry"
+            "message": f"Removed {canonical_name} from pantry"
         }
         
     except HTTPException:
@@ -566,6 +807,9 @@ async def add_manual_ingredient(
         
         # Normalize ingredient name
         canonical_name = normalizer.normalize_name(request.ingredient_name)
+
+        incoming_unit = _normalize_unit(request.unit)
+        incoming_qty = float(request.quantity) if request.quantity is not None else 1.0
         
         # Validate unit if provided
         if request.unit:
@@ -576,41 +820,45 @@ async def add_manual_ingredient(
                     detail=f"Unknown unit: {request.unit}. Try: grams, ml, pieces, cups"
                 )
         
-        # Check if ingredient already exists in pantry
-        existing = db.table("user_pantry") \
-            .select("*") \
-            .eq("user_id", user_id) \
-            .eq("ingredient_name", canonical_name) \
-            .eq("status", "available") \
+        # Check if ingredient already exists in canonical inventory
+        existing = (
+            db.table("inventory_items")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("canonical_name", canonical_name)
+            .eq("storage_location", "pantry")
+            .eq("item_state", "raw")
+            .order("updated_at", desc=True)
+            .limit(1)
             .execute()
+        )
         
         if existing.data:
-            # Update existing quantity
             old_item = existing.data[0]
-            old_qty = old_item.get("quantity") or 0
-            old_unit = old_item.get("unit") or request.unit
+            old_qty = float(old_item.get("quantity") or 0)
+            old_unit = _normalize_unit(old_item.get("unit") or incoming_unit)
             
             # Try to convert and add quantities
             new_qty = old_qty
-            if request.quantity:
-                if old_unit == request.unit:
-                    new_qty = old_qty + request.quantity
-                elif UnitConverter.can_convert(request.unit, old_unit):
-                    converted_qty = UnitConverter.convert(request.quantity, request.unit, old_unit)
-                    new_qty = old_qty + converted_qty
-                else:
-                    # Can't convert, keep old quantity and warn
-                    logger.warning(f"Cannot convert {request.unit} to {old_unit} for {canonical_name}")
-                    new_qty = old_qty
-            
-            db.table("user_pantry") \
-                .update({
+            if incoming_unit == old_unit:
+                new_qty = old_qty + incoming_qty
+            elif UnitConverter.can_convert(incoming_unit, old_unit):
+                converted_qty = UnitConverter.convert(incoming_qty, incoming_unit, old_unit)
+                new_qty = old_qty + float(converted_qty)
+            else:
+                logger.warning(f"Cannot convert {incoming_unit} to {old_unit} for {canonical_name}")
+                new_qty = old_qty
+
+            db.table("inventory_items").update(
+                {
                     "quantity": new_qty,
                     "unit": old_unit,
-                    "updated_at": datetime.utcnow().isoformat()
-                }) \
-                .eq("id", old_item["id"]) \
-                .execute()
+                    "display_name": old_item.get("display_name") or request.ingredient_name,
+                    "source": "manual",
+                    "scan_confidence": 1.0,
+                    "notes": request.notes,
+                }
+            ).eq("id", old_item["id"]).execute()
             
             return {
                 "success": True,
@@ -619,30 +867,33 @@ async def add_manual_ingredient(
                 "display_name": request.ingredient_name,
                 "quantity": new_qty,
                 "unit": old_unit,
+                "confidence": 1.0,
                 "message": f"Updated {canonical_name} quantity to {new_qty} {old_unit}"
             }
         else:
-            # Insert new ingredient
-            result = db.table("user_pantry").insert({
-                "user_id": user_id,
-                "ingredient_name": canonical_name,
-                "display_name": request.ingredient_name,
-                "quantity": request.quantity,
-                "unit": request.unit,
-                "estimated": False,  # User-entered
-                "confidence": 1.0,
-                "source": "manual",
-                "status": "available",
-                "notes": request.notes
-            }).execute()
+            result = db.table("inventory_items").insert(
+                {
+                    "user_id": user_id,
+                    "canonical_name": canonical_name,
+                    "display_name": request.ingredient_name,
+                    "quantity": incoming_qty,
+                    "unit": incoming_unit,
+                    "storage_location": "pantry",
+                    "item_state": "raw",
+                    "source": "manual",
+                    "scan_confidence": 1.0,
+                    "notes": request.notes,
+                }
+            ).execute()
             
             return {
                 "success": True,
                 "action": "added",
                 "ingredient": canonical_name,
                 "display_name": request.ingredient_name,
-                "quantity": request.quantity,
-                "unit": request.unit,
+                "quantity": incoming_qty,
+                "unit": incoming_unit,
+                "confidence": 1.0,
                 "message": f"Added {canonical_name} to your pantry"
             }
         
