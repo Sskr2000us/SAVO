@@ -967,8 +967,25 @@ def _build_planning_context(
         pass
     
     # Determine output settings
-    output_lang = request.output_language or config.global_settings.primary_language
-    measurement = request.measurement_system or config.global_settings.measurement_system
+    # Prefer explicit request overrides, then DB-backed app_configuration_override (if present), then local config defaults.
+    def _cfg_get(path: list[str], default: Any = None) -> Any:
+        cur: Any = app_configuration_override if isinstance(app_configuration_override, dict) else None
+        for key in path:
+            if not isinstance(cur, dict):
+                return default
+            cur = cur.get(key)
+        return default if cur is None else cur
+
+    output_lang = (
+        getattr(request, "output_language", None)
+        or _cfg_get(["global_settings", "primary_language"], None)
+        or config.global_settings.primary_language
+    )
+    measurement = (
+        getattr(request, "measurement_system", None)
+        or _cfg_get(["global_settings", "measurement_system"], None)
+        or config.global_settings.measurement_system
+    )
 
     output_languages = getattr(request, "output_languages", None)
     if not isinstance(output_languages, list) or not output_languages:
@@ -1024,6 +1041,100 @@ def _build_planning_context(
         **orch_context
     }
 
+    # Provide prompt-pack bindings for time/servings when present.
+    # (Prompt-pack tasks reference {{TIME_AVAILABLE_MIN}} and {{SERVINGS}} explicitly.)
+    try:
+        tmin = getattr(request, "time_available_minutes", None)
+        if isinstance(tmin, (int, float)):
+            context["time_available_minutes"] = tmin
+            context["TIME_AVAILABLE_MIN"] = tmin
+        srv = getattr(request, "servings", None)
+        if isinstance(srv, (int, float)):
+            context["servings"] = srv
+            context["SERVINGS"] = srv
+    except Exception:
+        pass
+
+    # Explicit family profile summary (small, high-signal) so the model reliably applies it.
+    # Source of truth is DB profile if present: app_configuration.db_profile.{household,members}.
+    try:
+        app_cfg = context.get("app_configuration")
+        db_profile = app_cfg.get("db_profile") if isinstance(app_cfg, dict) else None
+        household = db_profile.get("household") if isinstance(db_profile, dict) else None
+        members = db_profile.get("members") if isinstance(db_profile, dict) else None
+
+        if not isinstance(members, list):
+            members = []
+        if not isinstance(household, dict):
+            household = {}
+
+        # Aggregate constraints across members (conservative: union allergens, union dietary).
+        allergens: set[str] = set()
+        dietary: set[str] = set()
+        religious: set[str] = set()
+        health_conditions: set[str] = set()
+        spice_levels: list[str] = []
+
+        for m in members:
+            if not isinstance(m, dict):
+                continue
+            for a in _coerce_list(m.get("allergens")):
+                if a is None:
+                    continue
+                s = str(a).strip()
+                if s:
+                    allergens.add(s.lower())
+            for d in _coerce_list(m.get("dietary_restrictions")):
+                if d is None:
+                    continue
+                s = str(d).strip()
+                if s:
+                    dietary.add(s.lower())
+            for h in _coerce_list(m.get("health_conditions")):
+                if h is None:
+                    continue
+                s = str(h).strip()
+                if s:
+                    health_conditions.add(s.lower())
+            st = m.get("spice_tolerance")
+            if isinstance(st, str) and st.strip():
+                spice_levels.append(st.strip().lower())
+
+        # Household-level religious constraints may be represented in dietary or household JSON.
+        for r in _coerce_list(household.get("religious_constraints") or household.get("religious") or []):
+            if r is None:
+                continue
+            s = str(r).strip()
+            if s:
+                religious.add(s)
+
+        family_profile = {
+            "primary_language": household.get("primary_language") or household.get("language") or output_lang,
+            "measurement_system": household.get("measurement_system") or measurement,
+            "favorite_cuisines": household.get("favorite_cuisines") or household.get("favoriteCuisines") or [],
+            "regional_profile": household.get("regional_profile") or {},
+            "members_count": len([m for m in members if isinstance(m, dict)]),
+            "age_groups": {
+                "child": len([m for m in members if isinstance(m, dict) and (m.get("age_category") == "child")]),
+                "teen": len([m for m in members if isinstance(m, dict) and (m.get("age_category") == "teen")]),
+                "adult": len([m for m in members if isinstance(m, dict) and (m.get("age_category") == "adult")]),
+                "senior": len([m for m in members if isinstance(m, dict) and (m.get("age_category") == "senior")]),
+            },
+            "hard_constraints": {
+                "avoid_allergens": sorted(allergens),
+                "dietary_restrictions": sorted(dietary),
+                "religious_constraints": sorted(religious),
+                "health_conditions": sorted(health_conditions),
+                "spice_tolerance_levels": spice_levels,
+            },
+        }
+
+        context["family_profile"] = family_profile
+        context["FAMILY_PROFILE"] = family_profile
+    except Exception:
+        # Best-effort; do not fail planning if profile summarization fails.
+        pass
+
     # Surface household regional profile for culturally authentic planning.
     # Stored on household_profiles as JSONB.
     try:
@@ -1054,6 +1165,11 @@ def _build_planning_context(
         context["OUTPUT_LANGUAGE"] = context.get("output_language")
         context["MEASUREMENT_SYSTEM"] = context.get("measurement_system")
         context["NOW_UTC"] = context.get("now_utc")
+        # Ensure bindings exist even if callers set only snake_case.
+        if "TIME_AVAILABLE_MIN" not in context and "time_available_minutes" in context:
+            context["TIME_AVAILABLE_MIN"] = context.get("time_available_minutes")
+        if "SERVINGS" not in context and "servings" in context:
+            context["SERVINGS"] = context.get("servings")
         if "regional_profile" in context:
             context["REGIONAL_PROFILE"] = context.get("regional_profile")
         if "feature_flags" in context:
