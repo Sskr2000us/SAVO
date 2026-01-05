@@ -21,6 +21,101 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
   bool _scanningReceipt = false;
   final ImagePicker _picker = ImagePicker();
 
+  Future<List<Map<String, dynamic>>?> _confirmReceiptItems(
+    BuildContext context,
+    List<dynamic> items,
+  ) async {
+    final parsed = items
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .toList();
+
+    if (parsed.isEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Nothing found'),
+          content: const Text('Could not detect items from this receipt. Try a clearer photo. '),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return null;
+    }
+
+    final selections = <int, bool>{
+      for (var i = 0; i < parsed.length; i++) i: true,
+    };
+
+    return showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Confirm receipt items'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Select items to add to your inventory.'),
+                      const SizedBox(height: 12),
+                      for (var i = 0; i < parsed.length; i++)
+                        Builder(
+                          builder: (_) {
+                            final item = parsed[i];
+                            final rawName = (item['raw_name']?.toString().trim().isNotEmpty == true)
+                                ? item['raw_name'].toString().trim()
+                                : (item['canonical_name']?.toString() ?? 'Item');
+                            final qty = item['quantity'];
+                            final unit = item['unit'];
+                            final subtitleParts = <String>[];
+                            if (qty != null) subtitleParts.add('$qty');
+                            if (unit != null && unit.toString().trim().isNotEmpty) subtitleParts.add(unit.toString());
+                            final subtitle = subtitleParts.isEmpty ? null : subtitleParts.join(' ');
+
+                            return CheckboxListTile(
+                              value: selections[i] ?? true,
+                              onChanged: (v) => setLocal(() => selections[i] = (v ?? true)),
+                              title: Text(rawName),
+                              subtitle: subtitle != null ? Text(subtitle) : null,
+                              controlAffinity: ListTileControlAffinity.leading,
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final selected = <Map<String, dynamic>>[];
+                    for (var i = 0; i < parsed.length; i++) {
+                      if (selections[i] == true) selected.add(parsed[i]);
+                    }
+                    Navigator.pop(ctx, selected);
+                  },
+                  child: const Text('Add to inventory'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _scanReceipt(BuildContext context) async {
     if (_scanningReceipt) return;
 
@@ -38,8 +133,8 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
       }
 
       final api = ApiClient(baseUrl: Config.apiBaseUrl);
-      final res = await api.postMultipart(
-        '/api/scanning/scan-receipt',
+      final preview = await api.postMultipart(
+        '/api/scanning/scan-receipt/preview',
         file: image,
         fields: const {
           'storage_location': 'pantry',
@@ -48,7 +143,7 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
 
       if (!mounted) return;
 
-      final success = res['success'] == true;
+      final success = preview['success'] == true;
       if (!success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Receipt scan failed. Please try again.')),
@@ -57,11 +152,30 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
         return;
       }
 
-      final added = (res['added_count'] is num) ? (res['added_count'] as num).toInt() : 0;
-      final updated = (res['updated_count'] is num) ? (res['updated_count'] as num).toInt() : 0;
+      final receiptId = preview['receipt_id']?.toString() ?? '';
+      final items = (preview['items'] is List) ? (preview['items'] as List) : const [];
+
+      final selected = await _confirmReceiptItems(context, items);
+      if (!mounted) return;
+      if (selected == null || selected.isEmpty) {
+        setState(() => _scanningReceipt = false);
+        return;
+      }
+
+      final confirmRes = await api.post(
+        '/api/scanning/scan-receipt/confirm',
+        {
+          'receipt_id': receiptId,
+          'storage_location': 'pantry',
+          'items': selected,
+        },
+      );
+
+      final added = (confirmRes['added_count'] is num) ? (confirmRes['added_count'] as num).toInt() : 0;
+      final updated = (confirmRes['updated_count'] is num) ? (confirmRes['updated_count'] as num).toInt() : 0;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Receipt scanned. Added $added, updated $updated items.')),
+        SnackBar(content: Text('Inventory updated. Added $added, updated $updated items.')),
       );
     } catch (e) {
       if (!mounted) return;

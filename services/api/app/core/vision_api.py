@@ -13,6 +13,7 @@ from io import BytesIO
 
 from openai import AsyncOpenAI
 from PIL import Image
+from PIL import ImageEnhance, ImageOps
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -167,32 +168,44 @@ class VisionAPIClient:
         try:
             image_hash, image_size = self._process_image(image_data)
 
-            prompt = """You are an expert receipt-parsing AI for SAVO, a cooking assistant app.
+            # Preprocess receipts to improve OCR robustness (contrast/rotation/scale).
+            try:
+                processed_image_data = self._preprocess_receipt_image(image_data)
+            except Exception:
+                processed_image_data = image_data
 
-TASK: Read this grocery receipt image and extract ONLY food/ingredient items that belong in a pantry.
+                        prompt = """You are an expert receipt-parsing AI for SAVO, a cooking assistant app.
+
+TASK: Read this grocery receipt image and extract ALL line-items that look like grocery/food products.
+
+GOAL:
+- Be comprehensive. If you are unsure about an item, STILL include it with low confidence.
 
 RULES:
-- Ignore store header/address, cashier info, loyalty messages, coupons, payment details, totals, taxes, fees.
-- Ignore non-food items (paper towels, detergent, toiletries, etc.).
-- Expand abbreviations when obvious (e.g., "TOM" -> "tomatoes"), otherwise keep a best-effort grocery name.
-- If the receipt shows weight/volume units (lb, oz, g, kg, l, ml), include them.
-- If quantity is not clear, set quantity to null (do not guess).
+- Ignore store header/address, cashier info, loyalty messages, payment details, totals, taxes, fees.
+- Ignore coupons/discount lines.
+- Prefer including ambiguous abbreviations as-is in `name` rather than dropping them.
+- Non-food items should be excluded when clearly non-food.
+- Quantity:
+    - If explicitly present (e.g., "2x", weights), include it.
+    - If not explicit, set quantity to 1 and unit to "pieces".
 
-OUTPUT FORMAT (JSON only):
+OUTPUT (JSON only):
 {
-  "items": [
-    {
-      "name": "string",
-      "quantity": 2.0,
-      "unit": "pounds|ounces|grams|kilograms|liters|milliliters|pieces|null",
-      "confidence": 0.0,
-      "raw_line": "string (optional)"
-    }
-  ]
+    "raw_text": "(best-effort full OCR transcription of the receipt)",
+    "items": [
+        {
+            "raw_line": "string", 
+            "name": "string",
+            "quantity": 1.0,
+            "unit": "pieces|pounds|ounces|grams|kilograms|liters|milliliters",
+            "confidence": 0.0
+        }
+    ]
 }
 """
 
-            base64_image = base64.b64encode(image_data).decode("utf-8")
+            base64_image = base64.b64encode(processed_image_data).decode("utf-8")
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -211,12 +224,17 @@ OUTPUT FORMAT (JSON only):
                         ],
                     }
                 ],
-                max_tokens=1800,
-                temperature=0.2,
+                response_format={"type": "json_object"},
+                max_tokens=2400,
+                temperature=0.0,
             )
 
             content = response.choices[0].message.content
             parsed = self._parse_detection_response(content)
+
+            raw_text = None
+            if isinstance(parsed, dict) and parsed.get("raw_text"):
+                raw_text = str(parsed.get("raw_text"))
 
             from .ingredient_normalization import IngredientNormalizer
 
@@ -260,6 +278,7 @@ OUTPUT FORMAT (JSON only):
             return {
                 "success": True,
                 "items": items_out,
+                "raw_text": raw_text,
                 "metadata": {
                     "image_hash": image_hash,
                     "image_size": image_size,
@@ -270,6 +289,27 @@ OUTPUT FORMAT (JSON only):
         except Exception as e:
             logger.error(f"Receipt analysis failed: {e}")
             return {"success": False, "error": str(e), "items": []}
+
+    def _preprocess_receipt_image(self, image_data: bytes) -> bytes:
+        """Improve receipt OCR by normalizing orientation, boosting contrast, and upscaling."""
+
+        image = Image.open(BytesIO(image_data))
+        image = ImageOps.exif_transpose(image)
+
+        # Convert to grayscale for OCR and enhance contrast/sharpness.
+        image = image.convert("L")
+        image = ImageOps.autocontrast(image)
+        image = ImageEnhance.Contrast(image).enhance(1.6)
+        image = ImageEnhance.Sharpness(image).enhance(1.3)
+
+        # Upscale modestly (helps small receipt fonts).
+        w, h = image.size
+        scale = 1.6
+        image = image.resize((int(w * scale), int(h * scale)))
+
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=92, optimize=True)
+        return out.getvalue()
     
     def _process_image(self, image_data: bytes) -> Tuple[str, Tuple[int, int]]:
         """

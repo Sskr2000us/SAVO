@@ -246,6 +246,30 @@ class ScanReceiptResponse(BaseModel):
     message: Optional[str] = None
 
 
+class ScanReceiptPreviewResponse(BaseModel):
+    success: bool
+    receipt_id: str
+    items: List[Dict]
+    metadata: Dict
+    requires_confirmation: bool = True
+    message: Optional[str] = None
+
+
+class ReceiptConfirmItem(BaseModel):
+    raw_name: Optional[str] = None
+    canonical_name: Optional[str] = None
+    display_name: Optional[str] = None
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class ConfirmReceiptRequest(BaseModel):
+    receipt_id: str
+    items: List[ReceiptConfirmItem]
+    storage_location: str = "pantry"
+
+
 class PantryCleanupResponse(BaseModel):
     success: bool
     marked_inactive_count: int
@@ -793,6 +817,18 @@ async def scan_receipt(
         if not analysis.get("success"):
             raise HTTPException(status_code=500, detail=f"Receipt analysis failed: {analysis.get('error')}")
 
+        # Best-effort store analysis for later debugging/training.
+        try:
+            db.table("receipt_scans").update(
+                {
+                    "raw_text": analysis.get("raw_text"),
+                    "analysis_json": analysis,
+                    "status": "parsed",
+                }
+            ).eq("id", receipt_id).execute()
+        except Exception:
+            pass
+
         storage = _scan_type_to_storage_location(storage_location)
         item_state = "raw"
 
@@ -972,6 +1008,273 @@ async def scan_receipt(
     except Exception as e:
         logger.error(f"Receipt scan failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Receipt scan failed: {str(e)}")
+
+
+@router.post("/scan-receipt/preview", response_model=ScanReceiptPreviewResponse)
+async def scan_receipt_preview(
+    image: UploadFile = File(..., description="Receipt image file (JPEG/PNG)"),
+    storage_location: str = Form(default="pantry"),
+    user_id: str = Depends(get_current_user),
+):
+    """Scan a receipt and return detected items. Does NOT modify inventory."""
+
+    try:
+        if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG or PNG.")
+
+        image_data = await image.read()
+        if len(image_data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
+
+        db = get_db_client()
+
+        receipt_id = str(uuid4())
+        now_iso = datetime.utcnow().isoformat()
+
+        image_url = None
+        try:
+            image_url = upload_inventory_image(
+                user_id=user_id,
+                content=image_data,
+                content_type=image.content_type,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to upload receipt image: {e}")
+
+        try:
+            db.table("receipt_scans").insert(
+                {
+                    "id": receipt_id,
+                    "user_id": user_id,
+                    "image_url": image_url,
+                    "created_at": now_iso,
+                    "status": "parsed",
+                }
+            ).execute()
+        except Exception:
+            pass
+
+        profile = None
+        try:
+            profile = await get_full_profile(user_id)
+        except Exception:
+            profile = None
+
+        vision_client = get_vision_client()
+        analysis = await vision_client.analyze_receipt(
+            image_data=image_data,
+            user_preferences=profile,
+        )
+
+        if not analysis.get("success"):
+            raise HTTPException(status_code=500, detail=f"Receipt analysis failed: {analysis.get('error')}")
+
+        try:
+            db.table("receipt_scans").update(
+                {
+                    "raw_text": analysis.get("raw_text"),
+                    "analysis_json": analysis,
+                    "status": "parsed",
+                }
+            ).eq("id", receipt_id).execute()
+        except Exception:
+            pass
+
+        # Return items (no writes to inventory here)
+        items = []
+        for item in analysis.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
+            items.append(
+                {
+                    "raw_name": item.get("raw_name"),
+                    "canonical_name": item.get("canonical_name"),
+                    "quantity": item.get("quantity"),
+                    "unit": item.get("unit"),
+                    "confidence": float(item.get("confidence")) if item.get("confidence") is not None else None,
+                    "raw_line": item.get("raw_line"),
+                }
+            )
+
+        return ScanReceiptPreviewResponse(
+            success=True,
+            receipt_id=receipt_id,
+            items=items,
+            metadata=analysis.get("metadata") or {},
+            requires_confirmation=True,
+            message="Receipt scanned. Please confirm items before adding to inventory.",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Receipt preview failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Receipt preview failed: {str(e)}")
+
+
+@router.post("/scan-receipt/confirm", response_model=ScanReceiptResponse)
+async def confirm_receipt_scan(
+    request: ConfirmReceiptRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Apply user-confirmed receipt items to inventory."""
+
+    try:
+        db = get_db_client()
+        normalizer = get_normalizer()
+        now_iso = datetime.utcnow().isoformat()
+
+        storage = _scan_type_to_storage_location(request.storage_location)
+        item_state = "raw"
+
+        from app.core.unit_converter import UnitConverter
+
+        added_count = 0
+        updated_count = 0
+        pantry_items: List[Dict] = []
+
+        for item_in in request.items:
+            raw_name = (item_in.raw_name or "").strip()
+            canonical = (item_in.canonical_name or "").strip()
+            display_name = (item_in.display_name or raw_name or canonical).strip()
+
+            if not canonical:
+                canonical = normalizer.normalize_name(raw_name or display_name)
+            if not canonical:
+                continue
+
+            qty = item_in.quantity
+            try:
+                incoming_qty_f = float(qty) if qty is not None else 1.0
+            except Exception:
+                incoming_qty_f = 1.0
+
+            incoming_unit = _normalize_unit(item_in.unit)
+
+            existing = (
+                db.table("inventory_items")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("canonical_name", canonical)
+                .eq("storage_location", storage)
+                .eq("item_state", item_state)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            merged_qty = incoming_qty_f
+            merged_unit = incoming_unit
+
+            confidence_f = None
+            try:
+                confidence_f = float(item_in.confidence) if item_in.confidence is not None else None
+            except Exception:
+                confidence_f = None
+
+            if existing.data:
+                existing_item = existing.data[0]
+                existing_qty = float(existing_item.get("quantity") or 0)
+                existing_unit = _normalize_unit(existing_item.get("unit") or "pieces")
+
+                update_payload = {
+                    "display_name": existing_item.get("display_name") or display_name or _titleize(canonical),
+                    "source": "receipt",
+                    "is_current": True,
+                    "last_seen_at": now_iso,
+                    "last_seen_receipt_id": request.receipt_id,
+                }
+
+                if incoming_unit == existing_unit:
+                    merged_qty = existing_qty + incoming_qty_f
+                    merged_unit = existing_unit
+                    update_payload.update({"quantity": merged_qty, "unit": merged_unit})
+                    if confidence_f is not None:
+                        update_payload["scan_confidence"] = confidence_f
+                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    updated_count += 1
+                elif UnitConverter.can_convert(incoming_unit, existing_unit):
+                    converted = UnitConverter.convert(incoming_qty_f, incoming_unit, existing_unit)
+                    merged_qty = existing_qty + float(converted)
+                    merged_unit = existing_unit
+                    update_payload.update({"quantity": merged_qty, "unit": merged_unit})
+                    if confidence_f is not None:
+                        update_payload["scan_confidence"] = confidence_f
+                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    updated_count += 1
+                else:
+                    db.table("inventory_items").insert(
+                        {
+                            "user_id": user_id,
+                            "canonical_name": canonical,
+                            "display_name": display_name or _titleize(canonical),
+                            "quantity": incoming_qty_f,
+                            "unit": incoming_unit,
+                            "storage_location": storage,
+                            "item_state": item_state,
+                            "source": "receipt",
+                            "scan_confidence": confidence_f,
+                            "is_current": True,
+                            "last_seen_at": now_iso,
+                            "last_seen_receipt_id": request.receipt_id,
+                        }
+                    ).execute()
+                    added_count += 1
+            else:
+                db.table("inventory_items").insert(
+                    {
+                        "user_id": user_id,
+                        "canonical_name": canonical,
+                        "display_name": display_name or _titleize(canonical),
+                        "quantity": incoming_qty_f,
+                        "unit": incoming_unit,
+                        "storage_location": storage,
+                        "item_state": item_state,
+                        "source": "receipt",
+                        "scan_confidence": confidence_f,
+                        "is_current": True,
+                        "last_seen_at": now_iso,
+                        "last_seen_receipt_id": request.receipt_id,
+                    }
+                ).execute()
+                added_count += 1
+
+            pantry_items.append(
+                {
+                    "name": canonical,
+                    "display_name": display_name or _titleize(canonical),
+                    "quantity": merged_qty,
+                    "unit": merged_unit,
+                    "source": "receipt",
+                }
+            )
+
+        try:
+            db.table("receipt_scans").update(
+                {
+                    "status": "confirmed",
+                    "confirmed_at": now_iso,
+                }
+            ).eq("id", request.receipt_id).eq("user_id", user_id).execute()
+        except Exception:
+            pass
+
+        message = f"Receipt confirmed. Added {added_count}, updated {updated_count} items."
+        return ScanReceiptResponse(
+            success=True,
+            receipt_id=request.receipt_id,
+            added_count=added_count,
+            updated_count=updated_count,
+            pantry_items=pantry_items,
+            metadata={"confirmed": True},
+            message=message,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Receipt confirm failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Receipt confirm failed: {str(e)}")
 
 
 @router.get("/history", response_model=ScanHistoryResponse)
