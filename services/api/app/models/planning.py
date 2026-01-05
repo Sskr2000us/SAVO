@@ -200,7 +200,8 @@ class MenuPlanResponse(BaseModel):
         """Ensure needs_clarification status provides clarification details"""
         if self.status == "needs_clarification":
             if not self.needs_clarification_questions and not self.error_message:
-                raise ValueError(
-                    "status=needs_clarification requires either needs_clarification_questions or error_message"
-                )
+                # Be resilient to upstream omissions (e.g., LLM returned needs_clarification but left
+                # both error_message and needs_clarification_questions empty). A hard failure here
+                # turns a recoverable state into a 500.
+                self.error_message = "Planning requires additional information."
         return self
