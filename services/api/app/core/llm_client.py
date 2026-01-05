@@ -168,19 +168,37 @@ class OpenAIClient(LlmClient):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # Prefer JSON Schema mode (server-side constrained decoding) to reduce
+                    # schema-validation failures without bloating the prompt.
+                    use_json_schema = os.getenv("OPENAI_USE_JSON_SCHEMA", "true").lower() == "true"
+                    response_format: dict[str, Any]
+                    if use_json_schema:
+                        response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "SAVO_OUTPUT",
+                                "schema": schema,
+                                "strict": True,
+                            },
+                        }
+                    else:
+                        response_format = {"type": "json_object"}
+
+                    payload = {
+                        "model": self.model,
+                        "messages": enhanced_messages,
+                        "response_format": response_format,
+                        "temperature": 0.5,  # Lower temperature = faster, more deterministic
+                        "max_tokens": max_tokens,
+                    }
+
                     response = await client.post(
                         f"{self.base_url}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {self.api_key}",
                             "Content-Type": "application/json",
                         },
-                        json={
-                            "model": self.model,
-                            "messages": enhanced_messages,
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.5,  # Lower temperature = faster, more deterministic
-                            "max_tokens": max_tokens,
-                        }
+                        json=payload,
                     )
                     
                     response.raise_for_status()
@@ -220,6 +238,20 @@ class OpenAIClient(LlmClient):
                     error_body = e.response.text if hasattr(e.response, 'text') else str(e)
                     logger.error(f"OpenAI API error {e.response.status_code}: {error_body}")
                     logger.error(f"Request model: {self.model}")
+
+                    # Some deployments/models may not support json_schema yet. If so, retry once
+                    # with json_object.
+                    if (
+                        e.response.status_code in (400, 422)
+                        and os.getenv("OPENAI_USE_JSON_SCHEMA", "true").lower() == "true"
+                    ):
+                        body_l = (error_body or "").lower()
+                        if "json_schema" in body_l or "response_format" in body_l:
+                            logger.warning(
+                                "OpenAI rejected response_format=json_schema; falling back to json_object for this request."
+                            )
+                            os.environ["OPENAI_USE_JSON_SCHEMA"] = "false"
+                            continue
                     
                     if e.response.status_code == 429:
                         # Rate limited
