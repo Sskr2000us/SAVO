@@ -15,6 +15,12 @@ from app.core.recipe_validators import (
 logger = logging.getLogger(__name__)
 
 
+class AuthenticityJudgeException(Exception):
+    def __init__(self, issues_text: str):
+        super().__init__("Authenticity judge rejected plan")
+        self.issues_text = issues_text
+
+
 def _looks_like_dal_recipe(*, recipe: Dict[str, Any], course_header: str | None = None) -> bool:
     try:
         if isinstance(course_header, str) and course_header.strip().lower() == "dal":
@@ -290,6 +296,59 @@ def _build_messages(*, task_name: str, context: Dict[str, Any]) -> list[dict[str
     ]
 
 
+def _authenticity_judge_schema() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "is_authentic": {"type": "boolean"},
+            "confidence": {"type": "number"},
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "path": {"type": "string"},
+                    },
+                    "required": ["severity", "code", "message", "path"],
+                    "additionalProperties": False,
+                },
+            },
+            "suggested_fixes": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["is_authentic", "confidence", "issues", "suggested_fixes"],
+        "additionalProperties": False,
+    }
+
+
+def _build_authenticity_judge_messages(*, task_name: str, plan_payload: Dict[str, Any]) -> list[dict[str, str]]:
+    # Keep this small to reduce truncation risk.
+    plan_json = json.dumps(plan_payload, ensure_ascii=False)
+    system = (
+        "You are a strict culinary authenticity and validity judge. "
+        "Your job is to detect semantically wrong / junk recipes (misnamed dishes, missing core base ingredients, unrealistic steps). "
+        "Be conservative: if unsure, flag issues rather than approving. "
+        "Return ONLY valid JSON matching the provided schema."
+    )
+    user = (
+        f"TASK={task_name}\n"
+        "Evaluate MENU_PLAN payload for authenticity and validity.\n"
+        "Rules:\n"
+        "- If a dish name implies a base (e.g., dal requires pulses/lentils; biryani requires rice; roti/chapati requires atta; idli/dosa requires batter base).\n"
+        "- Ingredients should match the dish; avoid nonsense like spices being treated as the base ingredient.\n"
+        "- Steps must be plausible and not empty.\n"
+        "- If missing ingredients are required, they must appear in new_ingredients_optional with a reason; do not pretend they exist in pantry.\n"
+        "Output issues[] with a JSON pointer-ish path into the payload when possible.\n"
+        f"PLAN_JSON={plan_json}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
 async def run_task(
     *,
     task_name: str,
@@ -362,6 +421,32 @@ async def _try_provider(
                 fatal = [i for i in semantic_issues if i.severity == "error"]
                 if fatal:
                     raise SemanticValidationException(fatal)
+
+                if settings.enable_authenticity_judge:
+                    judge_messages = _build_authenticity_judge_messages(
+                        task_name=task_name,
+                        plan_payload=result,
+                    )
+                    judge_schema = _authenticity_judge_schema()
+                    judge = await client.generate_json(messages=judge_messages, schema=judge_schema)
+                    validate_json(judge, judge_schema)
+
+                    if isinstance(judge, dict) and judge.get("is_authentic") is False:
+                        issues = judge.get("issues") if isinstance(judge.get("issues"), list) else []
+                        top = []
+                        for it in issues[:8]:
+                            if not isinstance(it, dict):
+                                continue
+                            sev = str(it.get("severity") or "error")
+                            code = str(it.get("code") or "JUDGE_ISSUE")
+                            msg = str(it.get("message") or "")
+                            path = str(it.get("path") or "")
+                            top.append(f"- {sev}:{code} {msg} (path: {path})")
+                        summary = "\n".join(top) if top else "- JUDGE_REJECTED: Plan deemed inauthentic/invalid"
+
+                        if settings.authenticity_judge_fail_closed:
+                            raise AuthenticityJudgeException(summary)
+                        logger.warning("Authenticity judge flagged issues but fail_closed=false. Issues=%s", summary)
             
             # Check if LLM itself returned an error status
             if isinstance(result, dict):
@@ -440,6 +525,27 @@ async def _try_provider(
                     "- Keep output concise (minified JSON; short text fields) to avoid truncation."
                 )
                 messages.append({"role": "assistant", "content": "I will regenerate authentic, valid recipes."})
+                messages.append({"role": "user", "content": correction})
+                continue
+
+        except AuthenticityJudgeException as e:
+            last_error = "Authenticity judge rejected plan"
+            logger.warning(
+                f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}"
+            )
+
+            if attempt < max_retries:
+                correction = (
+                    "CORRECTION REQUIRED: An authenticity judge reviewed your schema-valid plan and rejected it as not trustworthy/authentic.\n"
+                    "Judge issues:\n"
+                    f"{e.issues_text}\n"
+                    "Requirements:\n"
+                    "- Regenerate ONLY the invalid parts; keep the response schema-valid.\n"
+                    "- Ensure dish names match ingredients and core base ingredients are present.\n"
+                    "- Do not output junk or placeholder recipes.\n"
+                    "- Keep output concise (minified JSON; short text fields)."
+                )
+                messages.append({"role": "assistant", "content": "I will regenerate a trustworthy, authentic plan."})
                 messages.append({"role": "user", "content": correction})
                 continue
                 
