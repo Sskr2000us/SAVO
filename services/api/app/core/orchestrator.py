@@ -679,6 +679,7 @@ async def plan_daily(context: Dict[str, Any]) -> Dict[str, Any]:
         task_name="plan_daily_menu",
         output_schema_name="MENU_PLAN_SCHEMA",
         context=context,
+        max_retries=2,
     )
 
 
@@ -687,6 +688,7 @@ async def plan_party(context: Dict[str, Any]) -> Dict[str, Any]:
         task_name="plan_party_menu",
         output_schema_name="MENU_PLAN_SCHEMA",
         context=context,
+        max_retries=2,
     )
 
 
@@ -695,6 +697,7 @@ async def plan_weekly(context: Dict[str, Any]) -> Dict[str, Any]:
         task_name="plan_weekly",
         output_schema_name="MENU_PLAN_SCHEMA",
         context=context,
+        max_retries=2,
     )
 
 
