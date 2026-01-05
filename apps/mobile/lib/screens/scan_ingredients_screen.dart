@@ -20,14 +20,14 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   bool _loading = false;
   XFile? _image;
   List<_Candidate> _candidates = [];
-  String? _scanImageUrl;
+  String? _scanId;
 
   Future<void> _pickAndScan({required ImageSource source}) async {
     setState(() {
       _loading = true;
       _candidates = [];
       _image = null;
-      _scanImageUrl = null;
+      _scanId = null;
     });
 
     try {
@@ -45,16 +45,18 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final response = await apiClient.postMultipart(
-        '/inventory/scan',
+        '/api/scanning/analyze-image',
         file: image,
-        fields: const {},
+        fields: const {
+          'scan_type': 'pantry',
+        },
       );
 
       if (!mounted) return;
 
-      final status = response['status'];
-      if (status != 'ok') {
-        final msg = response['error_message']?.toString() ?? 'Scan failed';
+      final success = response['success'] == true;
+      if (!success) {
+        final msg = response['detail']?.toString() ?? response['error']?.toString() ?? 'Scan failed';
 
         final lower = msg.toLowerCase();
         if (lower.contains('too dark') || lower.contains('too blurry') || lower.contains('glare')) {
@@ -66,22 +68,29 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         return;
       }
 
-      final items = response['scanned_items'];
-      final imageUrl = response['image_url']?.toString();
+      final scanId = response['scan_id']?.toString();
+      final items = response['ingredients'];
       final parsed = <_Candidate>[];
       if (items is List) {
         for (final item in items) {
           if (item is Map<String, dynamic>) {
-            parsed.add(_Candidate.fromJson(item));
+            parsed.add(_Candidate.fromDetectedJson(item));
           } else if (item is Map) {
-            parsed.add(_Candidate.fromJson(item.cast<String, dynamic>()));
+            parsed.add(_Candidate.fromDetectedJson(item.cast<String, dynamic>()));
           }
         }
       }
 
+      final message = response['message']?.toString();
+      if (message != null && message.trim().isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message.trim())),
+        );
+      }
+
       setState(() {
+        _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
         _candidates = parsed;
-        _scanImageUrl = (imageUrl != null && imageUrl.trim().isNotEmpty) ? imageUrl.trim() : null;
         _loading = false;
       });
     } catch (e) {
@@ -91,7 +100,22 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     }
   }
 
-  Future<void> _normalizeAndAddToInventory() async {
+  ({double? qty, String? unit}) _parseQtyUnit(String? input) {
+    final raw = (input ?? '').trim();
+    if (raw.isEmpty) return (qty: null, unit: null);
+
+    final match = RegExp(r'^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?').firstMatch(raw);
+    if (match == null) return (qty: null, unit: null);
+    final qty = double.tryParse(match.group(1) ?? '');
+    final unit = match.group(2);
+    return (qty: qty, unit: unit);
+  }
+
+  Future<void> _confirmAndAddToInventory() async {
+    if (_scanId == null || _scanId!.trim().isEmpty) {
+      _showError('Missing scan id. Please rescan.');
+      return;
+    }
     if (_candidates.isEmpty) return;
 
     setState(() => _loading = true);
@@ -99,49 +123,60 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
 
-      final rawItems = _candidates
-          .where((c) => c.ingredient.trim().isNotEmpty)
-          .map((c) => {
-                'display_name': c.ingredient.trim(),
-                'quantity_estimate': c.quantityEstimate?.trim(),
-                'confidence': c.confidence,
-                'storage_hint': c.storageHint,
-              })
-          .toList();
+      final confirmations = <Map<String, dynamic>>[];
+      for (final c in _candidates) {
+        if (c.detectedId.trim().isEmpty) {
+          continue;
+        }
+        final name = c.ingredient.trim();
+        if (!c.selected || name.isEmpty) {
+          confirmations.add({'detected_id': c.detectedId, 'action': 'rejected'});
+          continue;
+        }
 
-      final normalized = await apiClient.post('/inventory/normalize', {
-        'raw_items': rawItems,
-        'measurement_system': 'metric',
-        'output_language': 'en',
+        final action = (name.toLowerCase() == c.originalIngredient.toLowerCase()) ? 'confirmed' : 'modified';
+        final parsed = _parseQtyUnit(c.quantityEstimate);
+
+        final payload = <String, dynamic>{
+          'detected_id': c.detectedId,
+          'action': action,
+        };
+        if (action == 'modified') {
+          payload['confirmed_name'] = name;
+        }
+        if (parsed.qty != null) {
+          payload['quantity'] = parsed.qty;
+          if (parsed.unit != null && parsed.unit!.trim().isNotEmpty) {
+            payload['unit'] = parsed.unit!.trim();
+          }
+        }
+
+        confirmations.add(payload);
+      }
+
+      if (confirmations.isEmpty) {
+        throw Exception('No valid detected items to confirm. Please rescan.');
+      }
+
+      final res = await apiClient.post('/api/scanning/confirm-ingredients', {
+        'scan_id': _scanId,
+        'confirmations': confirmations,
       });
 
-      final normItems = normalized['normalized_inventory'];
-      if (normItems is! List) {
-        throw Exception('Normalization response missing normalized_inventory');
-      }
-
-      for (final item in normItems) {
-        if (item is! Map) continue;
-        final json = item.cast<String, dynamic>();
-
-        // Save to database using /inventory-db/items endpoint
-        await apiClient.post('/inventory-db/items', {
-          'canonical_name': json['canonical_name'] ?? '',
-          'display_name': json['display_name'],
-          'quantity': (json['quantity'] is num) ? (json['quantity'] as num).toDouble() : 1.0,
-          'unit': json['unit'] ?? 'pcs',
-          'item_state': json['state'] ?? 'raw',  // Match database field name
-          'storage_location': json['storage'] ?? 'pantry',  // Match database field name
-          'source': 'scan',  // Mark as scanned item
-          'scan_confidence': (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null,
-          if (_scanImageUrl != null) 'image_url': _scanImageUrl,
-        });
-      }
+      final msg = res['message']?.toString();
+      final confirmed = res['confirmed_count']?.toString() ?? '0';
+      final rejected = res['rejected_count']?.toString() ?? '0';
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved scanned items to database!')),
+        SnackBar(
+          content: Text(
+            (msg != null && msg.trim().isNotEmpty)
+                ? msg.trim()
+                : 'Saved pantry scan (confirmed: $confirmed, rejected: $rejected)',
+          ),
+        ),
       );
       Navigator.pop(context, true);
     } catch (e) {
@@ -274,6 +309,14 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                               children: [
                                 Row(
                                   children: [
+                                    Checkbox(
+                                      value: c.selected,
+                                      onChanged: (v) {
+                                        setState(() {
+                                          c.selected = v ?? false;
+                                        });
+                                      },
+                                    ),
                                     Expanded(
                                       child: TextField(
                                         controller: c.ingredientController,
@@ -321,7 +364,9 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
             ),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: (!_loading && _candidates.isNotEmpty) ? _normalizeAndAddToInventory : null,
+              onPressed: (!_loading && _candidates.isNotEmpty && _scanId != null)
+                  ? _confirmAndAddToInventory
+                  : null,
               child: const Text('Confirm & Add to Inventory'),
             ),
           ],
@@ -332,34 +377,50 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 }
 
 class _Candidate {
+  final String detectedId;
   String ingredient;
+  final String originalIngredient;
   String? quantityEstimate;
   double confidence;
   String? storageHint;
+  bool selected;
 
   final TextEditingController ingredientController;
   final TextEditingController quantityController;
 
   _Candidate({
+    required this.detectedId,
     required this.ingredient,
+    required this.originalIngredient,
     required this.quantityEstimate,
     required this.confidence,
     required this.storageHint,
+    required this.selected,
   })  : ingredientController = TextEditingController(text: ingredient),
         quantityController = TextEditingController(text: quantityEstimate ?? '');
 
-  factory _Candidate.fromJson(Map<String, dynamic> json) {
-    final ingredient = (json['ingredient'] ?? '').toString();
-    final quantityEstimate = json['quantity_estimate']?.toString();
+  factory _Candidate.fromDetectedJson(Map<String, dynamic> json) {
+    final detectedId = (json['id'] ?? '').toString();
+    final detectedName = (json['detected_name'] ?? '').toString();
+
+    final quantity = json['quantity'];
+    final unit = json['unit']?.toString();
+    final quantityEstimate = (quantity is num)
+        ? '${quantity.toDouble()}${(unit != null && unit.trim().isNotEmpty) ? ' $unit' : ''}'
+        : null;
+
     final confidenceRaw = json['confidence'];
     final confidence = (confidenceRaw is num) ? confidenceRaw.toDouble() : 0.0;
-    final storageHint = json['storage_hint']?.toString();
+    final storageHint = null;
 
     return _Candidate(
-      ingredient: ingredient,
+      detectedId: detectedId,
+      ingredient: detectedName,
+      originalIngredient: detectedName,
       quantityEstimate: quantityEstimate,
       confidence: confidence.clamp(0.0, 1.0),
       storageHint: storageHint,
+      selected: true,
     );
   }
 }
