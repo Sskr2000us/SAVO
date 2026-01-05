@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
@@ -24,6 +25,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool _mergingDuplicates = false;
 
   bool _showInactiveItems = false;
+
+  static const String _prefsShowInactiveKey = 'savo.inventory.show_inactive_items';
 
   static const List<String> _storageOptions = ['pantry', 'fridge', 'freezer', 'counter'];
 
@@ -231,7 +234,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   void initState() {
     super.initState();
-    _loadInventory();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_prefsShowInactiveKey);
+      if (saved != null && mounted) {
+        setState(() => _showInactiveItems = saved);
+      }
+    } catch (_) {
+      // Best-effort only; defaults to false.
+    }
+
+    await _loadInventory();
   }
 
   Future<void> _loadInventory() async {
@@ -904,6 +921,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         value: _showInactiveItems,
                         onChanged: (value) async {
                           setState(() => _showInactiveItems = value);
+
+                          // Persist so it doesn't reset on refresh/navigation.
+                          try {
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setBool(_prefsShowInactiveKey, value);
+                          } catch (_) {
+                            // Best-effort only
+                          }
+
                           await _loadInventory();
                         },
                       ),
