@@ -36,8 +36,23 @@ class CookNowService {
 
     // Avoid forcing regeneration on every request.
     // On web, long-running forced generations can be cut off by upstream timeouts and surface as "Failed to fetch".
-    final response = await apiClient.post('/plan/daily', body);
-    final plan = MenuPlanResponse.fromJson(response);
+    Future<MenuPlanResponse> fetchPlan({required bool forceRegenerate}) async {
+      final path = forceRegenerate ? '/plan/daily?force_regenerate=true' : '/plan/daily';
+      final response = await apiClient.post(path, body);
+      return MenuPlanResponse.fromJson(response);
+    }
+
+    var plan = await fetchPlan(forceRegenerate: false);
+
+    // If the backend is asking for safety/profile clarification, surface that directly.
+    if (plan.status != 'ok') {
+      final msg = (plan.errorMessage?.trim().isNotEmpty == true)
+          ? plan.errorMessage!.trim()
+          : (plan.needsClarificationQuestions.isNotEmpty)
+              ? plan.needsClarificationQuestions.first.trim()
+              : 'Unable to generate recipes right now.';
+      throw msg;
+    }
 
     final byId = <String, Recipe>{};
     for (final menu in plan.menus) {
@@ -50,8 +65,37 @@ class CookNowService {
       }
     }
 
-    final candidates = byId.values.toList();
-    if (candidates.isEmpty) return const [];
+    var candidates = byId.values.toList();
+
+    // If we got an OK response but no recipes, the saved plan may be stale/missing fields.
+    // Retry once with force_regenerate=true to rebuild a complete payload.
+    if (candidates.isEmpty) {
+      plan = await fetchPlan(forceRegenerate: true);
+      if (plan.status != 'ok') {
+        final msg = (plan.errorMessage?.trim().isNotEmpty == true)
+            ? plan.errorMessage!.trim()
+            : (plan.needsClarificationQuestions.isNotEmpty)
+                ? plan.needsClarificationQuestions.first.trim()
+                : 'Unable to generate recipes right now.';
+        throw msg;
+      }
+
+      final retryById = <String, Recipe>{};
+      for (final menu in plan.menus) {
+        for (final course in menu.courses) {
+          for (final recipe in course.recipeOptions) {
+            final id = recipe.recipeId.trim();
+            if (id.isEmpty) continue;
+            retryById.putIfAbsent(id, () => recipe);
+          }
+        }
+      }
+
+      candidates = retryById.values.toList();
+      if (candidates.isEmpty) {
+        throw 'No recipe options right now. Try again after updating your pantry.';
+      }
+    }
 
     final recentIds = <String>{};
     final recentNames = <String>{};

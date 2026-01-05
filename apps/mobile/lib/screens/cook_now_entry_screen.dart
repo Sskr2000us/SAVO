@@ -42,6 +42,14 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
 
       if (!mounted) return;
 
+      if (options.isEmpty) {
+        setState(() {
+          _generating = false;
+          _error = 'No recipe options right now. Try again after updating your pantry.';
+        });
+        return;
+      }
+
       fireAndForget(MetricsService.instance.recordWorkflowStep('CookNow', 'Generate'));
 
       await Navigator.of(context).push(
