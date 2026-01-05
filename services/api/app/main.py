@@ -94,6 +94,34 @@ def create_app() -> FastAPI:
             headers=headers,
         )
 
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        origin = request.headers.get("origin")
+        headers = {}
+
+        # Add CORS headers to unhandled error responses (e.g., coding errors)
+        if origin:
+            allowed = False
+            if origin in cors_origins or cors_origins == ["*"]:
+                allowed = True
+            elif cors_origin_regex:
+                try:
+                    if re.match(cors_origin_regex, origin):
+                        allowed = True
+                except Exception:
+                    pass
+
+            if allowed:
+                headers["Access-Control-Allow-Origin"] = "*" if cors_origins == ["*"] else origin
+                if allow_credentials and cors_origins != ["*"]:
+                    headers["Access-Control-Allow-Credentials"] = "true"
+
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal Server Error"},
+            headers=headers,
+        )
+
     app.include_router(api_router)
 
     @app.get("/")

@@ -1486,6 +1486,21 @@ async def post_party(
     except Exception:
         db_history = []
 
+    # Pull DB-backed profile (source of truth for regional + favorites)
+    try:
+        full_profile = await get_full_profile(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load user profile: {str(e)}")
+
+    household = (full_profile.get("household") or full_profile.get("profile") or {}) if isinstance(full_profile, dict) else {}
+
+    # Cuisine preferences: request takes precedence; otherwise fallback to DB household favorites.
+    if not getattr(req, "cuisine_preferences", None):
+        db_favs = household.get("favorite_cuisines") or household.get("favoriteCuisines")
+        if isinstance(db_favs, list) and db_favs:
+            req.cuisine_preferences = db_favs
+    req.cuisine_preferences = _normalize_cuisine_preferences(getattr(req, "cuisine_preferences", None))
+
     inventory_models = _db_inventory_to_models(db_inventory)
 
     context = _build_planning_context(
