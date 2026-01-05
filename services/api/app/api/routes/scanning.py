@@ -749,7 +749,7 @@ async def scan_receipt(
         db = get_db_client()
         normalizer = get_normalizer()
 
-        # Receipt event id (not persisted to last_seen_scan_id because that FK targets ingredient_scans).
+        # Receipt scan id (persisted to receipt_scans + inventory_items.last_seen_receipt_id).
         receipt_id = str(uuid4())
         now_iso = datetime.utcnow().isoformat()
 
@@ -763,6 +763,19 @@ async def scan_receipt(
             )
         except Exception as e:
             logger.warning(f"Failed to upload receipt image: {e}")
+
+        # Persist receipt scan event for referential integrity (best-effort until migration is applied).
+        try:
+            db.table("receipt_scans").insert(
+                {
+                    "id": receipt_id,
+                    "user_id": user_id,
+                    "image_url": image_url,
+                    "created_at": now_iso,
+                }
+            ).execute()
+        except Exception:
+            pass
 
         # User profile context (optional; can help disambiguate items).
         profile = None
@@ -871,6 +884,7 @@ async def scan_receipt(
                     "source": "receipt",
                     "is_current": True,
                     "last_seen_at": now_iso,
+                    "last_seen_receipt_id": receipt_id,
                 }
                 if image_url and not existing_item.get("image_url"):
                     update_payload["image_url"] = image_url
@@ -907,6 +921,7 @@ async def scan_receipt(
                             "image_url": image_url,
                             "is_current": True,
                             "last_seen_at": now_iso,
+                            "last_seen_receipt_id": receipt_id,
                         }
                     )
                     added_count += 1
@@ -926,6 +941,7 @@ async def scan_receipt(
                         "image_url": image_url,
                         "is_current": True,
                         "last_seen_at": now_iso,
+                        "last_seen_receipt_id": receipt_id,
                     }
                 )
                 added_count += 1
