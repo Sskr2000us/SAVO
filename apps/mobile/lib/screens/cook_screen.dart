@@ -117,6 +117,43 @@ class _CookScreenState extends State<CookScreen> {
     }
   }
 
+  Future<void> _deleteLatestDailyPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove plan'),
+        content: const Text('Remove the saved daily plan so you can generate a new one?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.delete('/plan/latest?plan_type=daily');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Daily plan removed.')),
+      );
+      await _loadLatest();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove plan: $e')),
+      );
+    }
+  }
+
   int _extractServings(Menu menu) {
     if (menu.servings.isEmpty) return 1;
     final total = menu.servings['total'];
@@ -176,6 +213,11 @@ class _CookScreenState extends State<CookScreen> {
             tooltip: 'Refresh',
             onPressed: _loading ? null : _loadLatest,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Remove plan',
+            onPressed: (_loading || _latest == null) ? null : _deleteLatestDailyPlan,
+            icon: const Icon(Icons.delete_outline),
           ),
         ],
       ),

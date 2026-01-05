@@ -30,7 +30,9 @@ class PartySetupScreen extends StatefulWidget {
 class _PartySetupScreenState extends State<PartySetupScreen> {
   int _stepIndex = 0;
 
-  int _guestCount = 6;
+  int _child0To12 = 0;
+  int _teen13To17 = 0;
+  int _adult18Plus = 6;
   _MealTypeChoice _mealType = _MealTypeChoice.standard;
   _DietChoice _diet = _DietChoice.none;
 
@@ -102,9 +104,24 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
     });
   }
 
-  void _selectGuests(int count) {
+  int _totalGuests() => _child0To12 + _teen13To17 + _adult18Plus;
+
+  void _updateGuests({int? child0To12, int? teen13To17, int? adult18Plus}) {
     setState(() {
-      _guestCount = count;
+      if (child0To12 != null) _child0To12 = child0To12;
+      if (teen13To17 != null) _teen13To17 = teen13To17;
+      if (adult18Plus != null) _adult18Plus = adult18Plus;
+    });
+  }
+
+  void _nextFromGuests() {
+    if (_totalGuests() <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter at least 1 guest.')),
+      );
+      return;
+    }
+    setState(() {
       _stepIndex = 1;
     });
   }
@@ -215,11 +232,11 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
     final body = <String, dynamic>{
       'selected_cuisine': selectedCuisine,
       'party_settings': {
-        'guest_count': _guestCount,
+        'guest_count': _totalGuests(),
         'age_group_counts': {
-          'child_0_12': 0,
-          'teen_13_17': 0,
-          'adult_18_plus': _guestCount,
+          'child_0_12': _child0To12,
+          'teen_13_17': _teen13To17,
+          'adult_18_plus': _adult18Plus,
         },
       },
       'party_course_counts': _partyCourseCounts(),
@@ -304,7 +321,17 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
   Widget _buildStepBody(BuildContext context) {
     switch (_stepIndex) {
       case 0:
-        return _GuestsStep(onSelect: _selectGuests);
+        return _GuestsStep(
+          child0To12: _child0To12,
+          teen13To17: _teen13To17,
+          adult18Plus: _adult18Plus,
+          onChanged: (c, t, a) => _updateGuests(
+            child0To12: c,
+            teen13To17: t,
+            adult18Plus: a,
+          ),
+          onNext: _nextFromGuests,
+        );
       case 1:
         return _MealTypeStep(onSelect: _selectMealType);
       case 2:
@@ -322,9 +349,53 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
 }
 
 class _GuestsStep extends StatelessWidget {
-  final void Function(int) onSelect;
+  final int child0To12;
+  final int teen13To17;
+  final int adult18Plus;
+  final void Function(int child0To12, int teen13To17, int adult18Plus) onChanged;
+  final VoidCallback onNext;
 
-  const _GuestsStep({required this.onSelect});
+  const _GuestsStep({
+    required this.child0To12,
+    required this.teen13To17,
+    required this.adult18Plus,
+    required this.onChanged,
+    required this.onNext,
+  });
+
+  int get _total => child0To12 + teen13To17 + adult18Plus;
+
+  Widget _countRow({
+    required BuildContext context,
+    required String label,
+    required int value,
+    required VoidCallback? onDecrement,
+    required VoidCallback onIncrement,
+  }) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline),
+          onPressed: onDecrement,
+        ),
+        SizedBox(
+          width: 44,
+          child: Center(
+            child: Text(
+              '$value',
+              style: theme.textTheme.titleMedium,
+            ),
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add_circle_outline),
+          onPressed: onIncrement,
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -333,38 +404,50 @@ class _GuestsStep extends StatelessWidget {
       children: [
         SavoCard(
           elevated: true,
-          onTap: () => onSelect(4),
-          child: const Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.people_outline),
-              SizedBox(width: AppSpacing.md),
-              Expanded(child: Text('2–4 guests')),
+              _countRow(
+                context: context,
+                label: 'Kids (0–12)',
+                value: child0To12,
+                onDecrement: child0To12 > 0
+                    ? () => onChanged(child0To12 - 1, teen13To17, adult18Plus)
+                    : null,
+                onIncrement: () => onChanged(child0To12 + 1, teen13To17, adult18Plus),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              _countRow(
+                context: context,
+                label: 'Teens (13–17)',
+                value: teen13To17,
+                onDecrement: teen13To17 > 0
+                    ? () => onChanged(child0To12, teen13To17 - 1, adult18Plus)
+                    : null,
+                onIncrement: () => onChanged(child0To12, teen13To17 + 1, adult18Plus),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              _countRow(
+                context: context,
+                label: 'Adults (18+)',
+                value: adult18Plus,
+                onDecrement: adult18Plus > 0
+                    ? () => onChanged(child0To12, teen13To17, adult18Plus - 1)
+                    : null,
+                onIncrement: () => onChanged(child0To12, teen13To17, adult18Plus + 1),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'Total: $_total',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
             ],
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        SavoCard(
-          elevated: true,
-          onTap: () => onSelect(8),
-          child: const Row(
-            children: [
-              Icon(Icons.groups_outlined),
-              SizedBox(width: AppSpacing.md),
-              Expanded(child: Text('5–8 guests')),
-            ],
-          ),
-        ),
-        const SizedBox(height: AppSpacing.md),
-        SavoCard(
-          elevated: true,
-          onTap: () => onSelect(12),
-          child: const Row(
-            children: [
-              Icon(Icons.groups_2_outlined),
-              SizedBox(width: AppSpacing.md),
-              Expanded(child: Text('9–12 guests')),
-            ],
-          ),
+        FilledButton(
+          onPressed: _total > 0 ? onNext : null,
+          child: const Text('Continue'),
         ),
       ],
     );

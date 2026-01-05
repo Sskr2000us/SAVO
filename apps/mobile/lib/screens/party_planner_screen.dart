@@ -14,7 +14,6 @@ class PartyPlannerScreen extends StatefulWidget {
 }
 
 class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
-  int _guestCount = 10;
   int _child0To12 = 0;
   int _teen13To17 = 0;
   int _adult18Plus = 10;
@@ -41,8 +40,6 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
   String _planningGoal = 'balanced';
   bool _avoidWaste = false;
   bool _useLeftovers = true;
-
-  String? _validationError;
 
   @override
   void initState() {
@@ -74,35 +71,11 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
     setState(() => _loadingCuisines = false);
   }
 
-  void _validateAgeGroups() {
-    final sum = _child0To12 + _teen13To17 + _adult18Plus;
-    if (sum != _guestCount) {
-      _validationError = 'Age groups must sum to $_guestCount guests';
-    } else {
-      _validationError = null;
-    }
-  }
-
-  void _updateGuestCount(int newCount) {
-    setState(() {
-      _guestCount = newCount;
-      // Redistribute proportionally
-      final total = _child0To12 + _teen13To17 + _adult18Plus;
-      if (total > 0) {
-        _child0To12 = (_child0To12 * newCount / total).round();
-        _teen13To17 = (_teen13To17 * newCount / total).round();
-        _adult18Plus = newCount - _child0To12 - _teen13To17;
-      } else {
-        _adult18Plus = newCount;
-      }
-      _validateAgeGroups();
-    });
-  }
+  int _totalGuests() => _child0To12 + _teen13To17 + _adult18Plus;
 
   Future<void> _planParty() async {
-    _validateAgeGroups();
-    if (_validationError != null) {
-      _showError(_validationError!);
+    if (_totalGuests() <= 0) {
+      _showError('Please enter at least 1 guest');
       return;
     }
 
@@ -114,7 +87,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
       final body = <String, dynamic>{
         'selected_cuisine': _selectedCuisine,
         'party_settings': {
-          'guest_count': _guestCount,
+          'guest_count': _totalGuests(),
           'age_group_counts': {
             'child_0_12': _child0To12,
             'teen_13_17': _teen13To17,
@@ -281,44 +254,13 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Guest Count',
+                      'Guests',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Slider(
-                            value: _guestCount.toDouble(),
-                            min: 2,
-                            max: 80,
-                            divisions: 78,
-                            label: '$_guestCount guests',
-                            onChanged: (value) => _updateGuestCount(value.toInt()),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primaryContainer,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '$_guestCount',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer,
-                                ),
-                          ),
-                        ),
-                      ],
+                    const SizedBox(height: 12),
+                    Text(
+                      'Total: ${_totalGuests()} guests',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ],
                 ),
@@ -342,7 +284,6 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                       onChanged: (value) {
                         setState(() {
                           _child0To12 = value;
-                          _validateAgeGroups();
                         });
                       },
                     ),
@@ -353,7 +294,6 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                       onChanged: (value) {
                         setState(() {
                           _teen13To17 = value;
-                          _validateAgeGroups();
                         });
                       },
                     ),
@@ -364,7 +304,6 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
                       onChanged: (value) {
                         setState(() {
                           _adult18Plus = value;
-                          _validateAgeGroups();
                         });
                       },
                     ),
@@ -414,47 +353,27 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_validationError != null)
-              Card(
-                color: Colors.red[50],
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Row(
-                    children: [
-                      Icon(Icons.error, color: Colors.red[700]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _validationError!,
-                          style: TextStyle(color: Colors.red[700]),
-                        ),
+            Card(
+              color: Colors.green[50],
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green[700]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Total: ${_totalGuests()} guests',
+                        style: TextStyle(color: Colors.green[700]),
                       ),
-                    ],
-                  ),
-                ),
-              )
-            else
-              Card(
-                color: Colors.green[50],
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Row(
-                    children: [
-                      Icon(Icons.check_circle, color: Colors.green[700]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Total: ${_child0To12 + _teen13To17 + _adult18Plus} guests',
-                          style: TextStyle(color: Colors.green[700]),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
+            ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: (_planning || _validationError != null) ? null : _planParty,
+              onPressed: _planning ? null : _planParty,
               child: _planning
                   ? const SizedBox(
                       height: 20,

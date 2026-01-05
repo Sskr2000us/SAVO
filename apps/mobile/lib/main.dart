@@ -7,10 +7,11 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'screens/home_screen.dart';
 import 'screens/plan_screen.dart';
 import 'screens/cook_now_entry_screen.dart';
-import 'screens/pantry_overview_screen.dart';
+import 'screens/inventory_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
+import 'screens/account_settings_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/profile_service.dart';
@@ -139,7 +140,8 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     HomeScreen(),
     CookNowEntryScreen(),
     PlanScreen(),
-    PantryOverviewScreen(),
+    InventoryScreen(),
+    UserProfileScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -172,9 +174,14 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             label: 'Plan',
           ),
           NavigationDestination(
-            icon: Icon(Icons.kitchen_outlined),
-            selectedIcon: Icon(Icons.kitchen),
-            label: 'Pantry',
+            icon: Icon(Icons.inventory_2_outlined),
+            selectedIcon: Icon(Icons.inventory_2),
+            label: 'Inventory',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
           ),
         ],
       ),
