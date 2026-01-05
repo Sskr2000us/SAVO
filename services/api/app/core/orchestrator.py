@@ -6,8 +6,96 @@ from app.core.llm_client import get_llm_client, RateLimitException
 from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
 from app.core.schema_validation import validate_json, SchemaValidationException
 from app.core.settings import settings
+from app.core.recipe_validators import (
+    SemanticValidationException,
+    format_semantic_issues_for_prompt,
+    validate_menu_plan_semantics,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_dal_recipe(*, recipe: Dict[str, Any], course_header: str | None = None) -> bool:
+    try:
+        if isinstance(course_header, str) and course_header.strip().lower() == "dal":
+            return True
+    except Exception:
+        pass
+
+    rn = recipe.get("recipe_name")
+    name = ""
+    if isinstance(rn, dict):
+        name = str(rn.get("en") or "")
+        if not name.strip() and rn:
+            # Any available language
+            try:
+                name = str(next(iter(rn.values())))
+            except Exception:
+                name = ""
+    elif isinstance(rn, str):
+        name = rn
+
+    name_l = name.strip().lower()
+    if not name_l:
+        return False
+
+    # Basic word boundary check: 'dal' as a word or suffix like 'dal tadka'.
+    return bool(__import__("re").search(r"\bdal\b", name_l))
+
+
+def _dal_has_lentils_or_pulses(recipe: Dict[str, Any]) -> bool:
+    # Minimal keyword set. This is about dish correctness, not geography mapping.
+    lentil_keywords = {
+        "lentil",
+        "lentils",
+        "dal",
+        "dahl",
+        "toor",
+        "tuvar",
+        "moong",
+        "mung",
+        "masoor",
+        "urad",
+        "chana dal",
+        "split peas",
+        "pigeon pea",
+    }
+
+    def _names(list_value: Any) -> list[str]:
+        if not isinstance(list_value, list):
+            return []
+        out: list[str] = []
+        for it in list_value:
+            if isinstance(it, dict):
+                n = it.get("canonical_name") or it.get("name")
+                if isinstance(n, str) and n.strip():
+                    out.append(n.strip().lower())
+        return out
+
+    names = _names(recipe.get("ingredients_used")) + _names(recipe.get("new_ingredients_optional"))
+    joined = " | ".join(names)
+    if not joined:
+        return False
+    return any(k in joined for k in lentil_keywords)
+
+
+def _ensure_dal_includes_lentils(recipe: Dict[str, Any]) -> None:
+    if _dal_has_lentils_or_pulses(recipe):
+        return
+    existing = recipe.get("new_ingredients_optional")
+    if not isinstance(existing, list):
+        existing = []
+
+    # Add a single, minimal optional item. Amount/unit are best-effort defaults.
+    existing.append(
+        {
+            "canonical_name": "toor dal",
+            "amount": 200,
+            "unit": "g",
+            "reason": "Dal is lentil-based; add a pulse (e.g., toor/moong/masoor) as the main ingredient.",
+        }
+    )
+    recipe["new_ingredients_optional"] = existing
 
 
 def _get_menu_plan_recipe_options_min_items(schema: Dict[str, Any]) -> int:
@@ -64,9 +152,11 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
         for course in courses:
             if not isinstance(course, dict):
                 continue
+            course_header = course.get("course_header")
             recipe_options = course.get("recipe_options")
             if not isinstance(recipe_options, list):
                 continue
+
             if len(recipe_options) >= min_items:
                 continue
             if not recipe_options:
@@ -260,6 +350,18 @@ async def _try_provider(
             
             # Validate against schema
             validate_json(result, schema)
+
+            # Semantic/authenticity validation (fail closed): if it's structurally valid JSON
+            # but semantically invalid (e.g., "dal" without pulses), retry with targeted feedback.
+            if (
+                output_schema_name == "MENU_PLAN_SCHEMA"
+                and isinstance(result, dict)
+                and result.get("status") == "ok"
+            ):
+                semantic_issues = validate_menu_plan_semantics(result)
+                fatal = [i for i in semantic_issues if i.severity == "error"]
+                if fatal:
+                    raise SemanticValidationException(fatal)
             
             # Check if LLM itself returned an error status
             if isinstance(result, dict):
@@ -311,10 +413,33 @@ async def _try_provider(
                     f"Please generate a valid response that strictly matches the JSON schema. "
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
                     f"Do NOT include unexpected fields like 'questions'. Use needs_clarification_questions only. "
-                    f"For each recipe: youtube_references=[]; new_ingredients_optional=[]; steps length 1-2 with tips=[]; "
+                    f"For each recipe: youtube_references=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
                     f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will correct my response."})
+                messages.append({"role": "user", "content": correction})
+                continue
+
+        except SemanticValidationException as e:
+            last_error = f"Semantic validation failed: {len(e.issues)} issue(s)"
+            logger.warning(
+                f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}"
+            )
+
+            if attempt < max_retries:
+                issue_text = format_semantic_issues_for_prompt(e.issues)
+                correction = (
+                    "CORRECTION REQUIRED: Your previous response was schema-valid JSON, but the recipes are semantically invalid/untrustworthy. "
+                    "Fix the invalid recipes so they are authentic and logically correct (do not output junk).\n"
+                    "Issues found:\n"
+                    f"{issue_text}\n"
+                    "Requirements:\n"
+                    "- Keep the SAME JSON schema and required keys.\n"
+                    "- For dish names like dal/biryani/roti/poha/upma/idli/dosa/khichdi: ensure the core base ingredient is present.\n"
+                    "- If an ingredient is missing from pantry, put it in new_ingredients_optional with a short reason; do not pretend it's in pantry.\n"
+                    "- Keep output concise (minified JSON; short text fields) to avoid truncation."
+                )
+                messages.append({"role": "assistant", "content": "I will regenerate authentic, valid recipes."})
                 messages.append({"role": "user", "content": correction})
                 continue
                 
@@ -327,7 +452,7 @@ async def _try_provider(
                     f"CORRECTION REQUIRED: Your previous response was not valid JSON. "
                     f"Error: {str(e)}. Please return ONLY valid JSON matching the schema. "
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
-                    f"For each recipe: youtube_references=[]; new_ingredients_optional=[]; steps length 1-2 with tips=[]; "
+                    f"For each recipe: youtube_references=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
                     f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will return valid JSON."})
@@ -349,7 +474,7 @@ async def _try_provider(
                         "Return a STRICTLY schema-valid JSON response, but make it MUCH smaller: "
                         "use the minimum number of items needed; keep all free-text fields short; "
                         "for each recipe keep steps to 1-2 items and tips=[]; youtube_references=[]; "
-                        "new_ingredients_optional=[]; leftover_forecast.reuse_ideas=[]. "
+                        "new_ingredients_optional max 3 items (only truly needed); leftover_forecast.reuse_ideas=[]. "
                         "IMPORTANT: Use minified JSON (no newlines) and do NOT include any extra keys."
                     )
                     messages.append({"role": "assistant", "content": "I will return a shorter, schema-valid response."})

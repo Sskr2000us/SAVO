@@ -250,6 +250,21 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     }
     buffer.writeln('');
 
+    if (recipe.newIngredientsOptional.isNotEmpty) {
+      buffer.writeln('### Missing / Optional Additions');
+      for (final ing in recipe.newIngredientsOptional) {
+        final name = _titleCaseWords(ing.canonicalName.trim().isEmpty ? 'Ingredient' : ing.canonicalName);
+        final unit = ing.unit.trim();
+        final amount = _formatAmount(ing.amount * scalingFactor);
+        final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
+        final reason = ing.reason.trim();
+        buffer.writeln(
+          '- **$name:** $qty${reason.isNotEmpty ? ' _(Reason: $reason)_' : ''}',
+        );
+      }
+      buffer.writeln('');
+    }
+
     buffer.writeln('### Instructions (English)');
     for (var i = 0; i < recipe.steps.length; i++) {
       final stepText = recipe.steps[i].getLocalizedInstruction('en').trim();

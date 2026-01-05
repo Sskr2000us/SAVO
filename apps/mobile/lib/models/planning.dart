@@ -93,6 +93,7 @@ class Recipe {
   final EstimatedTimes estimatedTimes;
   final String cookingMethod;
   final List<RecipeIngredient> ingredientsUsed;
+  final List<NewIngredientOptional> newIngredientsOptional;
   final List<RecipeStep> steps;
   final Map<String, dynamic> nutritionPerServing;
   final List<Map<String, String>>? healthBenefits;
@@ -110,6 +111,7 @@ class Recipe {
     required this.estimatedTimes,
     required this.cookingMethod,
     required this.ingredientsUsed,
+    this.newIngredientsOptional = const [],
     required this.steps,
     required this.nutritionPerServing,
     this.healthBenefits,
@@ -175,6 +177,11 @@ class Recipe {
               ?.map((i) => RecipeIngredient.fromJson(i))
               .toList() ??
           [],
+      newIngredientsOptional: (json['new_ingredients_optional'] as List?)
+              ?.whereType<Map>()
+              .map((i) => NewIngredientOptional.fromJson(Map<String, dynamic>.from(i)))
+              .toList() ??
+          const [],
       steps: (json['steps'] as List?)
               ?.map((s) => RecipeStep.fromJson(s))
               .toList() ??
@@ -215,6 +222,7 @@ class Recipe {
       'estimated_times': estimatedTimes.toJson(),
       'cooking_method': cookingMethod,
       'ingredients_used': ingredientsUsed.map((i) => i.toJson()).toList(),
+      'new_ingredients_optional': newIngredientsOptional.map((i) => i.toJson()).toList(),
       'steps': steps.map((s) => s.toJson()).toList(),
       'nutrition_per_serving': nutritionPerServing,
       if (healthBenefits != null) 'health_benefits': healthBenefits,
@@ -223,6 +231,38 @@ class Recipe {
       if (culturalContext != null) 'cultural_context': culturalContext,
       if (dietaryInformation != null) 'dietary_information': dietaryInformation,
       'youtube_references': youtubeReferences.map((r) => r.toJson()).toList(),
+    };
+  }
+}
+
+class NewIngredientOptional {
+  final String canonicalName;
+  final double amount;
+  final String unit;
+  final String reason;
+
+  NewIngredientOptional({
+    required this.canonicalName,
+    required this.amount,
+    required this.unit,
+    required this.reason,
+  });
+
+  factory NewIngredientOptional.fromJson(Map<String, dynamic> json) {
+    return NewIngredientOptional(
+      canonicalName: (json['canonical_name'] ?? '').toString(),
+      amount: (json['amount'] ?? 0).toDouble(),
+      unit: (json['unit'] ?? '').toString(),
+      reason: (json['reason'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'canonical_name': canonicalName,
+      'amount': amount,
+      'unit': unit,
+      'reason': reason,
     };
   }
 }

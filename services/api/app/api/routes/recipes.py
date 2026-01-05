@@ -62,6 +62,20 @@ def _recipe_schema() -> dict[str, Any]:
                     "additionalProperties": False,
                 },
             },
+                "new_ingredients_optional": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "canonical_name": {"type": "string"},
+                            "amount": {"type": "number"},
+                            "unit": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["canonical_name", "amount", "unit", "reason"],
+                        "additionalProperties": False,
+                    },
+                },
             "steps": {
                 "type": "array",
                 "items": {
