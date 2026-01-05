@@ -749,7 +749,7 @@ async def scan_receipt(
         db = get_db_client()
         normalizer = get_normalizer()
 
-        # Use a receipt_id as an event id for last_seen_scan_id.
+        # Receipt event id (not persisted to last_seen_scan_id because that FK targets ingredient_scans).
         receipt_id = str(uuid4())
         now_iso = datetime.utcnow().isoformat()
 
@@ -871,7 +871,6 @@ async def scan_receipt(
                     "source": "receipt",
                     "is_current": True,
                     "last_seen_at": now_iso,
-                    "last_seen_scan_id": receipt_id,
                 }
                 if image_url and not existing_item.get("image_url"):
                     update_payload["image_url"] = image_url
@@ -908,7 +907,6 @@ async def scan_receipt(
                             "image_url": image_url,
                             "is_current": True,
                             "last_seen_at": now_iso,
-                            "last_seen_scan_id": receipt_id,
                         }
                     )
                     added_count += 1
@@ -928,7 +926,6 @@ async def scan_receipt(
                         "image_url": image_url,
                         "is_current": True,
                         "last_seen_at": now_iso,
-                        "last_seen_scan_id": receipt_id,
                     }
                 )
                 added_count += 1
