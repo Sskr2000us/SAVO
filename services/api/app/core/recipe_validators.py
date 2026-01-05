@@ -277,6 +277,96 @@ def validate_menu_plan_semantics(payload: Dict[str, Any]) -> List[SemanticIssue]
     return issues
 
 
+def validate_menu_plan_structure_against_metadata(
+    *,
+    payload: Dict[str, Any],
+    task_name: str,
+) -> List[SemanticIssue]:
+    """Deterministic cuisine alignment checks using CUISINE_METADATA.
+
+    This avoids geography tables: it only enforces the chosen cuisine's declared
+    course structure (daily/party) and course header consistency.
+    """
+
+    issues: List[SemanticIssue] = []
+    selected = payload.get("selected_cuisine")
+    if not isinstance(selected, str) or not selected.strip() or selected.strip().lower() in {"unknown", "auto"}:
+        return issues
+
+    selected_key = selected.strip().lower()
+    try:
+        from app.core.cuisine_metadata import CUISINE_METADATA
+
+        meta = CUISINE_METADATA.get(selected_key)
+    except Exception:
+        meta = None
+
+    if not isinstance(meta, dict):
+        return issues
+
+    expected_headers: List[str] = []
+    if "party" in task_name:
+        expected_headers = meta.get("party_structure") or []
+    else:
+        # Default to daily structure for daily + weekly.
+        expected_headers = meta.get("daily_structure") or []
+
+    if not isinstance(expected_headers, list):
+        expected_headers = []
+    expected_headers = [str(h) for h in expected_headers if isinstance(h, str) and h.strip()]
+
+    menu_headers = payload.get("menu_headers")
+    if expected_headers and isinstance(menu_headers, list):
+        got_headers = [str(h) for h in menu_headers if isinstance(h, str) and h.strip()]
+        if got_headers and got_headers != expected_headers:
+            issues.append(
+                SemanticIssue(
+                    severity="error",
+                    code="MENU_HEADERS_MISMATCH",
+                    message=(
+                        f"menu_headers do not match CUISINE_METADATA[{selected_key}] structure. "
+                        f"Expected={expected_headers} Got={got_headers}"
+                    ),
+                    path="menu_headers",
+                )
+            )
+
+    # Course headers should align to one of the menu headers (or prefixed versions like "Appetizers 1").
+    allowed_prefixes = set(expected_headers)
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not allowed_prefixes:
+        return issues
+
+    for mi, menu in enumerate(menus):
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for ci, course in enumerate(courses):
+            if not isinstance(course, dict):
+                continue
+            ch = course.get("course_header")
+            if not isinstance(ch, str) or not ch.strip():
+                continue
+            header = ch.strip()
+            ok = header in allowed_prefixes or any(header.startswith(f"{p} ") for p in allowed_prefixes)
+            if not ok:
+                issues.append(
+                    SemanticIssue(
+                        severity="error",
+                        code="COURSE_HEADER_NOT_IN_STRUCTURE",
+                        message=(
+                            f"course_header '{header}' is not part of the selected cuisine structure. "
+                            f"Allowed prefixes={sorted(allowed_prefixes)}"
+                        ),
+                        path=f"menus[{mi}].courses[{ci}].course_header",
+                    )
+                )
+
+    return issues
+
+
 def format_semantic_issues_for_prompt(issues: Sequence[SemanticIssue], *, max_items: int = 8) -> str:
     # Keep it short to reduce truncation risk.
     lines: List[str] = []

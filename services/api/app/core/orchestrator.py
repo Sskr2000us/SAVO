@@ -10,6 +10,7 @@ from app.core.recipe_validators import (
     SemanticValidationException,
     format_semantic_issues_for_prompt,
     validate_menu_plan_semantics,
+    validate_menu_plan_structure_against_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -323,7 +324,12 @@ def _authenticity_judge_schema() -> Dict[str, Any]:
     }
 
 
-def _build_authenticity_judge_messages(*, task_name: str, plan_payload: Dict[str, Any]) -> list[dict[str, str]]:
+def _build_authenticity_judge_messages(
+    *,
+    task_name: str,
+    plan_payload: Dict[str, Any],
+    meal_type: Optional[str] = None,
+) -> list[dict[str, str]]:
     # Keep this small to reduce truncation risk.
     plan_json = json.dumps(plan_payload, ensure_ascii=False)
     system = (
@@ -332,15 +338,41 @@ def _build_authenticity_judge_messages(*, task_name: str, plan_payload: Dict[str
         "Be conservative: if unsure, flag issues rather than approving. "
         "Return ONLY valid JSON matching the provided schema."
     )
+    selected = plan_payload.get("selected_cuisine")
+    selected_key = selected.strip().lower() if isinstance(selected, str) else ""
+    meta_brief = {}
+    if selected_key:
+        try:
+            from app.core.cuisine_metadata import CUISINE_METADATA
+
+            m = CUISINE_METADATA.get(selected_key)
+            if isinstance(m, dict):
+                meta_brief = {
+                    "name": m.get("name"),
+                    "daily_structure": m.get("daily_structure"),
+                    "party_structure": m.get("party_structure"),
+                    "characteristics": m.get("characteristics"),
+                    "keywords": m.get("keywords"),
+                }
+        except Exception:
+            meta_brief = {}
+
+    meal_line = f"MEAL_TYPE={meal_type.strip().lower()}\n" if isinstance(meal_type, str) and meal_type.strip() else ""
+
     user = (
         f"TASK={task_name}\n"
-        "Evaluate MENU_PLAN payload for authenticity and validity.\n"
+        f"{meal_line}"
+        "Evaluate MENU_PLAN payload for authenticity and cuisine alignment.\n"
+        "Selected cuisine is payload.selected_cuisine; you must enforce that dishes, course headers, and menu headers match CUISINE_METADATA for that cuisine.\n"
         "Rules:\n"
-        "- If a dish name implies a base (e.g., dal requires pulses/lentils; biryani requires rice; roti/chapati requires atta; idli/dosa requires batter base).\n"
-        "- Ingredients should match the dish; avoid nonsense like spices being treated as the base ingredient.\n"
-        "- Steps must be plausible and not empty.\n"
-        "- If missing ingredients are required, they must appear in new_ingredients_optional with a reason; do not pretend they exist in pantry.\n"
+        "- Cuisine alignment: dishes should fit the selected cuisine's characteristics/keywords; avoid cross-cuisine mashups unless clearly labeled and appropriate.\n"
+        "- Course structure: menu_headers and course_header should align with CUISINE_METADATA[selected_cuisine].daily_structure/party_structure.\n"
+        "- Base-ingredient realism: dal requires pulses/lentils; biryani requires rice; roti/chapati requires atta; idli/dosa requires batter base; etc.\n"
+        "- Ingredients must match dish; spices cannot be the main base ingredient.\n"
+        "- Steps must be plausible and non-empty.\n"
+        "- Missing required ingredients must go in new_ingredients_optional with a reason; do not pretend they exist in pantry.\n"
         "Output issues[] with a JSON pointer-ish path into the payload when possible.\n"
+        f"CUISINE_METADATA_BRIEF={json.dumps(meta_brief, ensure_ascii=False)}\n"
         f"PLAN_JSON={plan_json}"
     )
     return [
@@ -376,7 +408,8 @@ async def run_task(
         schema=schema,
         task_name=task_name,
         output_schema_name=output_schema_name,
-        max_retries=max_retries
+        max_retries=max_retries,
+        context=context,
     )
     
     return result
@@ -389,7 +422,8 @@ async def _try_provider(
     schema: dict[str, Any],
     task_name: str,
     output_schema_name: str,
-    max_retries: int
+    max_retries: int,
+    context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Try a specific LLM provider with schema validation and retry logic.
@@ -418,14 +452,19 @@ async def _try_provider(
                 and result.get("status") == "ok"
             ):
                 semantic_issues = validate_menu_plan_semantics(result)
+                semantic_issues.extend(
+                    validate_menu_plan_structure_against_metadata(payload=result, task_name=task_name)
+                )
                 fatal = [i for i in semantic_issues if i.severity == "error"]
                 if fatal:
                     raise SemanticValidationException(fatal)
 
                 if settings.enable_authenticity_judge:
+                    meal_type = context.get("meal_type") if isinstance(context, dict) else None
                     judge_messages = _build_authenticity_judge_messages(
                         task_name=task_name,
                         plan_payload=result,
+                        meal_type=meal_type if isinstance(meal_type, str) else None,
                     )
                     judge_schema = _authenticity_judge_schema()
                     judge = await client.generate_json(messages=judge_messages, schema=judge_schema)
