@@ -645,6 +645,9 @@ async def _try_provider(
                     messages.append({"role": "assistant", "content": "I will return a shorter, schema-valid response."})
                     messages.append({"role": "user", "content": correction})
                     continue
+
+                # Final attempt exhausted: do not crash the API. Return an error-shaped response.
+                break
             raise
                 
         except Exception as e:

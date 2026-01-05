@@ -13,6 +13,31 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _schema_brief(schema: dict[str, Any]) -> str:
+    """Create a compact, human-readable schema hint.
+
+    Avoid embedding full JSON Schema (can be very large and slow).
+    """
+    try:
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        required = schema.get("required") if isinstance(schema, dict) else None
+        if not isinstance(props, dict):
+            props = {}
+        if not isinstance(required, list):
+            required = []
+
+        # Keep it small: top-level required keys + a few key sub-structures.
+        top = [k for k in required if isinstance(k, str)]
+        if not top:
+            top = list(props.keys())[:16]
+
+        return (
+            "Top-level required keys: " + ", ".join(top[:24])
+        )
+    except Exception:
+        return "Return a JSON object matching the expected schema."
+
+
 def _parse_json_from_text(text: str) -> Any:
     """Best-effort JSON extraction from model output.
 
@@ -79,33 +104,66 @@ class OpenAIClient(LlmClient):
         
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")  # Updated to gpt-4o (current model)
         self.vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")  # gpt-4o has best vision + text reading
-        self.timeout = timeout  # Increased timeout for large responses
+        env_timeout = os.getenv("OPENAI_TIMEOUT_SECONDS")
+        if env_timeout and str(env_timeout).strip().isdigit():
+            timeout = int(str(env_timeout).strip())
+
+        # Default is intentionally generous; party planning can be slow.
+        if timeout < 120:
+            timeout = 120
+
+        self.timeout = timeout
         self.base_url = "https://api.openai.com/v1"
         self.json_max_output_tokens = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "8192"))
     
     async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON using OpenAI with structured output"""
-        
-        # Inject schema into messages for better adherence
+
+        # Keep instructions compact. Dumping full JSON Schema is huge and increases latency.
         schema_instruction = {
             "role": "system",
             "content": (
-                f"You MUST return a JSON object that EXACTLY matches this schema structure. "
-                f"All field names, types, and nesting must be EXACTLY as specified:\n\n"
-                f"{json.dumps(schema, separators=(",", ":"), ensure_ascii=False)}\n\n"
-                f"CRITICAL RULES:\n"
-                f"- Use EXACT field names from schema (e.g., 'total_calories_kcal' not 'total_calories')\n"
-                f"- If schema says 'array', return [], not an object\n"
-                f"- Include ALL required properties\n"
-                f"- Do NOT add extra properties not in schema\n"
-                f"- Match types exactly (string, number, boolean, array, object)"
-            )
+                "Return ONLY a single JSON object (no markdown, no explanations). "
+                "Do not add extra keys. Ensure required keys exist and types match. "
+                "Use concise text fields to avoid truncation. "
+                + _schema_brief(schema)
+            ),
         }
+
+        # Party menus can easily exceed token limits if verbose.
+        mode_hint = _infer_menu_mode(messages)
+        party_concise = None
+        if mode_hint == "party":
+            party_concise = {
+                "role": "system",
+                "content": (
+                    "CONCISENESS RULES (party): keep strings short; avoid long cultural narratives; "
+                    "limit recipe steps to a small number; do not repeat the same details across dishes; "
+                    "use minimal but sufficient ingredient lists and tips."
+                ),
+            }
         
         # Insert schema instruction after system message
-        enhanced_messages = [messages[0], schema_instruction] + messages[1:]
+        enhanced_messages = [messages[0], schema_instruction]
+        if party_concise is not None:
+            enhanced_messages.append(party_concise)
+        enhanced_messages.extend(messages[1:])
+
+        # Allow party-specific override for output tokens.
+        max_tokens = self.json_max_output_tokens
+        party_override = os.getenv("OPENAI_PARTY_JSON_MAX_TOKENS")
+        if mode_hint == "party" and party_override and str(party_override).strip().isdigit():
+            max_tokens = max(max_tokens, int(str(party_override).strip()))
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        timeout = httpx.Timeout(
+            self.timeout,
+            connect=min(10, self.timeout),
+            read=self.timeout,
+            write=min(30, self.timeout),
+            pool=min(10, self.timeout),
+        )
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             # Retry logic for rate limits
             max_retries = 3
             for attempt in range(max_retries):
@@ -121,7 +179,7 @@ class OpenAIClient(LlmClient):
                             "messages": enhanced_messages,
                             "response_format": {"type": "json_object"},
                             "temperature": 0.5,  # Lower temperature = faster, more deterministic
-                            "max_tokens": self.json_max_output_tokens,
+                            "max_tokens": max_tokens,
                         }
                     )
                     
