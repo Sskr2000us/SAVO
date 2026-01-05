@@ -63,10 +63,10 @@ class Settings(BaseModel):
     prompt_pack_path: str = os.getenv("SAVO_PROMPT_PACK_PATH", _default_prompt_pack_path())
 
     # Second-tier trust guardrail: ask an LLM judge to sanity-check authenticity/realism.
-    # Keep default off to avoid surprises in production; enable explicitly when ready.
+    # Default ON (trust-first): reject and regenerate semantically invalid / inauthentic plans.
     enable_authenticity_judge: bool = os.getenv(
         "SAVO_ENABLE_AUTHENTICITY_JUDGE",
-        "false",
+        "true",
     ).lower() == "true"
 
     # If true, any judge-reported issues will force a regenerate (fail-closed).

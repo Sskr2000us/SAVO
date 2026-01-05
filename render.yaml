@@ -14,6 +14,10 @@ services:
     envVars:
       - key: SAVO_PROMPT_PACK_PATH
         value: ../../docs/spec/prompt-pack.gpt-5.2.json
+      - key: SAVO_ENABLE_AUTHENTICITY_JUDGE
+        value: "true"
+      - key: SAVO_AUTHENTICITY_JUDGE_FAIL_CLOSED
+        value: "true"
       # Dual-Provider Architecture (optimized for quality and cost):
       # - Vision tasks (image scanning): Google Gemini Vision
       # - Reasoning tasks (planning, recipes): OpenAI GPT for structured outputs
