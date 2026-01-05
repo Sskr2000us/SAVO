@@ -59,6 +59,71 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     }
   }
 
+  String? _currentPlanDateIso() {
+    try {
+      for (final menu in widget.menuPlan.menus) {
+        final raw = menu.date;
+        if (raw == null) continue;
+        final s = raw.toString().trim();
+        if (s.isEmpty) continue;
+        // Normalize to yyyy-MM-dd.
+        if (s.length >= 10) return s.substring(0, 10);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _deleteSavedPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove plan'),
+        content: const Text('Remove the saved plan so you can generate a new one?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final planType = widget.planType.trim().isEmpty ? 'daily' : widget.planType.trim();
+
+      String url = '/plan/latest?plan_type=$planType';
+      if (planType == 'daily') {
+        final planDate = _currentPlanDateIso();
+        if (planDate != null && planDate.isNotEmpty) {
+          url = '$url&plan_date=$planDate';
+        }
+      }
+
+      await apiClient.delete(url);
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Plan removed.')),
+      );
+
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove plan: $e')),
+      );
+    }
+  }
+
   int _extractServings(Menu menu) {
     if (menu.servings.isEmpty) return 1;
     final total = menu.servings['total'];
@@ -410,6 +475,11 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
       appBar: AppBar(
         title: Text(_getPlanTitle()),
         actions: [
+          IconButton(
+            tooltip: 'Remove plan',
+            onPressed: widget.menuPlan.status == 'ok' ? _deleteSavedPlan : null,
+            icon: const Icon(Icons.delete_outline),
+          ),
           if (!_loadingCuisines && _cuisines.isNotEmpty)
             PopupMenuButton<String>(
               icon: const Icon(Icons.restaurant),
