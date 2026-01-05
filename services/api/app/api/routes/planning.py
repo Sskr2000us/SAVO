@@ -1591,6 +1591,18 @@ async def post_daily(
                 user_confidence=user_confidence,
                 meal_type=req.meal_type or "dinner"
             )
+
+    # Defensive: schema requires clarification details when status=needs_clarification.
+    if isinstance(result, dict):
+        status_val = result.get("status")
+        if status_val == "needs_clarification":
+            questions = result.get("needs_clarification_questions")
+            has_questions = isinstance(questions, list) and any(str(q).strip() for q in questions)
+            if not has_questions and not (result.get("error_message") or "").strip():
+                result["error_message"] = "More information is needed to generate a plan."
+        elif status_val == "error":
+            if not (result.get("error_message") or "").strip():
+                result["error_message"] = "Planning failed. Please try again."
     
     return MenuPlanResponse(**result)
 

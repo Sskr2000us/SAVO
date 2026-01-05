@@ -6,8 +6,7 @@ Endpoints for pantry/fridge scanning with Vision AI
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import Any, List, Dict, Optional
 from uuid import UUID, uuid4
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import logging
 import io
@@ -114,11 +113,24 @@ def _assess_image_quality(image_data: bytes) -> Dict[str, Any]:
     }
 
 
-def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
-    if not ts:
+def _parse_ts(ts: Any) -> Optional[datetime]:
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        dt = ts
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    if not isinstance(ts, str):
+        return None
+    raw = ts.strip()
+    if not raw:
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -141,9 +153,20 @@ def _inventory_status(
     if item.get("is_current") is False:
         return "inactive"
 
+    # Defensive: normalize to tz-aware UTC so date math never fails.
+    if isinstance(now, datetime) and now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    elif isinstance(now, datetime) and now.tzinfo is not None:
+        now = now.astimezone(timezone.utc)
+
     seen_at = _effective_seen_at(item)
     if not seen_at:
         return "maybe"
+
+    if seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=timezone.utc)
+    else:
+        seen_at = seen_at.astimezone(timezone.utc)
 
     age_days = (now - seen_at).days
     if stale_days > 0 and age_days >= stale_days:
@@ -1344,7 +1367,7 @@ async def get_user_pantry(
     try:
         db = get_db_client()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Canonical inventory is inventory_items; expose a backward-compatible pantry shape.
         items = (
@@ -1402,7 +1425,7 @@ async def pantry_weekly_cleanup(
             raise HTTPException(status_code=400, detail="stale_days must be > 0")
 
         db = get_db_client()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(days=stale_days)).isoformat()
 
         # Best-effort bulk update. Some rows may lack last_seen_at; handle those via a second pass.
@@ -1466,7 +1489,7 @@ async def pantry_summary(
     """
     try:
         db = get_db_client()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         items = (
             db.table("inventory_items")
