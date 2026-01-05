@@ -789,6 +789,41 @@ async def scan_receipt(
 
         from app.core.unit_converter import UnitConverter
 
+        def _is_source_check_violation(err: Exception) -> bool:
+            payload = None
+            if getattr(err, "args", None) and isinstance(err.args[0], dict):
+                payload = err.args[0]
+            if isinstance(payload, dict):
+                if payload.get("code") != "23514":
+                    return False
+                text = f"{payload.get('message', '')} {payload.get('details', '')}"
+                return "inventory_items_source_check" in text
+            # Fallback string match (covers wrapped exceptions)
+            text = str(err)
+            return "inventory_items_source_check" in text and "23514" in text
+
+        def _safe_update_inventory(item_id: str, payload: Dict) -> None:
+            try:
+                db.table("inventory_items").update(payload).eq("id", item_id).execute()
+            except Exception as e:
+                if _is_source_check_violation(e) and "source" in payload:
+                    payload2 = dict(payload)
+                    payload2.pop("source", None)
+                    db.table("inventory_items").update(payload2).eq("id", item_id).execute()
+                    return
+                raise
+
+        def _safe_insert_inventory(payload: Dict) -> None:
+            try:
+                db.table("inventory_items").insert(payload).execute()
+            except Exception as e:
+                if _is_source_check_violation(e) and payload.get("source") == "receipt":
+                    payload2 = dict(payload)
+                    payload2["source"] = "import"
+                    db.table("inventory_items").insert(payload2).execute()
+                    return
+                raise
+
         for item in analysis.get("items", []):
             canonical = (item.get("canonical_name") or "").strip()
             if not canonical:
@@ -847,7 +882,7 @@ async def scan_receipt(
                     update_payload.update({"quantity": merged_qty, "unit": merged_unit})
                     if confidence_f is not None:
                         update_payload["scan_confidence"] = confidence_f
-                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    _safe_update_inventory(existing_item["id"], update_payload)
                     updated_count += 1
                 elif UnitConverter.can_convert(incoming_unit, existing_unit):
                     converted = UnitConverter.convert(incoming_qty_f, incoming_unit, existing_unit)
@@ -856,37 +891,10 @@ async def scan_receipt(
                     update_payload.update({"quantity": merged_qty, "unit": merged_unit})
                     if confidence_f is not None:
                         update_payload["scan_confidence"] = confidence_f
-                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    _safe_update_inventory(existing_item["id"], update_payload)
                     updated_count += 1
                 else:
-                    created = (
-                        db.table("inventory_items")
-                        .insert(
-                            {
-                                "user_id": user_id,
-                                "canonical_name": canonical,
-                                "display_name": _titleize(canonical),
-                                "quantity": incoming_qty_f,
-                                "unit": incoming_unit,
-                                "storage_location": storage,
-                                "item_state": item_state,
-                                "source": "receipt",
-                                "scan_confidence": confidence_f,
-                                "image_url": image_url,
-                                "is_current": True,
-                                "last_seen_at": now_iso,
-                                "last_seen_scan_id": receipt_id,
-                            }
-                        )
-                        .execute()
-                    )
-                    _ = created.data[0] if created.data else None
-                    added_count += 1
-
-            else:
-                created = (
-                    db.table("inventory_items")
-                    .insert(
+                    _safe_insert_inventory(
                         {
                             "user_id": user_id,
                             "canonical_name": canonical,
@@ -903,9 +911,26 @@ async def scan_receipt(
                             "last_seen_scan_id": receipt_id,
                         }
                     )
-                    .execute()
+                    added_count += 1
+
+            else:
+                _safe_insert_inventory(
+                    {
+                        "user_id": user_id,
+                        "canonical_name": canonical,
+                        "display_name": _titleize(canonical),
+                        "quantity": incoming_qty_f,
+                        "unit": incoming_unit,
+                        "storage_location": storage,
+                        "item_state": item_state,
+                        "source": "receipt",
+                        "scan_confidence": confidence_f,
+                        "image_url": image_url,
+                        "is_current": True,
+                        "last_seen_at": now_iso,
+                        "last_seen_scan_id": receipt_id,
+                    }
                 )
-                _ = created.data[0] if created.data else None
                 added_count += 1
 
             pantry_items.append(
