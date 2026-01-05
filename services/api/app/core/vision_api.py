@@ -174,7 +174,7 @@ class VisionAPIClient:
             except Exception:
                 processed_image_data = image_data
 
-                        prompt = """You are an expert receipt-parsing AI for SAVO, a cooking assistant app.
+            prompt = """You are an expert receipt-parsing AI for SAVO, a cooking assistant app.
 
 TASK: Read this grocery receipt image and extract ALL line-items that look like grocery/food products.
 
