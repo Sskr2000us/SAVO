@@ -1598,8 +1598,22 @@ async def post_daily(
         if status_val == "needs_clarification":
             questions = result.get("needs_clarification_questions")
             has_questions = isinstance(questions, list) and any(str(q).strip() for q in questions)
-            if not has_questions and not (result.get("error_message") or "").strip():
-                result["error_message"] = "More information is needed to generate a plan."
+            if not has_questions:
+                # Try common alternate fields from upstream generators.
+                single = None
+                for key in ("clarification_question", "clarification", "message"):
+                    v = result.get(key)
+                    if isinstance(v, str) and v.strip():
+                        single = v.strip()
+                        break
+
+                if single:
+                    result["needs_clarification_questions"] = [single]
+                    if not (result.get("error_message") or "").strip():
+                        result["error_message"] = single
+                elif not (result.get("error_message") or "").strip():
+                    # Keep this consistent with the Pydantic model's fallback.
+                    result["error_message"] = "Planning requires additional information."
         elif status_val == "error":
             if not (result.get("error_message") or "").strip():
                 result["error_message"] = "Planning failed. Please try again."
@@ -1678,6 +1692,7 @@ def _is_dinner_time(time_str: str, meal_times: dict) -> bool:
 async def post_party(
     req: PartyPlanRequest,
     user_id: str = Depends(get_current_user),
+    force_regenerate: bool = False,
 ):
     """Generate party meal plan with age-aware constraints"""
     # Validate party settings (Pydantic already validated, but double-check)
@@ -1705,6 +1720,18 @@ async def post_party(
 
     household = (full_profile.get("household") or full_profile.get("profile") or {}) if isinstance(full_profile, dict) else {}
 
+    members = full_profile.get("members") if isinstance(full_profile, dict) else []
+    members = members if isinstance(members, list) else []
+    normalized_members: List[Dict[str, Any]] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        # Ensure allergens key exists (Golden Rule requires explicit declaration)
+        if "allergens" not in m:
+            m = {**m, "allergens": []}
+        normalized_members.append(m)
+    profile_dict = {"household": household, "members": normalized_members}
+
     # Cuisine preferences: request takes precedence; otherwise fallback to DB household favorites.
     if not getattr(req, "cuisine_preferences", None):
         db_favs = household.get("favorite_cuisines") or household.get("favoriteCuisines")
@@ -1713,6 +1740,80 @@ async def post_party(
     req.cuisine_preferences = _normalize_cuisine_preferences(getattr(req, "cuisine_preferences", None))
 
     inventory_models = _db_inventory_to_models(db_inventory)
+    inventory_hash = _inventory_snapshot_hash(inventory_models)
+
+    # GOLDEN RULE: avoid expensive generation if safety-critical profile fields are missing.
+    golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
+    if not golden_check["can_proceed"]:
+        logger.warning(
+            "Golden Rule blocked /plan/party user_id=%s action=%s missing_fields=%s members_count=%s message=%s",
+            user_id,
+            golden_check.get("action"),
+            golden_check.get("missing_fields"),
+            len(normalized_members),
+            golden_check.get("message"),
+        )
+        return MenuPlanResponse(
+            status="needs_clarification",
+            needs_clarification_questions=[golden_check["message"]],
+            error_message=golden_check.get("message", "Profile incomplete"),
+            selected_cuisine="unknown",
+            menu_headers=[],
+            menus=[],
+            variety_log={"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
+            nutrition_summary={"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
+            waste_summary={
+                "expiring_items_used": [],
+                "waste_reduction_score": 0,
+                "waste_avoided_value_estimate": {"currency": "USD", "value": 0},
+            },
+            shopping_suggestions=[],
+        )
+
+    # Reuse an existing saved party plan for today unless request/inventory changed.
+    # Party planning is expensive; caching avoids repeated long generations on web.
+    plan_date = date.today()
+    try:
+        request_fingerprint = {
+            "selected_cuisine": getattr(req, "selected_cuisine", None),
+            "cuisine_preferences": getattr(req, "cuisine_preferences", None),
+            "party_settings": req.party_settings.model_dump() if getattr(req, "party_settings", None) else None,
+            "party_course_counts": req.party_course_counts.model_dump() if getattr(req, "party_course_counts", None) else None,
+            "planning_goal": getattr(req, "planning_goal", None),
+            "avoid_waste": getattr(req, "avoid_waste", None),
+            "use_leftovers": getattr(req, "use_leftovers", None),
+            "measurement_system": getattr(req, "measurement_system", None),
+            "output_language": getattr(req, "output_language", None),
+            "output_languages": getattr(req, "output_languages", None),
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(request_fingerprint, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+    except Exception:
+        request_hash = ""
+
+    if not force_regenerate:
+        try:
+            existing = await get_meal_plan_for_date(
+                user_id,
+                plan_date=plan_date,
+                plan_type="party",
+                meal_type=None,
+            )
+        except Exception:
+            existing = None
+
+        if isinstance(existing, dict):
+            existing_payload = existing.get("recipes")
+            if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+                existing_inv_hash = existing_payload.get("_inventory_hash")
+                if isinstance(existing_inv_hash, str) and existing_inv_hash and existing_inv_hash != inventory_hash:
+                    existing_payload = None
+
+            if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+                existing_req_hash = existing_payload.get("_request_hash")
+                if request_hash and isinstance(existing_req_hash, str) and existing_req_hash == request_hash:
+                    return MenuPlanResponse(**existing_payload)
 
     context = _build_planning_context(
         req,
@@ -1739,6 +1840,27 @@ async def post_party(
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
+    # Persist successful party plan (keyed by today's date) so the web client doesn't repeatedly time out.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        try:
+            result["_inventory_hash"] = inventory_hash
+            if request_hash:
+                result["_request_hash"] = request_hash
+            await create_meal_plan(
+                user_id,
+                {
+                    "plan_type": "party",
+                    "plan_date": plan_date.isoformat(),
+                    "meal_type": None,
+                    "selected_cuisine": result.get("selected_cuisine"),
+                    "servings": getattr(req.party_settings, "guest_count", None),
+                    "time_available_minutes": None,
+                    "recipes": result,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to persist party meal plan user_id=%s plan_date=%s", user_id, plan_date)
     return MenuPlanResponse(**result)
 
 

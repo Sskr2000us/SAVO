@@ -200,7 +200,7 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final res = await apiClient.post('/plan/party', widget.requestBody);
+      final res = await apiClient.post('/plan/party?force_regenerate=true', widget.requestBody);
       final next = MenuPlanResponse.fromJson(res);
       if (!mounted) return;
       setState(() {

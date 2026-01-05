@@ -141,6 +141,26 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
         result["needs_clarification_questions"] = q if isinstance(q, list) else []
         result.pop("questions", None)
 
+    # Additional alias normalization seen in some prompts/tooling.
+    # Some generators return a single string field instead of the list.
+    if result.get("status") == "needs_clarification":
+        q = result.get("needs_clarification_questions")
+        has_q_list = isinstance(q, list) and any(isinstance(item, str) and item.strip() for item in q)
+
+        if not has_q_list:
+            single = None
+            for key in ("clarification_question", "clarification", "message"):
+                v = result.get(key)
+                if isinstance(v, str) and v.strip():
+                    single = v.strip()
+                    break
+
+            if single:
+                result["needs_clarification_questions"] = [single]
+                # Keep response consistent: error_message should be a readable summary.
+                if not isinstance(result.get("error_message"), str) or not result.get("error_message", "").strip():
+                    result["error_message"] = single
+
     min_items = _get_menu_plan_recipe_options_min_items(schema)
     if min_items <= 0:
         return result

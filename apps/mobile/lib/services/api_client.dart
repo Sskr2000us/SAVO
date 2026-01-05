@@ -96,7 +96,12 @@ class ApiClient {
     allHeaders.addAll(await _mergeHeaders(headers));
     
     // LLM requests (planning endpoints) need longer timeout
-    final timeout = endpoint.contains('/plan/') ? 120 : 30;
+    // Party planning is the heaviest (multi-course) and can exceed the default.
+    final timeout = endpoint.contains('/plan/party')
+      ? 240
+      : endpoint.contains('/plan/')
+        ? 180
+        : 30;
     
     try {
       final response = await http.post(
