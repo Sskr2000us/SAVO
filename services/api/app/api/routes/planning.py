@@ -1108,11 +1108,94 @@ def _build_planning_context(
             if s:
                 religious.add(s)
 
+        # Meal preferences: prefer explicit app_configuration_override.global_settings, then DB household.
+        global_settings = app_cfg.get("global_settings") if isinstance(app_cfg, dict) else None
+
+        def _pref_dict(val: Any) -> Dict[str, Any]:
+            if isinstance(val, dict):
+                return val
+            if isinstance(val, list):
+                # Legacy/UI variant: treat first string as style.
+                for x in val:
+                    if isinstance(x, str) and x.strip():
+                        return {"style": x.strip().lower()}
+                return {}
+            if isinstance(val, str) and val.strip():
+                return {"style": val.strip().lower()}
+            return {}
+
+        def _get_first(*values: Any) -> Any:
+            for v in values:
+                if v is None:
+                    continue
+                if isinstance(v, (dict, list)) and len(v) == 0:
+                    continue
+                if isinstance(v, str) and not v.strip():
+                    continue
+                return v
+            return None
+
+        breakfast_pref = _pref_dict(
+            _get_first(
+                (global_settings or {}).get("breakfast_preferences") if isinstance(global_settings, dict) else None,
+                household.get("breakfast_preferences"),
+                household.get("breakfastPreferences"),
+                household.get("breakfast_style"),
+                household.get("breakfastStyle"),
+            )
+        )
+        lunch_pref = _pref_dict(
+            _get_first(
+                (global_settings or {}).get("lunch_preferences") if isinstance(global_settings, dict) else None,
+                household.get("lunch_preferences"),
+                household.get("lunchPreferences"),
+                household.get("lunch_style"),
+                household.get("lunchStyle"),
+            )
+        )
+        dinner_pref = _pref_dict(
+            _get_first(
+                (global_settings or {}).get("dinner_preferences") if isinstance(global_settings, dict) else None,
+                household.get("dinner_preferences"),
+                household.get("dinnerPreferences"),
+                household.get("dinner_style"),
+                household.get("dinnerStyle"),
+            )
+        )
+
+        dinner_courses = None
+        for raw in (
+            household.get("dinner_courses"),
+            household.get("dinnerCourses"),
+            dinner_pref.get("courses") if isinstance(dinner_pref, dict) else None,
+        ):
+            if raw is None:
+                continue
+            try:
+                dinner_courses = int(raw)
+                break
+            except Exception:
+                continue
+        if dinner_courses is None:
+            try:
+                if isinstance(global_settings, dict):
+                    dc = (global_settings.get("dinner_preferences") or {}).get("courses")
+                    if dc is not None:
+                        dinner_courses = int(dc)
+            except Exception:
+                dinner_courses = None
+
         family_profile = {
             "primary_language": household.get("primary_language") or household.get("language") or output_lang,
             "measurement_system": household.get("measurement_system") or measurement,
             "favorite_cuisines": household.get("favorite_cuisines") or household.get("favoriteCuisines") or [],
             "regional_profile": household.get("regional_profile") or {},
+            "meal_preferences": {
+                "breakfast": breakfast_pref,
+                "lunch": lunch_pref,
+                "dinner": dinner_pref,
+                "dinner_courses": dinner_courses,
+            },
             "members_count": len([m for m in members if isinstance(m, dict)]),
             "age_groups": {
                 "child": len([m for m in members if isinstance(m, dict) and (m.get("age_category") == "child")]),
