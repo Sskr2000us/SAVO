@@ -664,10 +664,22 @@ async def _try_provider(
 
 def _build_error_response(output_schema_name: str, error_message: str, max_retries: int) -> Dict[str, Any]:
     """Build error response matching the output schema structure"""
+    # Never surface internal schema pointers / stack traces to the client UI.
+    # Keep the detailed failure in logs (see run_task/_try_provider logging), but return a short message.
+    raw = (error_message or "").strip()
+    user_msg = "Recipe generation failed. Please try again."
+    low = raw.lower()
+    if "response truncated" in low or "finish_reason=length" in low:
+        user_msg = "Recipe generation produced too much output. Please try again."
+    elif "readtimeout" in low or "timed out" in low or "timeout" in low:
+        user_msg = "Recipe generation timed out. Please try again."
+    elif "schema validation" in low or "invalid json" in low:
+        user_msg = "Recipe generation failed to produce a valid plan. Please try again."
+
     error_response = {
         "status": "error",
         "needs_clarification_questions": [],
-        "error_message": f"Failed to generate valid response after {max_retries + 1} attempts. {error_message}"
+        "error_message": user_msg,
     }
     
     # For MENU_PLAN_SCHEMA, add required fields
