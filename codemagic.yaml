@@ -41,6 +41,9 @@ workflows:
           flutter --version
           flutter pub get
 
+      - name: Apply signing settings
+        script: xcode-project use-profiles
+
       - name: Build IPA
         script: |
           cd apps/mobile
