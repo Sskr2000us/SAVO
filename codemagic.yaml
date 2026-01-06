@@ -64,11 +64,16 @@ workflows:
             exit 1
           fi
 
+          # NOTE: Apple never provides certificate private keys via API.
+          # If the next step fails with "Cannot save Signing Certificates without certificate private key",
+          # you need to add/generate an iOS signing certificate (with private key) in Codemagic UI under Code signing.
+
+      - name: Add signing certificates to keychain
+        script: keychain add-certificates
+
       - name: Fetch signing files
         script: |
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
-      - name: Add certs to keychain
-        script: keychain add-certificates
       - name: Apply provisioning profiles
         script: xcode-project use-profiles
 
