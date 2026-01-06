@@ -523,22 +523,8 @@ async def confirm_ingredients(
         item_state = "raw"
         scan_image_url = scan_record.get("image_url")
 
-        # Latest-scan semantics: when a new scan is confirmed, consider the prior scan
-        # set for that storage location inactive (scan-sourced raw items only).
+        # Track scan time early for consistent last_seen_* stamps.
         now_iso = datetime.utcnow().isoformat()
-        try:
-            (
-                db.table("inventory_items")
-                .update({"is_current": False})
-                .eq("user_id", user_id)
-                .eq("source", "scan")
-                .eq("storage_location", storage_location)
-                .eq("item_state", item_state)
-                .eq("is_current", True)
-                .execute()
-            )
-        except Exception as e:
-            logger.warning(f"Failed to deactivate previous scan inventory set: {e}")
 
         # Training consent + retention (best-effort)
         training_opt_in = False
@@ -750,6 +736,24 @@ async def confirm_ingredients(
             
             # Update detected ingredient
             db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
+
+        # Latest-scan semantics (safer): after upserting the confirmed items for this scan,
+        # mark older scan-sourced raw items in the same storage location inactive.
+        # This avoids a window where everything is deactivated before the new items are written.
+        try:
+            (
+                db.table("inventory_items")
+                .update({"is_current": False})
+                .eq("user_id", user_id)
+                .eq("source", "scan")
+                .eq("storage_location", storage_location)
+                .eq("item_state", item_state)
+                .eq("is_current", True)
+                .neq("last_seen_scan_id", request.scan_id)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning(f"Failed to deactivate previous scan inventory set: {e}")
         
         # Mark scan as completed (best-effort)
         try:

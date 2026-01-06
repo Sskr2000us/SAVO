@@ -22,12 +22,37 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   List<_Candidate> _candidates = [];
   String? _scanId;
 
+  int _currentIndex = 0;
+  int _savedCount = 0;
+  int _skippedCount = 0;
+
+  int? _nextPendingIndex({int startAt = 0}) {
+    if (_candidates.isEmpty) return null;
+    for (int i = startAt; i < _candidates.length; i++) {
+      if (!_candidates[i].processed) return i;
+    }
+    for (int i = 0; i < startAt && i < _candidates.length; i++) {
+      if (!_candidates[i].processed) return i;
+    }
+    return null;
+  }
+
+  void _jumpToNextPending() {
+    final next = _nextPendingIndex(startAt: _currentIndex);
+    if (next == null) return;
+    setState(() => _currentIndex = next);
+  }
+
   Future<void> _pickAndScan({required ImageSource source}) async {
     setState(() {
       _loading = true;
       _candidates = [];
       _image = null;
       _scanId = null;
+
+      _currentIndex = 0;
+      _savedCount = 0;
+      _skippedCount = 0;
     });
 
     try {
@@ -92,7 +117,13 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
         _candidates = parsed;
         _loading = false;
+
+        _currentIndex = 0;
+        _savedCount = 0;
+        _skippedCount = 0;
       });
+
+      _jumpToNextPending();
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
@@ -111,79 +142,110 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     return (qty: qty, unit: unit);
   }
 
-  Future<void> _confirmAndAddToInventory() async {
+  Future<void> _confirmCurrentAndAdvance({required bool save}) async {
     if (_scanId == null || _scanId!.trim().isEmpty) {
       _showError('Missing scan id. Please rescan.');
       return;
     }
     if (_candidates.isEmpty) return;
 
-    setState(() => _loading = true);
+    final pendingIndex = _nextPendingIndex(startAt: _currentIndex);
+    if (pendingIndex == null) {
+      if (mounted) Navigator.pop(context, _savedCount > 0);
+      return;
+    }
+
+    final c = _candidates[pendingIndex];
+    if (c.detectedId.trim().isEmpty) {
+      setState(() {
+        c.processed = true;
+        _skippedCount += 1;
+      });
+      _jumpToNextPending();
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _currentIndex = pendingIndex;
+    });
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
 
-      final confirmations = <Map<String, dynamic>>[];
-      for (final c in _candidates) {
-        if (c.detectedId.trim().isEmpty) {
-          continue;
-        }
-        final name = c.ingredient.trim();
-        if (!c.selected || name.isEmpty) {
-          confirmations.add({'detected_id': c.detectedId, 'action': 'rejected'});
-          continue;
+      final name = c.ingredientController.text.trim();
+      final parsed = _parseQtyUnit(c.quantityController.text);
+
+      final Map<String, dynamic> confirmation = {
+        'detected_id': c.detectedId,
+        'action': 'rejected',
+      };
+
+      if (save && name.isNotEmpty) {
+        final original = c.originalIngredient.trim().toLowerCase();
+        final edited = name.toLowerCase();
+        if (edited != original) {
+          confirmation['action'] = 'modified';
+          confirmation['confirmed_name'] = name;
+        } else {
+          confirmation['action'] = 'confirmed';
         }
 
-        final action = (name.toLowerCase() == c.originalIngredient.toLowerCase()) ? 'confirmed' : 'modified';
-        final parsed = _parseQtyUnit(c.quantityEstimate);
-
-        final payload = <String, dynamic>{
-          'detected_id': c.detectedId,
-          'action': action,
-        };
-        if (action == 'modified') {
-          payload['confirmed_name'] = name;
-        }
         if (parsed.qty != null) {
-          payload['quantity'] = parsed.qty;
+          confirmation['quantity'] = parsed.qty;
           if (parsed.unit != null && parsed.unit!.trim().isNotEmpty) {
-            payload['unit'] = parsed.unit!.trim();
+            confirmation['unit'] = parsed.unit!.trim();
           }
         }
-
-        confirmations.add(payload);
-      }
-
-      if (confirmations.isEmpty) {
-        throw Exception('No valid detected items to confirm. Please rescan.');
       }
 
       final res = await apiClient.post('/api/scanning/confirm-ingredients', {
         'scan_id': _scanId,
-        'confirmations': confirmations,
+        'confirmations': [confirmation],
       });
 
-      final msg = res['message']?.toString();
-      final confirmed = res['confirmed_count']?.toString() ?? '0';
-      final rejected = res['rejected_count']?.toString() ?? '0';
-
       if (!mounted) return;
+
+      final msg = res['message']?.toString();
+
+      setState(() {
+        c.processed = true;
+        if (save && name.isNotEmpty) {
+          _savedCount += 1;
+        } else {
+          _skippedCount += 1;
+        }
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             (msg != null && msg.trim().isNotEmpty)
                 ? msg.trim()
-                : 'Saved pantry scan (confirmed: $confirmed, rejected: $rejected)',
+                : (save ? 'Saved to inventory' : 'Skipped item'),
           ),
         ),
       );
-      Navigator.pop(context, true);
+
+      final next = _nextPendingIndex(startAt: _currentIndex + 1);
+      if (next == null) {
+        Navigator.pop(context, _savedCount > 0);
+        return;
+      }
+
+      setState(() {
+        _loading = false;
+        _currentIndex = next;
+      });
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
       setState(() => _loading = false);
     }
+  }
+
+  void _finish() {
+    Navigator.pop(context, _savedCount > 0);
   }
 
   void _showError(String message) {
@@ -256,9 +318,114 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
     final canScan = !_loading;
 
+    final hasResults = _scanId != null && _candidates.isNotEmpty;
+    final int? pendingIndex = hasResults ? _nextPendingIndex(startAt: _currentIndex) : null;
+    final _Candidate? current = (pendingIndex != null) ? _candidates[pendingIndex] : null;
+
+    final Widget scanContent;
+    if (!hasResults) {
+      scanContent = Center(
+        child: Text(
+          _image == null ? 'Select a photo to scan.' : 'No ingredients detected.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    } else if (pendingIndex == null || current == null) {
+      scanContent = Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'All items reviewed.',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: _loading ? null : _finish,
+              child: const Text('Back to inventory'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      scanContent = Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Item ${pendingIndex + 1} of ${_candidates.length}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  _buildConfidenceChip(current.confidence),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: current.ingredientController,
+                enabled: !_loading,
+                decoration: const InputDecoration(
+                  labelText: 'Ingredient',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => current.ingredient = v,
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: current.quantityController,
+                enabled: !_loading,
+                decoration: const InputDecoration(
+                  labelText: 'Quantity (optional, e.g., 2 kg)',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (v) => current.quantityEstimate = v,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _loading ? null : () => _confirmCurrentAndAdvance(save: false),
+                      child: const Text('Skip'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _loading ? null : () => _confirmCurrentAndAdvance(save: true),
+                      child: const Text('Save to inventory'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Saved: $_savedCount   Skipped: $_skippedCount',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Scan Ingredients'),
+        actions: [
+          if (hasResults)
+            TextButton(
+              onPressed: _loading ? null : _finish,
+              child: const Text('Done'),
+            ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -289,85 +456,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
             if (_loading) const LinearProgressIndicator(),
             const SizedBox(height: 16),
             Expanded(
-              child: _candidates.isEmpty
-                  ? Center(
-                      child: Text(
-                        _image == null ? 'Select a photo to scan.' : 'No ingredients detected.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    )
-                  : ListView.separated(
-                      itemCount: _candidates.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final c = _candidates[index];
-                        return Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Row(
-                                  children: [
-                                    Checkbox(
-                                      value: c.selected,
-                                      onChanged: (v) {
-                                        setState(() {
-                                          c.selected = v ?? false;
-                                        });
-                                      },
-                                    ),
-                                    Expanded(
-                                      child: TextField(
-                                        controller: c.ingredientController,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Ingredient',
-                                        ),
-                                        onChanged: (v) => c.ingredient = v,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    _buildConfidenceChip(c.confidence),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: c.quantityController,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Quantity (optional)',
-                                        ),
-                                        onChanged: (v) => c.quantityEstimate = v,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline),
-                                      onPressed: () {
-                                        setState(() {
-                                          _candidates.removeAt(index);
-                                        });
-                                      },
-                                      tooltip: 'Remove',
-                                      color: Colors.red,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: (!_loading && _candidates.isNotEmpty && _scanId != null)
-                  ? _confirmAndAddToInventory
-                  : null,
-              child: const Text('Confirm & Add to Inventory'),
+              child: scanContent,
             ),
           ],
         ),
@@ -385,6 +474,8 @@ class _Candidate {
   String? storageHint;
   bool selected;
 
+  bool processed;
+
   final TextEditingController ingredientController;
   final TextEditingController quantityController;
 
@@ -396,6 +487,7 @@ class _Candidate {
     required this.confidence,
     required this.storageHint,
     required this.selected,
+    required this.processed,
   })  : ingredientController = TextEditingController(text: ingredient),
         quantityController = TextEditingController(text: quantityEstimate ?? '');
 
@@ -421,6 +513,7 @@ class _Candidate {
       confidence: confidence.clamp(0.0, 1.0),
       storageHint: storageHint,
       selected: true,
+      processed: false,
     );
   }
 }
