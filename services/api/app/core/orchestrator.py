@@ -3,6 +3,7 @@ import json
 import logging
 from time import perf_counter
 import uuid
+import os
 
 from app.core.llm_client import get_llm_client, RateLimitException
 from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
@@ -16,6 +17,26 @@ from app.core.recipe_validators import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _auto_pick_fallback_provider(*, primary: str) -> Optional[str]:
+    """Best-effort fallback provider selection based on configured API keys.
+
+    This avoids requiring SAVO_LLM_FALLBACK_PROVIDER for basic resilience.
+    Order is chosen to prefer high-quality structured outputs.
+    """
+
+    primary_l = (primary or "").strip().lower()
+
+    # Prefer Anthropic as fallback for planning when available.
+    if primary_l != "anthropic" and (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+        return "anthropic"
+
+    # Google can be used as a backup if configured.
+    if primary_l != "google" and (os.getenv("GOOGLE_API_KEY") or "").strip():
+        return "google"
+
+    return None
 
 
 class AuthenticityJudgeException(Exception):
@@ -919,24 +940,30 @@ async def _try_provider(
         except RateLimitException as e:
             # Rate limit hit - try fallback if configured
             logger.warning(f"Task {task_name} hit rate limit on {provider}: {str(e)}")
-            
-            if settings.llm_fallback_provider and settings.llm_fallback_provider != provider:
-                logger.info(f"Falling back from {provider} to {settings.llm_fallback_provider}")
+
+            fallback_provider = settings.llm_fallback_provider
+            if not (fallback_provider or "").strip():
+                fallback_provider = _auto_pick_fallback_provider(primary=provider)
+
+            if fallback_provider and fallback_provider != provider:
+                logger.info(f"Falling back from {provider} to {fallback_provider}")
                 try:
                     # Try fallback provider (no additional retries for fallback)
                     fallback_result = await _try_provider(
-                        provider=settings.llm_fallback_provider,
+                        provider=fallback_provider,
                         messages=messages,
                         schema=schema,
                         task_name=task_name,
                         output_schema_name=output_schema_name,
-                        max_retries=0  # No retries for fallback
+                        max_retries=0,  # No retries for fallback
+                        context=context,
+                        trace_id=trace_id,
                     )
-                    logger.info(f"Task {task_name} succeeded with fallback provider {settings.llm_fallback_provider}")
+                    logger.info(f"Task {task_name} succeeded with fallback provider {fallback_provider}")
                     return fallback_result
                 except Exception as fallback_error:
-                    logger.error(f"Fallback provider {settings.llm_fallback_provider} also failed: {str(fallback_error)}")
-                    last_error = f"Primary provider ({provider}) rate limited, fallback provider ({settings.llm_fallback_provider}) failed: {str(fallback_error)}"
+                    logger.error(f"Fallback provider {fallback_provider} also failed: {str(fallback_error)}")
+                    last_error = f"Primary provider ({provider}) rate limited, fallback provider ({fallback_provider}) failed: {str(fallback_error)}"
             else:
                 last_error = f"Rate limit exceeded on {provider} and no fallback configured"
             
