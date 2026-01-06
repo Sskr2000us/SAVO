@@ -406,7 +406,7 @@
           },
           "variety_log": {
             "type": "object",
-            "required": ["rules_applied", "excluded_recent"],
+            "required": ["rules_applied"],
             "properties": {
               "rules_applied": { "type": "array", "items": { "type": "string" } },
               "excluded_recent": { "type": "array", "items": { "type": "object" } },
