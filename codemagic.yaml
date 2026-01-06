@@ -50,4 +50,7 @@ workflows:
           flutter build ipa --release
     artifacts:
       - apps/mobile/build/ios/ipa/*.ipa
+      - apps/mobile/build/ios/ipa/**/*.ipa
+      - apps/mobile/build/ios/archive/*.xcarchive
+      - apps/mobile/build/ios/ipa/*.dSYM.zip
       - apps/mobile/flutter_*.log
