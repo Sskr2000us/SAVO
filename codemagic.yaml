@@ -46,6 +46,22 @@ workflows:
       # Requires setting the App Store Connect API key in Codemagic UI for this app.
       - name: Initialize keychain
         script: keychain initialize
+
+      - name: Preflight (App Store Connect API key)
+        script: |
+          if [ -z "$APP_STORE_CONNECT_ISSUER_ID" ]; then
+            echo "Missing APP_STORE_CONNECT_ISSUER_ID. In Codemagic UI: Team settings -> Integrations -> App Store Connect, add an API key (Issuer ID / Key ID / .p8)."
+            exit 1
+          fi
+          if [ -z "$APP_STORE_CONNECT_KEY_IDENTIFIER" ]; then
+            echo "Missing APP_STORE_CONNECT_KEY_IDENTIFIER. Add the same API key in Codemagic App Store Connect integration."
+            exit 1
+          fi
+          if [ -z "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
+            echo "Missing APP_STORE_CONNECT_PRIVATE_KEY. Add the API key .p8 in Codemagic App Store Connect integration."
+            exit 1
+          fi
+
       - name: Fetch signing files
         script: |
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
