@@ -409,9 +409,7 @@
             "type": "object",
             "required": ["rules_applied"],
             "properties": {
-              "rules_applied": { "type": "array", "items": { "type": "string" } },
-              "excluded_recent": { "type": "array", "items": { "type": "object" } },
-              "diversity_scores": { "type": "object", "additionalProperties": { "type": "number" } }
+              "rules_applied": { "type": "array", "items": { "type": "string" } }
             },
             "additionalProperties": false
           },
@@ -420,7 +418,6 @@
             "required": ["total_calories_kcal", "warnings"],
             "properties": {
               "total_calories_kcal": { "type": "number" },
-              "per_member_estimates": { "type": "array", "items": { "type": "object" } },
               "warnings": { "type": "array", "items": { "type": "string" } }
             },
             "additionalProperties": false
