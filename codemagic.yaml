@@ -6,6 +6,8 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      vars:
+        BUNDLE_ID: com.savo.savo
     scripts:
       - name: Flutter pub get
         script: |
@@ -28,12 +30,30 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      vars:
+        BUNDLE_ID: com.savo.savo
+        # Default: TestFlight/App Store distribution.
+        # For device testing you can set this in Codemagic UI to IOS_APP_DEVELOPMENT or IOS_APP_ADHOC.
+        SIGNING_TYPE: IOS_APP_STORE
     scripts:
       - name: Flutter pub get
         script: |
           cd apps/mobile
           flutter --version
           flutter pub get
+
+      # Uses Codemagic automatic code signing via App Store Connect.
+      # Requires setting the App Store Connect API key in Codemagic UI for this app.
+      - name: Initialize keychain
+        script: keychain initialize
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
+      - name: Add certs to keychain
+        script: keychain add-certificates
+      - name: Apply provisioning profiles
+        script: xcode-project use-profiles
+
       - name: Build IPA
         script: |
           cd apps/mobile
