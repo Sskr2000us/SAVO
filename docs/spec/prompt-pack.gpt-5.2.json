@@ -140,7 +140,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["menu_type", "servings", "courses"],
+              "required": ["menu_type", "day_index", "date", "servings", "courses"],
               "properties": {
                 "menu_type": { "type": "string", "enum": ["daily", "party", "weekly_day"] },
                 "day_index": { "type": ["number", "null"], "minimum": 0 },
