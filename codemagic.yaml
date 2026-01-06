@@ -68,23 +68,23 @@ workflows:
           # If the next step fails with "Cannot save Signing Certificates without certificate private key",
           # you need to add/generate an iOS signing certificate (with private key) in Codemagic UI under Code signing.
 
-      - name: Fetch signing files
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
-
       - name: Add signing certificates to keychain
         script: |
           CERT_DIR="$HOME/Library/MobileDevice/Certificates"
           if ls "$CERT_DIR"/*.p12 >/dev/null 2>&1; then
             keychain add-certificates
           else
-            echo "No .p12 certificates found in $CERT_DIR after fetch-signing-files."
+            echo "No .p12 certificates found in $CERT_DIR."
             echo "Fix in Codemagic UI: Teams -> Code signing identities -> iOS certificates:"
             echo "- Click 'Generate certificate' and create an iOS Distribution/Production certificate (recommended), OR"
             echo "- Upload an existing .p12 (must include the private key)."
             echo "Then rerun the build."
             exit 1
           fi
+
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
 
       - name: Apply provisioning profiles
         script: xcode-project use-profiles
