@@ -39,6 +39,7 @@ from app.core.database import (
     get_meal_plan_for_date,
     get_meal_plans,
     delete_latest_meal_plan,
+    upsert_household_shopping_items,
 )
 from app.middleware.auth import get_current_user
 from app.core.safety_constraints import (
@@ -62,6 +63,148 @@ from app.models.inventory import InventoryItem
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _derive_shopping_suggestions_from_plan_payload(
+    payload: Dict[str, Any], *, primary_only: bool = True
+) -> List[Dict[str, Any]]:
+    """Convert recipe new_ingredients_optional into MENU_PLAN_SCHEMA.shopping_suggestions."""
+
+    if not isinstance(payload, dict):
+        return []
+
+    suggestions: Dict[str, Dict[str, Any]] = {}
+
+    def _is_optional_reason(reason: str) -> bool:
+        r = (reason or "").strip().lower()
+        if not r:
+            return True
+        for needle in ("optional", "if you have", "if available", "can skip", "may omit"):
+            if needle in r:
+                return True
+        return False
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list):
+        return []
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list) or not opts:
+                continue
+            selected = [opts[0]] if primary_only else opts
+
+            for opt in selected:
+                if not isinstance(opt, dict):
+                    continue
+                new_items = opt.get("new_ingredients_optional")
+                if not isinstance(new_items, list) or not new_items:
+                    continue
+
+                for raw in new_items:
+                    if not isinstance(raw, dict):
+                        continue
+                    name = (raw.get("canonical_name") or "").strip()
+                    if not name:
+                        continue
+                    unit = str(raw.get("unit") or "").strip()
+                    reason = str(raw.get("reason") or "").strip()
+                    optional = _is_optional_reason(reason)
+
+                    qty = raw.get("amount")
+                    quantity = float(qty) if isinstance(qty, (int, float)) else 0.0
+
+                    key = f"{name.lower().strip()}|{unit.lower().strip()}"
+                    existing = suggestions.get(key)
+                    if existing is None:
+                        suggestions[key] = {
+                            "canonical_name": name,
+                            "quantity": quantity,
+                            "unit": unit,
+                            "reason": reason or "Required for selected recipe(s).",
+                            "optional": optional,
+                        }
+                    else:
+                        # Sum numeric quantities when possible.
+                        try:
+                            existing["quantity"] = float(existing.get("quantity") or 0) + quantity
+                        except Exception:
+                            pass
+                        # If any recipe says it's required, treat as required.
+                        if existing.get("optional") is True and optional is False:
+                            existing["optional"] = False
+
+    # Filter out empty names and ensure required keys exist.
+    out: List[Dict[str, Any]] = []
+    for v in suggestions.values():
+        if not isinstance(v, dict):
+            continue
+        nm = str(v.get("canonical_name") or "").strip()
+        if not nm:
+            continue
+        out.append(
+            {
+                "canonical_name": nm,
+                "quantity": float(v.get("quantity") or 0),
+                "unit": str(v.get("unit") or ""),
+                "reason": str(v.get("reason") or ""),
+                "optional": bool(v.get("optional")),
+            }
+        )
+    return out
+
+
+def _merge_shopping_suggestions(
+    existing: Any, derived: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    def _add(item: Dict[str, Any]) -> None:
+        name = str(item.get("canonical_name") or "").strip()
+        unit = str(item.get("unit") or "").strip()
+        if not name:
+            return
+        key = f"{name.lower()}|{unit.lower()}"
+        qty = item.get("quantity")
+        quantity = float(qty) if isinstance(qty, (int, float)) else 0.0
+        optional = bool(item.get("optional"))
+        reason = str(item.get("reason") or "").strip()
+
+        if key not in merged:
+            merged[key] = {
+                "canonical_name": name,
+                "quantity": quantity,
+                "unit": unit,
+                "reason": reason,
+                "optional": optional,
+            }
+            return
+
+        cur = merged[key]
+        cur["quantity"] = float(cur.get("quantity") or 0) + quantity
+        if cur.get("optional") is True and optional is False:
+            cur["optional"] = False
+        if not cur.get("reason") and reason:
+            cur["reason"] = reason
+
+    if isinstance(existing, list):
+        for it in existing:
+            if isinstance(it, dict):
+                _add(it)
+    for it in derived or []:
+        if isinstance(it, dict):
+            _add(it)
+
+    return list(merged.values())
 
 
 def _normalize_cuisine_id(value: Any) -> Optional[str]:
@@ -2011,6 +2154,24 @@ async def post_party(
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
+    # Keep shopping_suggestions consistent with the selected dishes' missing ingredients.
+    # (The LLM may omit shopping_suggestions; the client shopping cart/list depends on it.)
+    if isinstance(result, dict) and result.get("status") == "ok":
+        derived = _derive_shopping_suggestions_from_plan_payload(result, primary_only=True)
+        if derived:
+            result["shopping_suggestions"] = _merge_shopping_suggestions(
+                result.get("shopping_suggestions"), derived
+            )
+
+        # Best-effort: sync to Supabase shopping list table for cross-device cart updates.
+        try:
+            household_id = household.get("id") if isinstance(household, dict) else None
+            suggestions = result.get("shopping_suggestions")
+            if isinstance(household_id, str) and household_id.strip() and isinstance(suggestions, list) and suggestions:
+                await upsert_household_shopping_items(household_id.strip(), suggestions)
+        except Exception:
+            logger.exception("Failed to upsert household shopping items user_id=%s", user_id)
 
     # Persist successful party plan (keyed by today's date) so the web client doesn't repeatedly time out.
     if isinstance(result, dict) and result.get("status") == "ok":

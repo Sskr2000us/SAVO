@@ -127,7 +127,28 @@ def _openai_simplify_json_schema(schema: Any) -> Any:
         copied = schema
 
     simplified = _simplify(copied)
-    return simplified
+
+    # OpenAI's strict json_schema mode requires that every object schema explicitly sets
+    # additionalProperties=false (otherwise it rejects the schema with a 400).
+    def _enforce_closed_objects(node: Any) -> Any:
+        if isinstance(node, list):
+            return [_enforce_closed_objects(x) for x in node]
+        if not isinstance(node, dict):
+            return node
+
+        # Recurse first.
+        out: dict[str, Any] = {k: _enforce_closed_objects(v) for k, v in node.items()}
+
+        has_props = isinstance(out.get("properties"), dict)
+        is_obj = out.get("type") == "object" or has_props
+        if is_obj:
+            if out.get("type") is None and has_props:
+                out["type"] = "object"
+            # OpenAI requires this to be explicitly present and false.
+            out["additionalProperties"] = False
+        return out
+
+    return _enforce_closed_objects(simplified)
 
 
 def _schema_brief(schema: dict[str, Any]) -> str:

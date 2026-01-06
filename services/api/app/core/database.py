@@ -725,6 +725,155 @@ async def complete_meal_plan(
 
 
 # ============================================================================
+# SHOPPING LIST OPERATIONS
+# ============================================================================
+
+def _shopping_item_key(item: Dict[str, Any]) -> str:
+    """Match the Flutter shopping list key format: '{name}|{amount unit}'."""
+    if not isinstance(item, dict):
+        return ""
+
+    name = (
+        item.get("canonical_name")
+        or item.get("ingredient")
+        or item.get("name")
+        or ""
+    )
+    name_s = str(name).strip().lower()
+    if not name_s:
+        return ""
+
+    amount = item.get("amount")
+    if amount is None:
+        amount = item.get("quantity")
+    unit = item.get("unit")
+
+    parts: List[str] = []
+    if amount is not None and str(amount).strip() != "":
+        parts.append(str(amount).strip())
+    if unit is not None and str(unit).strip() != "":
+        parts.append(str(unit).strip())
+    qty_s = " ".join(parts).strip().lower()
+
+    return f"{name_s}|{qty_s}"
+
+
+async def upsert_household_shopping_items(
+    household_id: str,
+    items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Upsert shopping items into `household_shopping_items`.
+
+    - Uses UNIQUE (household_id, item_key) for upsert.
+    - Preserves existing `checked` state when present.
+    """
+    household_id = (household_id or "").strip()
+    if not household_id or not isinstance(items, list) or not items:
+        return {"upserted": 0}
+
+    now = datetime.utcnow().isoformat()
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+
+        name = (
+            raw.get("canonical_name")
+            or raw.get("ingredient")
+            or raw.get("name")
+            or ""
+        )
+        canonical_name = str(name).strip()
+        if not canonical_name:
+            continue
+
+        unit = str(raw.get("unit") or "").strip()
+        quantity_val: Any = raw.get("quantity")
+        if quantity_val is None:
+            quantity_val = raw.get("amount")
+        try:
+            if quantity_val is not None and str(quantity_val).strip() != "":
+                quantity_val = float(quantity_val)
+        except Exception:
+            pass
+
+        item_json: Dict[str, Any] = {
+            "canonical_name": canonical_name,
+            "quantity": quantity_val,
+            "unit": unit,
+            "reason": raw.get("reason"),
+            "optional": raw.get("optional"),
+        }
+        item_key = _shopping_item_key(item_json)
+        if not item_key:
+            continue
+
+        # Deduplicate by key; keep the last JSON (most recent values) and sum numeric quantities.
+        if item_key in normalized:
+            prev = normalized[item_key]
+            try:
+                prev_q = prev.get("quantity")
+                if isinstance(prev_q, (int, float)) and isinstance(quantity_val, (int, float)):
+                    prev["quantity"] = float(prev_q) + float(quantity_val)
+            except Exception:
+                pass
+            # Prefer a non-empty reason if available.
+            if not prev.get("reason") and item_json.get("reason"):
+                prev["reason"] = item_json.get("reason")
+            # If any entry is required, mark required.
+            if prev.get("optional") is True and item_json.get("optional") is False:
+                prev["optional"] = False
+        else:
+            normalized[item_key] = item_json
+
+    if not normalized:
+        return {"upserted": 0}
+
+    keys = list(normalized.keys())
+
+    # Preserve checked state for existing items.
+    checked_by_key: Dict[str, bool] = {}
+    try:
+        existing = (
+            db.client.table("household_shopping_items")
+            .select("item_key,checked")
+            .eq("household_id", household_id)
+            .in_("item_key", keys)
+            .execute()
+        )
+        for r in existing.data or []:
+            if isinstance(r, dict) and r.get("item_key"):
+                checked_by_key[str(r.get("item_key"))] = r.get("checked") is True
+    except Exception:
+        # Best-effort: if we can't read existing rows (RLS, missing table, etc.),
+        # still attempt an upsert with checked=False.
+        checked_by_key = {}
+
+    rows: List[Dict[str, Any]] = []
+    for item_key, item_json in normalized.items():
+        rows.append(
+            {
+                "household_id": household_id,
+                "item_key": item_key,
+                "item_json": _drop_none_values(item_json),
+                "checked": checked_by_key.get(item_key, False),
+                "updated_at": now,
+            }
+        )
+
+    try:
+        db.client.table("household_shopping_items").upsert(
+            rows,
+            on_conflict="household_id,item_key",
+        ).execute()
+        return {"upserted": len(rows)}
+    except APIError as e:
+        logger.error(f"Error upserting household shopping items: {e}")
+        raise
+
+
+# ============================================================================
 # RECIPE HISTORY OPERATIONS
 # ============================================================================
 
