@@ -27,6 +27,10 @@ workflows:
     name: iOS IPA (signed) - SAVO
     instance_type: mac_mini_m2
     max_build_duration: 60
+    integrations:
+      # Must match the App Store Connect API key name configured in Codemagic UI
+      # under Teams -> Integrations -> Developer Portal.
+      app_store_connect: SAVO
     environment:
       flutter: stable
       xcode: latest
@@ -48,6 +52,12 @@ workflows:
         script: |
           cd apps/mobile
           flutter build ipa --release
+    publishing:
+      app_store_connect:
+        # Upload IPA to App Store Connect/TestFlight.
+        auth: integration
+        # Internal testing does not require beta review submission.
+        submit_to_testflight: false
     artifacts:
       - apps/mobile/build/ios/ipa/*.ipa
       - apps/mobile/build/ios/ipa/**/*.ipa
