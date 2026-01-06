@@ -217,6 +217,13 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         }
       });
 
+      // If the user chose Save, jump back to Inventory immediately.
+      // InventoryScreen already reloads when this screen returns `true`.
+      if (save && name.isNotEmpty) {
+        Navigator.pop(context, true);
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
