@@ -141,6 +141,11 @@ def create_app() -> FastAPI:
             "llm_provider": settings.llm_provider,  # Legacy
             "reasoning_provider": settings.reasoning_provider,
             "vision_provider": settings.vision_provider,
+            "provider_keys": {
+                "openai": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
+                "anthropic": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+                "google": bool((os.getenv("GOOGLE_API_KEY") or "").strip()),
+            },
             "cors": {
                 "allow_origins": cors_origins,
                 "allow_origin_regex": cors_origin_regex,

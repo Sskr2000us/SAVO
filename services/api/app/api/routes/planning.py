@@ -1032,6 +1032,46 @@ def _build_planning_context(
     
     inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
 
+    # Keep prompts small to avoid TPM rate limits and long latencies.
+    def _compact_inventory(items: Any, *, max_items: int = 60) -> list[dict[str, Any]]:
+        if not isinstance(items, list):
+            return []
+        kept: list[dict[str, Any]] = []
+        for it in items:
+            if isinstance(it, dict):
+                kept.append(it)
+
+        def _score(d: dict[str, Any]) -> tuple[int, int, float]:
+            # Higher priority first: leftovers, expiring soon, higher confidence
+            state = str(d.get("state") or "").strip().lower()
+            is_leftover = 1 if state == "leftover" else 0
+            days = d.get("freshness_days_remaining")
+            expiring = 0
+            if isinstance(days, int) and days >= 0:
+                expiring = 1 if days <= 2 else 0
+            conf = d.get("confidence")
+            conf_f = float(conf) if isinstance(conf, (int, float)) else 0.0
+            return (is_leftover, expiring, conf_f)
+
+        kept.sort(key=_score, reverse=True)
+        kept = kept[:max_items]
+
+        # Drop very verbose/low-signal keys if present.
+        drop_keys = {
+            "raw_text",
+            "notes",
+            "source",
+            "created_at",
+            "updated_at",
+        }
+        out: list[dict[str, Any]] = []
+        for it in kept:
+            slim = {k: v for k, v in it.items() if k not in drop_keys}
+            out.append(slim)
+        return out
+
+    inventory_items = _compact_inventory(inventory_items)
+
     leftovers_inventory: list[dict] = []
     try:
         for item in inventory_items or []:
@@ -1058,10 +1098,12 @@ def _build_planning_context(
             "count": len(leftovers_inventory),
             "expiring_soon_count": len(leftovers_expiring_soon),
         },
-        "cuisine_metadata": CUISINE_METADATA,
+        # Provide a compact cuisine metadata view (full CUISINE_METADATA is very large).
+        "cuisine_metadata": {},
         "cuisine_rankings": [score.model_dump() for score in cuisine_scores[:5]],  # Top 5 cuisines
         "history_context": {
-            "recent_recipes": [h for h in history[:20]],
+            # Keep only a compact view of recent history to avoid huge prompts.
+            "recent_recipes": [],
         },
         "output_language": output_lang,
         "output_languages": output_languages,
@@ -1069,6 +1111,73 @@ def _build_planning_context(
         "now_utc": datetime.utcnow().isoformat(),
         **orch_context
     }
+
+    # Fill compact cuisine metadata for the cuisines most likely to be used.
+    try:
+        candidate_ids: list[str] = []
+        # Include top-ranked cuisines.
+        for s in cuisine_scores[:8]:
+            cid = getattr(s, "cuisine", None)
+            if isinstance(cid, str) and cid.strip():
+                candidate_ids.append(cid.strip())
+        # Include explicit preferences.
+        prefs = _normalize_cuisine_preferences(getattr(request, "cuisine_preferences", None)) or []
+        candidate_ids.extend([p for p in prefs if isinstance(p, str) and p.strip()])
+        # Include selected cuisine if set.
+        if isinstance(cuisine, str) and cuisine.strip() and cuisine != "auto":
+            candidate_ids.append(cuisine.strip())
+
+        # De-dupe preserving order.
+        seen: set[str] = set()
+        candidate_ids = [c for c in candidate_ids if not (c in seen or seen.add(c))]
+
+        def _compact_meta(meta: Any) -> dict[str, Any]:
+            if not isinstance(meta, dict):
+                return {}
+            keep = (
+                "name",
+                "region",
+                "subregion",
+                "countries",
+                "country_names",
+                "languages",
+                "language_names",
+                "daily_structure",
+                "party_structure",
+                "characteristics",
+                "keywords",
+                "aliases",
+            )
+            out = {k: meta.get(k) for k in keep if k in meta}
+            return out
+
+        compact_map: dict[str, Any] = {}
+        for cid in candidate_ids[:12]:
+            m = CUISINE_METADATA.get(cid)
+            if isinstance(m, dict):
+                compact_map[cid] = _compact_meta(m)
+        context["cuisine_metadata"] = compact_map
+    except Exception:
+        # Best-effort only.
+        pass
+
+    # Compact history (drop large payloads; keep only key fields).
+    try:
+        slim_hist: list[dict[str, Any]] = []
+        for h in history[:20] if isinstance(history, list) else []:
+            if not isinstance(h, dict):
+                continue
+            slim_hist.append(
+                {
+                    "recipe_id": h.get("recipe_id") or h.get("id"),
+                    "recipe_name": h.get("recipe_name") or h.get("name"),
+                    "cuisine": h.get("cuisine"),
+                    "cooked_at": h.get("cooked_at") or h.get("created_at") or h.get("date"),
+                }
+            )
+        context["history_context"]["recent_recipes"] = slim_hist
+    except Exception:
+        pass
 
     # Provide prompt-pack bindings for time/servings when present.
     # (Prompt-pack tasks reference {{TIME_AVAILABLE_MIN}} and {{SERVINGS}} explicitly.)
