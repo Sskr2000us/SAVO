@@ -71,6 +71,19 @@ workflows:
           fi
           echo "Found IPA: $IPA_PATH"
           ls -lh "$IPA_PATH" || true
+
+          echo "Inspecting IPA Info.plist (bundle id + version/build) ..."
+          rm -rf /tmp/savo_ipa_extract || true
+          mkdir -p /tmp/savo_ipa_extract
+          unzip -q "$IPA_PATH" -d /tmp/savo_ipa_extract
+          PLIST_PATH=$(ls -1 /tmp/savo_ipa_extract/Payload/*.app/Info.plist 2>/dev/null | head -n 1)
+          if [ -z "$PLIST_PATH" ]; then
+            echo "WARN: Could not locate Info.plist inside IPA payload."
+          else
+            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST_PATH" || true
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST_PATH" || true
+            /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST_PATH" || true
+          fi
     publishing:
       app_store_connect:
         # Upload IPA to App Store Connect/TestFlight.
