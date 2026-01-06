@@ -52,6 +52,20 @@ workflows:
         script: |
           cd apps/mobile
           flutter build ipa --release
+
+      - name: Verify IPA output
+        script: |
+          cd apps/mobile
+          echo "Searching for .ipa under apps/mobile/build ..."
+          find build -name "*.ipa" -maxdepth 6 -print || true
+          IPA_PATH=$(find build -name "*.ipa" -maxdepth 6 | head -n 1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "ERROR: No .ipa was produced by 'flutter build ipa'."
+            echo "Open the 'Build IPA' step logs and search for 'Built'/'ipa' to see why export did not happen."
+            exit 1
+          fi
+          echo "Found IPA: $IPA_PATH"
+          ls -lh "$IPA_PATH" || true
     publishing:
       app_store_connect:
         # Upload IPA to App Store Connect/TestFlight.
