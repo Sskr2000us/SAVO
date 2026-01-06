@@ -28,66 +28,17 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      groups:
-        - ios_ipa
       flutter: stable
       xcode: latest
-      vars:
-        BUNDLE_ID: com.savo.savo
-        # Default: TestFlight/App Store distribution.
-        # For device testing you can set this in Codemagic UI to IOS_APP_DEVELOPMENT or IOS_APP_ADHOC.
-        SIGNING_TYPE: IOS_APP_STORE
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.savo.savo
     scripts:
       - name: Flutter pub get
         script: |
           cd apps/mobile
           flutter --version
           flutter pub get
-
-      # Uses Codemagic automatic code signing via App Store Connect.
-      # Requires setting the App Store Connect API key in Codemagic UI for this app.
-      - name: Initialize keychain
-        script: keychain initialize
-
-      - name: Preflight (App Store Connect API key)
-        script: |
-          if [ -z "$APP_STORE_CONNECT_ISSUER_ID" ]; then
-            echo "Missing APP_STORE_CONNECT_ISSUER_ID. Fix in Codemagic UI by either enabling iOS Automatic code signing for this workflow (select your Apple API key), or by setting secure env vars on the workflow: APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_PRIVATE_KEY (paste full .p8 contents)."
-            exit 1
-          fi
-          if [ -z "$APP_STORE_CONNECT_KEY_IDENTIFIER" ]; then
-            echo "Missing APP_STORE_CONNECT_KEY_IDENTIFIER. Enable iOS Automatic code signing or set it as a secure workflow env var."
-            exit 1
-          fi
-          if [ -z "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
-            echo "Missing APP_STORE_CONNECT_PRIVATE_KEY. Enable iOS Automatic code signing or set it as a secure workflow env var (paste full .p8 contents, including BEGIN/END lines)."
-            exit 1
-          fi
-
-          # NOTE: Apple never provides certificate private keys via API.
-          # If the next step fails with "Cannot save Signing Certificates without certificate private key",
-          # you need to add/generate an iOS signing certificate (with private key) in Codemagic UI under Code signing.
-
-      - name: Add signing certificates to keychain
-        script: |
-          CERT_DIR="$HOME/Library/MobileDevice/Certificates"
-          if ls "$CERT_DIR"/*.p12 >/dev/null 2>&1; then
-            keychain add-certificates
-          else
-            echo "No .p12 certificates found in $CERT_DIR."
-            echo "Fix in Codemagic UI: Teams -> Code signing identities -> iOS certificates:"
-            echo "- Click 'Generate certificate' and create an iOS Distribution/Production certificate (recommended), OR"
-            echo "- Upload an existing .p12 (must include the private key)."
-            echo "Then rerun the build."
-            exit 1
-          fi
-
-      - name: Fetch signing files
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type "$SIGNING_TYPE"
-
-      - name: Apply provisioning profiles
-        script: xcode-project use-profiles
 
       - name: Build IPA
         script: |
