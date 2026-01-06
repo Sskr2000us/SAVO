@@ -50,15 +50,15 @@ workflows:
       - name: Preflight (App Store Connect API key)
         script: |
           if [ -z "$APP_STORE_CONNECT_ISSUER_ID" ]; then
-            echo "Missing APP_STORE_CONNECT_ISSUER_ID. In Codemagic UI: Team settings -> Integrations -> App Store Connect, add an API key (Issuer ID / Key ID / .p8)."
+            echo "Missing APP_STORE_CONNECT_ISSUER_ID. Fix in Codemagic UI by either enabling iOS Automatic code signing for this workflow (select your Apple API key), or by setting secure env vars on the workflow: APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_PRIVATE_KEY (paste full .p8 contents)."
             exit 1
           fi
           if [ -z "$APP_STORE_CONNECT_KEY_IDENTIFIER" ]; then
-            echo "Missing APP_STORE_CONNECT_KEY_IDENTIFIER. Add the same API key in Codemagic App Store Connect integration."
+            echo "Missing APP_STORE_CONNECT_KEY_IDENTIFIER. Enable iOS Automatic code signing or set it as a secure workflow env var."
             exit 1
           fi
           if [ -z "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
-            echo "Missing APP_STORE_CONNECT_PRIVATE_KEY. Add the API key .p8 in Codemagic App Store Connect integration."
+            echo "Missing APP_STORE_CONNECT_PRIVATE_KEY. Enable iOS Automatic code signing or set it as a secure workflow env var (paste full .p8 contents, including BEGIN/END lines)."
             exit 1
           fi
 
