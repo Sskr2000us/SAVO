@@ -238,7 +238,7 @@
                               "type": "array",
                               "items": {
                                 "type": "object",
-                                "required": ["step", "instruction", "time_minutes", "tips"],
+                                "required": ["step", "time_minutes", "tips"],
                                 "properties": {
                                   "step": { "type": "number" },
                                   "instruction": {
