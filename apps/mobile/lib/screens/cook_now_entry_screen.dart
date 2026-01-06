@@ -20,6 +20,78 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
   bool _generating = false;
   String? _error;
 
+  bool _checkingSavedPlan = true;
+  bool _hasSavedPlan = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSavedPlan();
+  }
+
+  Future<void> _checkSavedPlan() async {
+    setState(() {
+      _checkingSavedPlan = true;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.get('/plan/latest?plan_type=daily');
+      if (!mounted) return;
+      setState(() {
+        _hasSavedPlan = true;
+        _checkingSavedPlan = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      // 404 => no saved plan. Anything else: be conservative and hide delete.
+      final msg = e.toString();
+      setState(() {
+        _hasSavedPlan = !msg.contains('404');
+        _checkingSavedPlan = false;
+      });
+    }
+  }
+
+  Future<void> _deleteSavedPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove plan'),
+        content: const Text('Remove the saved daily plan so you can generate a new one?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.delete('/plan/latest?plan_type=daily');
+      if (!mounted) return;
+      setState(() {
+        _hasSavedPlan = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Plan removed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove plan: $e')),
+      );
+    }
+  }
+
   Future<void> _generate() async {
     if (_generating) return;
     setState(() {
@@ -86,6 +158,13 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cook'),
+        actions: [
+          IconButton(
+            tooltip: 'Remove plan',
+            onPressed: (_checkingSavedPlan || !_hasSavedPlan || _generating) ? null : _deleteSavedPlan,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
       ),
       body: Center(
         child: Padding(
