@@ -377,10 +377,18 @@ class OpenAIClient(LlmClient):
                                 retry_after = int(e.response.headers["retry-after"])
                             except ValueError:
                                 pass
+
+                        # Avoid hanging web requests for tens of seconds (or minutes).
+                        # If OpenAI tells us to wait a long time, bubble up immediately so the
+                        # orchestrator can fall back to another provider or return a fast error.
+                        if retry_after is not None and retry_after > 5:
+                            raise RateLimitException("openai", retry_after)
                         
                         if attempt < max_retries - 1:
                             # Wait with exponential backoff (respect Retry-After if present)
                             wait_time = retry_after if retry_after else (2 ** attempt)  # 1s, 2s, 4s
+                            # Cap wait to keep UX responsive.
+                            wait_time = min(wait_time, 4)
                             import asyncio
                             await asyncio.sleep(wait_time)
                             continue
