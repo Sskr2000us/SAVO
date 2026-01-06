@@ -181,6 +181,9 @@
                             "health_fit",
                             "leftover_forecast",
                             "preservation_guidance",
+                            "chef_tips",
+                            "cultural_context",
+                            "dietary_information",
                             "youtube_references",
                             "agent_mode"
                           ],
