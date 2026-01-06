@@ -2,8 +2,16 @@ import '../models/planning.dart';
 import '../models/profile_state.dart';
 import 'api_client.dart';
 import 'metrics_service.dart';
+import 'dart:math';
 
 class CookNowService {
+  String _inferMealType() {
+    final hour = DateTime.now().hour;
+    if (hour < 11) return 'breakfast';
+    if (hour < 16) return 'lunch';
+    return 'dinner';
+  }
+
   Future<List<Recipe>> generateRecipeOptions({
     required ApiClient apiClient,
     required ProfileState profileState,
@@ -11,6 +19,9 @@ class CookNowService {
     int avoidRecentRecipes = 3,
   }) async {
     final body = <String, dynamic>{
+      // Without meal_type, the backend may generate a full-day plan (slower).
+      // Cook Now should be a single meal to keep latency low.
+      'meal_type': _inferMealType(),
       'time_available_minutes': 45,
       'servings': 4,
     };
@@ -66,6 +77,10 @@ class CookNowService {
     }
 
     var candidates = byId.values.toList();
+
+    // Provide variety without forcing a slow regeneration.
+    // The backend returns multiple recipe options; shuffle before filtering/selection.
+    candidates.shuffle(Random(DateTime.now().microsecondsSinceEpoch));
 
     // If we got an OK response but no recipes, the saved plan may be stale/missing fields.
     // Retry once with force_regenerate=true to rebuild a complete payload.
@@ -125,6 +140,8 @@ class CookNowService {
       if (name.isNotEmpty && recentNames.contains(name)) return false;
       return true;
     }).toList();
+
+    filtered.shuffle(Random(DateTime.now().microsecondsSinceEpoch));
 
     fireAndForget(MetricsService.instance.recordWorkflowStep('CookNow', 'Filter'));
 

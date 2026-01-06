@@ -136,9 +136,10 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
       });
     } catch (e) {
       if (!mounted) return;
+      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
       setState(() {
         _generating = false;
-        _error = e.toString();
+        _error = msg;
       });
     }
   }
