@@ -95,6 +95,7 @@
         "required": [
           "status",
           "selected_cuisine",
+          "planning_window",
           "menu_headers",
           "menus",
           "variety_log",
