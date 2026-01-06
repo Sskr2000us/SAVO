@@ -1567,8 +1567,8 @@ async def post_daily(
     for m in members:
         if not isinstance(m, dict):
             continue
-        # Ensure allergens key exists (Golden Rule requires explicit declaration)
-        if "allergens" not in m:
+        # Ensure allergens key exists and is not None (Golden Rule requires explicit declaration)
+        if "allergens" not in m or m.get("allergens") is None:
             m = {**m, "allergens": []}
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}
@@ -2038,8 +2038,8 @@ async def post_party(
     for m in members:
         if not isinstance(m, dict):
             continue
-        # Ensure allergens key exists (Golden Rule requires explicit declaration)
-        if "allergens" not in m:
+        # Ensure allergens key exists and is not None (Golden Rule requires explicit declaration)
+        if "allergens" not in m or m.get("allergens") is None:
             m = {**m, "allergens": []}
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}

@@ -87,6 +87,27 @@ def _openai_simplify_json_schema(schema: Any) -> Any:
         if not isinstance(node, dict):
             return node
 
+        # Special case: multilingual string maps expressed via patternProperties.
+        # OpenAI's strict json_schema mode rejects patternProperties, and also rejects
+        # objects without explicit properties when additionalProperties is false.
+        # Convert the common language-code map to a fixed-key object (at least `en`).
+        try:
+            pp = node.get("patternProperties")
+            if isinstance(pp, dict) and pp:
+                # Detect the language-code pattern used throughout our schemas.
+                lang_pat = "^[a-z]{2}(-[A-Z]{2})?$"
+                value_schema = pp.get(lang_pat)
+                if isinstance(value_schema, dict) and value_schema.get("type") == "string":
+                    # Preserve other metadata keys but drop patternProperties.
+                    node = {k: v for k, v in node.items() if k != "patternProperties"}
+                    node.setdefault("type", "object")
+                    node["properties"] = {"en": {"type": "string"}}
+                    # OpenAI strict mode requires required to include every key in properties.
+                    node["required"] = ["en"]
+                    node["additionalProperties"] = False
+        except Exception:
+            pass
+
         # Handle schema compositions by flattening or choosing a representative branch.
         if isinstance(node.get("allOf"), list):
             merged: dict[str, Any] = {k: v for k, v in node.items() if k != "allOf"}
@@ -146,6 +167,17 @@ def _openai_simplify_json_schema(schema: Any) -> Any:
                 out["type"] = "object"
             # OpenAI requires this to be explicitly present and false.
             out["additionalProperties"] = False
+
+            # OpenAI strict mode requirement: for object schemas, `required` must be present
+            # and must include *every* key in `properties` (and no extras).
+            props = out.get("properties")
+            if isinstance(props, dict):
+                out["required"] = [k for k in props.keys() if isinstance(k, str)]
+            else:
+                # If we don't have explicit properties, avoid carrying invalid required keys.
+                req = out.get("required")
+                if isinstance(req, list):
+                    out["required"] = [x for x in req if isinstance(x, str)]
         return out
 
     return _enforce_closed_objects(simplified)
