@@ -976,8 +976,26 @@ def _build_planning_context(
             cur = cur.get(key)
         return default if cur is None else cur
 
+    # Household/profile language preferences may live under db_profile.household
+    # depending on which client created the profile. Keep this best-effort and
+    # do not assume a single canonical key.
+    def _preferred_profile_language() -> Optional[str]:
+        for path in (
+            ["db_profile", "household", "preferred_language"],
+            ["db_profile", "household", "preferredLanguage"],
+            ["db_profile", "household", "primary_language"],
+            ["db_profile", "household", "primaryLanguage"],
+            ["db_profile", "household", "language"],
+            ["db_profile", "household", "languageCode"],
+        ):
+            v = _cfg_get(path, None)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return None
+
     output_lang = (
         getattr(request, "output_language", None)
+        or _preferred_profile_language()
         or _cfg_get(["global_settings", "primary_language"], None)
         or config.global_settings.primary_language
     )
@@ -989,7 +1007,17 @@ def _build_planning_context(
 
     output_languages = getattr(request, "output_languages", None)
     if not isinstance(output_languages, list) or not output_languages:
-        output_languages = ["en"] if output_lang == "en" else ["en", output_lang]
+        # If the household has a preferred language and the request didn't include
+        # output_languages, generate bilingual by default (en + preferred).
+        pref = _preferred_profile_language()
+        if isinstance(pref, str) and pref.strip() and pref.strip() != "en":
+            # Use the preferred language as the primary output language unless the
+            # request explicitly set a different output_language.
+            if not getattr(request, "output_language", None):
+                output_lang = pref.strip()
+            output_languages = ["en", output_lang]
+        else:
+            output_languages = ["en"] if output_lang == "en" else ["en", output_lang]
     else:
         # Ensure english-first ordering and ensure the primary output language is present.
         normalized = [x for x in output_languages if isinstance(x, str) and x.strip()]
