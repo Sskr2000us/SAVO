@@ -271,6 +271,7 @@
                                 },
                                 "micros": {
                                   "type": "object",
+                                  "required": ["fiber_g", "sodium_mg", "sugar_g"],
                                   "properties": {
                                     "fiber_g": { "type": "number" },
                                     "sodium_mg": { "type": "number" },
