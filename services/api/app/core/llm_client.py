@@ -13,6 +13,123 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+_OPENAI_SCHEMA_UNSUPPORTED_KEYS: set[str] = {
+    # OpenAI response_format=json_schema supports only a subset of JSON Schema.
+    # In practice, compositions/conditionals frequently trigger 400s.
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "dependentRequired",
+    "dependentSchemas",
+    "patternProperties",
+}
+
+
+def _openai_simplify_json_schema(schema: Any) -> Any:
+    """Best-effort conversion to OpenAI-compatible JSON Schema.
+
+    We keep the schema strong enough to guide structured outputs, but remove
+    constructs that OpenAI commonly rejects (e.g., allOf/if/then). We do NOT
+    mutate the original schema.
+    """
+
+    def _merge_into(base: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+        for k, v in other.items():
+            if k in _OPENAI_SCHEMA_UNSUPPORTED_KEYS:
+                continue
+            if k == "required" and isinstance(v, list):
+                prev = base.get("required")
+                merged = []
+                if isinstance(prev, list):
+                    merged.extend([x for x in prev if isinstance(x, str)])
+                merged.extend([x for x in v if isinstance(x, str)])
+                # Preserve order while deduping.
+                seen: set[str] = set()
+                base["required"] = [x for x in merged if not (x in seen or seen.add(x))]
+                continue
+            if k == "properties" and isinstance(v, dict):
+                props = base.get("properties")
+                if not isinstance(props, dict):
+                    props = {}
+                for pk, pv in v.items():
+                    props[pk] = pv
+                base["properties"] = props
+                continue
+            if k == "items" and isinstance(v, dict):
+                prev_items = base.get("items")
+                if isinstance(prev_items, dict):
+                    merged_items = dict(prev_items)
+                    merged_items.update(v)
+                    base["items"] = merged_items
+                else:
+                    base["items"] = v
+                continue
+            if k == "additionalProperties":
+                # Prefer the stricter option if either side forbids extras.
+                prev = base.get("additionalProperties")
+                if prev is False or v is False:
+                    base["additionalProperties"] = False
+                else:
+                    base["additionalProperties"] = v
+                continue
+
+            # Default: last-write-wins.
+            base[k] = v
+        return base
+
+    def _simplify(node: Any) -> Any:
+        if isinstance(node, list):
+            return [_simplify(x) for x in node]
+        if not isinstance(node, dict):
+            return node
+
+        # Handle schema compositions by flattening or choosing a representative branch.
+        if isinstance(node.get("allOf"), list):
+            merged: dict[str, Any] = {k: v for k, v in node.items() if k != "allOf"}
+            merged = {k: v for k, v in merged.items() if k not in _OPENAI_SCHEMA_UNSUPPORTED_KEYS}
+            for part in node.get("allOf") or []:
+                if isinstance(part, dict):
+                    _merge_into(merged, part)
+            node = merged
+
+        # anyOf/oneOf: pick the first branch (better than rejection). Server-side validation still enforces.
+        for key in ("anyOf", "oneOf"):
+            if isinstance(node.get(key), list) and node.get(key):
+                first = next((x for x in node[key] if isinstance(x, dict)), None)
+                base = {k: v for k, v in node.items() if k != key}
+                base = {k: v for k, v in base.items() if k not in _OPENAI_SCHEMA_UNSUPPORTED_KEYS}
+                if isinstance(first, dict):
+                    _merge_into(base, first)
+                node = base
+                break
+
+        # Drop unsupported keys recursively.
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if k in _OPENAI_SCHEMA_UNSUPPORTED_KEYS:
+                continue
+            if k == "properties" and isinstance(v, dict):
+                out[k] = {pk: _simplify(pv) for pk, pv in v.items()}
+            elif k == "items":
+                out[k] = _simplify(v)
+            else:
+                out[k] = _simplify(v)
+        return out
+
+    # Deep-copy via JSON roundtrip to avoid mutating the original.
+    try:
+        copied = json.loads(json.dumps(schema))
+    except Exception:
+        copied = schema
+
+    simplified = _simplify(copied)
+    return simplified
+
+
 def _schema_brief(schema: dict[str, Any]) -> str:
     """Create a compact, human-readable schema hint.
 
@@ -166,18 +283,19 @@ class OpenAIClient(LlmClient):
         async with httpx.AsyncClient(timeout=timeout) as client:
             # Retry logic for rate limits
             max_retries = 3
+            use_json_schema = os.getenv("OPENAI_USE_JSON_SCHEMA", "true").lower() == "true"
             for attempt in range(max_retries):
                 try:
                     # Prefer JSON Schema mode (server-side constrained decoding) to reduce
                     # schema-validation failures without bloating the prompt.
-                    use_json_schema = os.getenv("OPENAI_USE_JSON_SCHEMA", "true").lower() == "true"
                     response_format: dict[str, Any]
                     if use_json_schema:
+                        openai_schema = _openai_simplify_json_schema(schema)
                         response_format = {
                             "type": "json_schema",
                             "json_schema": {
                                 "name": "SAVO_OUTPUT",
-                                "schema": schema,
+                                "schema": openai_schema,
                                 "strict": True,
                             },
                         }
@@ -241,16 +359,14 @@ class OpenAIClient(LlmClient):
 
                     # Some deployments/models may not support json_schema yet. If so, retry once
                     # with json_object.
-                    if (
-                        e.response.status_code in (400, 422)
-                        and os.getenv("OPENAI_USE_JSON_SCHEMA", "true").lower() == "true"
-                    ):
+                    if e.response.status_code in (400, 422) and use_json_schema:
                         body_l = (error_body or "").lower()
                         if "json_schema" in body_l or "response_format" in body_l:
                             logger.warning(
                                 "OpenAI rejected response_format=json_schema; falling back to json_object for this request."
                             )
-                            os.environ["OPENAI_USE_JSON_SCHEMA"] = "false"
+                            # Do not mutate process environment based on a single request.
+                            use_json_schema = False
                             continue
                     
                     if e.response.status_code == 429:
