@@ -31,7 +31,8 @@ workflows:
       flutter: stable
       xcode: latest
       ios_signing:
-        distribution_type: app_store
+        # For direct install on registered devices.
+        distribution_type: ad_hoc
         bundle_identifier: com.savo.savo
     scripts:
       - name: Flutter pub get
