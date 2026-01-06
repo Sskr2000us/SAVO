@@ -413,7 +413,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Saved: $_savedCount   Skipped: $_skippedCount',
+                'Saved: $_savedCount  Skipped: $_skippedCount',
                 style: Theme.of(context).textTheme.bodySmall,
                 textAlign: TextAlign.center,
               ),

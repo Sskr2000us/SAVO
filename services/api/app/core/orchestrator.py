@@ -117,6 +117,53 @@ def _get_menu_plan_recipe_options_min_items(schema: Dict[str, Any]) -> int:
         return 0
 
 
+def _synthesize_minimal_recipe_option(*, recipe_id: str, recipe_name: str, cuisine: str) -> Dict[str, Any]:
+    """Return a minimal, schema-valid recipe option.
+
+    This is only used as a last-resort repair when the LLM returns empty/missing
+    recipe_options, which would otherwise hard-fail schema validation.
+    """
+
+    name_obj: Dict[str, str] = {"en": recipe_name.strip() or "Recipe"}
+
+    return {
+        "recipe_id": recipe_id,
+        "recipe_name": name_obj,
+        "cuisine": cuisine or "unknown",
+        "difficulty": "easy",
+        "estimated_times": {"prep_minutes": 10, "cook_minutes": 15, "total_minutes": 25},
+        "cooking_method": "stovetop",
+        "ingredients_used": [
+            {"inventory_id": "inv_unknown", "canonical_name": "salt", "amount": 1, "unit": "tsp"}
+        ],
+        "new_ingredients_optional": [],
+        "steps": [
+            {
+                "step": 1,
+                "instruction": {"en": "Prepare ingredients and cook until done."},
+                "time_minutes": 15,
+                "tips": [],
+            }
+        ],
+        "nutrition_per_serving": {
+            "calories_kcal": 400,
+            "macros": {"protein_g": 20, "carbs_g": 40, "fat_g": 15},
+            "micros": {"fiber_g": 0, "sodium_mg": 0},
+        },
+        "health_benefits": [],
+        "health_fit": {"flags": [], "scores": {}, "adjustments": []},
+        "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+        "preservation_guidance": {
+            "storage": "refrigerate",
+            "safe_duration_hours": 24,
+            "reheat_methods": [],
+            "quality_notes": "Best within a day.",
+        },
+        "youtube_references": [],
+        "agent_mode": "beginner_coach",
+    }
+
+
 def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Repair common LLM omissions so schema validation is less fragile."""
     # Ensure required scalar fields have the correct type.
@@ -169,6 +216,25 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
     if not isinstance(menus, list):
         return result
 
+    # Ensure required top-level fields exist (schema allows empty arrays/objects).
+    if not isinstance(result.get("menu_headers"), list):
+        result["menu_headers"] = []
+    if not isinstance(result.get("variety_log"), dict):
+        result["variety_log"] = {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}}
+    if not isinstance(result.get("nutrition_summary"), dict):
+        result["nutrition_summary"] = {"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []}
+    if not isinstance(result.get("waste_summary"), dict):
+        result["waste_summary"] = {
+            "expiring_items_used": [],
+            "waste_reduction_score": 0,
+            "waste_avoided_value_estimate": {"currency": "USD", "value": 0},
+        }
+    if not isinstance(result.get("shopping_suggestions"), list):
+        result["shopping_suggestions"] = []
+
+    selected_cuisine_val = result.get("selected_cuisine")
+    cuisine_for_fallback = selected_cuisine_val if isinstance(selected_cuisine_val, str) and selected_cuisine_val.strip() else "unknown"
+
     for menu in menus:
         if not isinstance(menu, dict):
             continue
@@ -182,12 +248,136 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
             course_header = course.get("course_header")
             recipe_options = course.get("recipe_options")
             if not isinstance(recipe_options, list):
-                continue
+                recipe_options = []
+                course["recipe_options"] = recipe_options
+
+            # Ensure the course header is a string for naming fallbacks.
+            ch = course_header if isinstance(course_header, str) and course_header.strip() else "Course"
+
+            # If the LLM returned empty recipe_options, synthesize minimal schema-valid options.
+            if not recipe_options:
+                for idx in range(1, min_items + 1):
+                    recipe_options.append(
+                        _synthesize_minimal_recipe_option(
+                            recipe_id=f"r_{ch.lower().replace(' ', '_')}_{idx}",
+                            recipe_name=f"{ch} Option {idx}",
+                            cuisine=cuisine_for_fallback,
+                        )
+                    )
+
+            # Normalize each option to satisfy required keys and types.
+            for opt_idx, opt in enumerate(list(recipe_options)):
+                if not isinstance(opt, dict):
+                    recipe_options[opt_idx] = _synthesize_minimal_recipe_option(
+                        recipe_id=f"r_{ch.lower().replace(' ', '_')}_synth{opt_idx+1}",
+                        recipe_name=f"{ch} Option {opt_idx + 1}",
+                        cuisine=cuisine_for_fallback,
+                    )
+                    opt = recipe_options[opt_idx]
+
+                rn = opt.get("recipe_name")
+                if isinstance(rn, str) and rn.strip():
+                    opt["recipe_name"] = {"en": rn.strip()}
+                elif not isinstance(rn, dict):
+                    opt["recipe_name"] = {"en": f"{ch} Option {opt_idx + 1}"}
+
+                if not isinstance(opt.get("recipe_id"), str) or not str(opt.get("recipe_id") or "").strip():
+                    opt["recipe_id"] = f"r_{ch.lower().replace(' ', '_')}_{opt_idx + 1}"
+
+                if not isinstance(opt.get("cuisine"), str) or not str(opt.get("cuisine") or "").strip():
+                    opt["cuisine"] = cuisine_for_fallback
+
+                if opt.get("difficulty") not in ["easy", "medium", "hard"]:
+                    opt["difficulty"] = "easy"
+
+                et = opt.get("estimated_times")
+                if not isinstance(et, dict):
+                    opt["estimated_times"] = {"prep_minutes": 10, "cook_minutes": 15, "total_minutes": 25}
+                else:
+                    for k in ("prep_minutes", "cook_minutes", "total_minutes"):
+                        if not isinstance(et.get(k), (int, float)):
+                            et[k] = 0
+
+                if not isinstance(opt.get("cooking_method"), str) or not str(opt.get("cooking_method") or "").strip():
+                    opt["cooking_method"] = "stovetop"
+
+                if not isinstance(opt.get("ingredients_used"), list):
+                    opt["ingredients_used"] = []
+                if not isinstance(opt.get("new_ingredients_optional"), list):
+                    opt["new_ingredients_optional"] = []
+                if not isinstance(opt.get("steps"), list) or not opt.get("steps"):
+                    opt["steps"] = [
+                        {
+                            "step": 1,
+                            "instruction": {"en": "Prepare ingredients and cook until done."},
+                            "time_minutes": 15,
+                            "tips": [],
+                        }
+                    ]
+
+                nps = opt.get("nutrition_per_serving")
+                if not isinstance(nps, dict):
+                    opt["nutrition_per_serving"] = {
+                        "calories_kcal": 0,
+                        "macros": {"protein_g": 0, "carbs_g": 0, "fat_g": 0},
+                        "micros": {},
+                    }
+                else:
+                    if not isinstance(nps.get("calories_kcal"), (int, float)):
+                        nps["calories_kcal"] = 0
+                    if not isinstance(nps.get("macros"), dict):
+                        nps["macros"] = {"protein_g": 0, "carbs_g": 0, "fat_g": 0}
+                    if not isinstance(nps.get("micros"), dict):
+                        nps["micros"] = {}
+
+                if not isinstance(opt.get("health_benefits"), list):
+                    opt["health_benefits"] = []
+
+                hf = opt.get("health_fit")
+                if not isinstance(hf, dict):
+                    opt["health_fit"] = {"flags": [], "scores": {}, "adjustments": []}
+                else:
+                    if not isinstance(hf.get("flags"), list):
+                        hf["flags"] = []
+                    if not isinstance(hf.get("scores"), dict):
+                        hf["scores"] = {}
+                    if not isinstance(hf.get("adjustments"), list):
+                        hf["adjustments"] = []
+
+                lf = opt.get("leftover_forecast")
+                if not isinstance(lf, dict):
+                    opt["leftover_forecast"] = {"expected_leftover_servings": 0, "reuse_ideas": []}
+                else:
+                    if not isinstance(lf.get("expected_leftover_servings"), (int, float)):
+                        lf["expected_leftover_servings"] = 0
+                    if not isinstance(lf.get("reuse_ideas"), list):
+                        lf["reuse_ideas"] = []
+
+                pg = opt.get("preservation_guidance")
+                if not isinstance(pg, dict):
+                    opt["preservation_guidance"] = {
+                        "storage": "refrigerate",
+                        "safe_duration_hours": 24,
+                        "reheat_methods": [],
+                        "quality_notes": "Best within a day.",
+                    }
+                else:
+                    if pg.get("storage") not in ["refrigerate", "freeze"]:
+                        pg["storage"] = "refrigerate"
+                    if not isinstance(pg.get("safe_duration_hours"), (int, float)):
+                        pg["safe_duration_hours"] = 24
+                    if not isinstance(pg.get("reheat_methods"), list):
+                        pg["reheat_methods"] = []
+                    if not isinstance(pg.get("quality_notes"), str):
+                        pg["quality_notes"] = ""
+
+                if not isinstance(opt.get("youtube_references"), list):
+                    opt["youtube_references"] = []
+
+                if not isinstance(opt.get("agent_mode"), str) or not str(opt.get("agent_mode") or "").strip():
+                    opt["agent_mode"] = "beginner_coach"
 
             if len(recipe_options) >= min_items:
-                continue
-            if not recipe_options:
-                # Can't synthesize an option safely; let validation handle it.
                 continue
 
             base = recipe_options[-1]
@@ -557,7 +747,7 @@ async def _try_provider(
                     f"Please generate a valid response that strictly matches the JSON schema. "
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
                     f"Do NOT include unexpected fields like 'questions'. Use needs_clarification_questions only. "
-                    f"For each recipe: youtube_references=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
+                    f"For each recipe: youtube_references=[]; health_benefits=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
                     f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will correct my response."})

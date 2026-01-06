@@ -819,6 +819,7 @@ def _base_recipe_option(*, recipe_id: str, recipe_name: str, cuisine: str, agent
             "macros": {"protein_g": 20, "carbs_g": 40, "fat_g": 15},
             "micros": {"fiber_g": 6, "sodium_mg": 500},
         },
+        "health_benefits": [],
         "health_fit": {"flags": [], "scores": {"simplicity": 0.8}, "adjustments": []},
         "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": ["N/A"]},
         "preservation_guidance": {
