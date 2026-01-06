@@ -1,6 +1,8 @@
 from typing import Any, Dict, Optional
 import json
 import logging
+from time import perf_counter
+import uuid
 
 from app.core.llm_client import get_llm_client, RateLimitException
 from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
@@ -609,6 +611,8 @@ async def run_task(
     """
     schema = get_schema(output_schema_name)
     messages = _build_messages(task_name=task_name, context=context)
+    trace_id = uuid.uuid4().hex[:8]
+    total_t0 = perf_counter()
     
     # Use reasoning provider for planning tasks (meal plans, recipes, etc.)
     # OpenAI GPT excels at structured JSON outputs and complex reasoning
@@ -620,8 +624,24 @@ async def run_task(
         output_schema_name=output_schema_name,
         max_retries=max_retries,
         context=context,
+        trace_id=trace_id,
     )
-    
+
+    total_ms = int((perf_counter() - total_t0) * 1000)
+    try:
+        status_val = result.get("status") if isinstance(result, dict) else None
+    except Exception:
+        status_val = None
+    logger.info(
+        "orchestrator_task_done task=%s schema=%s trace=%s provider=%s status=%s total_ms=%s",
+        task_name,
+        output_schema_name,
+        trace_id,
+        settings.reasoning_provider,
+        status_val,
+        total_ms,
+    )
+
     return result
 
 
@@ -634,6 +654,7 @@ async def _try_provider(
     output_schema_name: str,
     max_retries: int,
     context: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Try a specific LLM provider with schema validation and retry logic.
@@ -643,16 +664,28 @@ async def _try_provider(
     last_error: Optional[str] = None
     
     for attempt in range(max_retries + 1):
+        attempt_t0 = perf_counter()
+        llm_ms: Optional[int] = None
+        repair_ms: Optional[int] = None
+        schema_ms: Optional[int] = None
+        semantic_ms: Optional[int] = None
+        judge_ms: Optional[int] = None
         try:
+            llm_t0 = perf_counter()
             result = await client.generate_json(messages=messages, schema=schema)
+            llm_ms = int((perf_counter() - llm_t0) * 1000)
 
             # Repair common issues before strict schema validation.
             if output_schema_name == "MENU_PLAN_SCHEMA" and isinstance(result, dict):
+                repair_t0 = perf_counter()
                 result = _repair_menu_plan_result(result, schema)
                 result = _prune_additional_properties(result, schema)
+                repair_ms = int((perf_counter() - repair_t0) * 1000)
             
             # Validate against schema
+            schema_t0 = perf_counter()
             validate_json(result, schema)
+            schema_ms = int((perf_counter() - schema_t0) * 1000)
 
             # Semantic/authenticity validation (fail closed): if it's structurally valid JSON
             # but semantically invalid (e.g., "dal" without pulses), retry with targeted feedback.
@@ -661,6 +694,7 @@ async def _try_provider(
                 and isinstance(result, dict)
                 and result.get("status") == "ok"
             ):
+                semantic_t0 = perf_counter()
                 semantic_issues = validate_menu_plan_semantics(result)
                 semantic_issues.extend(
                     validate_menu_plan_structure_against_metadata(payload=result, task_name=task_name)
@@ -668,6 +702,7 @@ async def _try_provider(
                 fatal = [i for i in semantic_issues if i.severity == "error"]
                 if fatal:
                     raise SemanticValidationException(fatal)
+                semantic_ms = int((perf_counter() - semantic_t0) * 1000)
 
                 if settings.enable_authenticity_judge:
                     meal_type = context.get("meal_type") if isinstance(context, dict) else None
@@ -677,7 +712,9 @@ async def _try_provider(
                         meal_type=meal_type if isinstance(meal_type, str) else None,
                     )
                     judge_schema = _authenticity_judge_schema()
+                    judge_t0 = perf_counter()
                     judge = await client.generate_json(messages=judge_messages, schema=judge_schema)
+                    judge_ms = int((perf_counter() - judge_t0) * 1000)
                     validate_json(judge, judge_schema)
 
                     if isinstance(judge, dict) and judge.get("is_authentic") is False:
@@ -706,7 +743,21 @@ async def _try_provider(
                     return result
             
             # Validation passed, return result
-            logger.info(f"Task {task_name} (provider={provider}) completed successfully on attempt {attempt + 1}")
+            attempt_ms = int((perf_counter() - attempt_t0) * 1000)
+            logger.info(
+                "orchestrator_attempt_ok task=%s schema=%s trace=%s provider=%s attempt=%s llm_ms=%s repair_ms=%s schema_ms=%s semantic_ms=%s judge_ms=%s attempt_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                llm_ms,
+                repair_ms,
+                schema_ms,
+                semantic_ms,
+                judge_ms,
+                attempt_ms,
+            )
             return result
             
         except RateLimitException as e:
@@ -739,6 +790,18 @@ async def _try_provider(
         except SchemaValidationException as e:
             last_error = f"Schema validation failed: {', '.join(e.errors)}"
             logger.warning(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}")
+            logger.info(
+                "orchestrator_attempt_fail task=%s schema=%s trace=%s provider=%s attempt=%s error=%s attempt_ms=%s llm_ms=%s repair_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                "SchemaValidationException",
+                int((perf_counter() - attempt_t0) * 1000),
+                llm_ms,
+                repair_ms,
+            )
             
             if attempt < max_retries:
                 # Add corrective instruction for retry
@@ -758,6 +821,17 @@ async def _try_provider(
             last_error = f"Semantic validation failed: {len(e.issues)} issue(s)"
             logger.warning(
                 f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}"
+            )
+            logger.info(
+                "orchestrator_attempt_fail task=%s schema=%s trace=%s provider=%s attempt=%s error=%s attempt_ms=%s llm_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                "SemanticValidationException",
+                int((perf_counter() - attempt_t0) * 1000),
+                llm_ms,
             )
 
             if attempt < max_retries:
@@ -782,6 +856,18 @@ async def _try_provider(
             logger.warning(
                 f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}"
             )
+            logger.info(
+                "orchestrator_attempt_fail task=%s schema=%s trace=%s provider=%s attempt=%s error=%s attempt_ms=%s llm_ms=%s judge_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                "AuthenticityJudgeException",
+                int((perf_counter() - attempt_t0) * 1000),
+                llm_ms,
+                judge_ms,
+            )
 
             if attempt < max_retries:
                 correction = (
@@ -801,6 +887,16 @@ async def _try_provider(
         except json.JSONDecodeError as e:
             last_error = f"Invalid JSON returned: {str(e)}"
             logger.warning(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed: {last_error}")
+            logger.info(
+                "orchestrator_attempt_fail task=%s schema=%s trace=%s provider=%s attempt=%s error=%s attempt_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                "JSONDecodeError",
+                int((perf_counter() - attempt_t0) * 1000),
+            )
             
             if attempt < max_retries:
                 correction = (
@@ -843,6 +939,16 @@ async def _try_provider(
         except Exception as e:
             last_error = f"Unexpected error: {str(e)}"
             logger.error(f"Task {task_name} (provider={provider}) attempt {attempt + 1} failed with unexpected error", exc_info=True)
+            logger.info(
+                "orchestrator_attempt_fail task=%s schema=%s trace=%s provider=%s attempt=%s error=%s attempt_ms=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                provider,
+                attempt + 1,
+                type(e).__name__,
+                int((perf_counter() - attempt_t0) * 1000),
+            )
             if attempt < max_retries:
                 continue
     

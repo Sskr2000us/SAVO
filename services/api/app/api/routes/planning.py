@@ -4,6 +4,7 @@ from datetime import date, datetime
 import logging
 import hashlib
 import re
+from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -1298,6 +1299,7 @@ async def post_daily(
     force_regenerate: bool = False,
 ):
     """Generate daily meal plan with full family profile and product intelligence"""
+    total_t0 = perf_counter()
     storage = get_storage()
     config = storage.get_config()
 
@@ -1543,11 +1545,13 @@ async def post_daily(
     context["safety_constraints"] = safety_context
     
     # Generate meal plan
+    llm_t0 = perf_counter()
     try:
         result = await plan_daily(context)
     except Exception:
         logger.exception("plan_daily crashed user_id=%s", user_id)
         raise
+    llm_ms = int((perf_counter() - llm_t0) * 1000)
 
     # Enforce cuisine allow-list on output (hard guarantee).
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -1646,6 +1650,33 @@ async def post_daily(
             if not (result.get("error_message") or "").strip():
                 result["error_message"] = "Planning failed. Please try again."
     
+    total_ms = int((perf_counter() - total_t0) * 1000)
+    try:
+        status_val = result.get("status") if isinstance(result, dict) else None
+        sel = result.get("selected_cuisine") if isinstance(result, dict) else None
+    except Exception:
+        status_val = None
+        sel = None
+
+    if total_ms >= 4000:
+        logger.info(
+            "plan_daily_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
+    else:
+        logger.debug(
+            "plan_daily_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
+
     return MenuPlanResponse(**result)
 
 
@@ -1723,6 +1754,7 @@ async def post_party(
     force_regenerate: bool = False,
 ):
     """Generate party meal plan with age-aware constraints"""
+    total_t0 = perf_counter()
     # Validate party settings (Pydantic already validated, but double-check)
     if req.party_settings.guest_count < 2 or req.party_settings.guest_count > 80:
         raise HTTPException(
@@ -1862,7 +1894,9 @@ async def post_party(
     allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
     if not allowed_cuisines:
         allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
+    llm_t0 = perf_counter()
     result = await plan_party(context)
+    llm_ms = int((perf_counter() - llm_t0) * 1000)
     # Enforce a recent-recipe cooldown so users see variety across parties.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
@@ -1889,6 +1923,33 @@ async def post_party(
             )
         except Exception:
             logger.exception("Failed to persist party meal plan user_id=%s plan_date=%s", user_id, plan_date)
+    total_ms = int((perf_counter() - total_t0) * 1000)
+    try:
+        status_val = result.get("status") if isinstance(result, dict) else None
+        sel = result.get("selected_cuisine") if isinstance(result, dict) else None
+    except Exception:
+        status_val = None
+        sel = None
+
+    if total_ms >= 4000:
+        logger.info(
+            "plan_party_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
+    else:
+        logger.debug(
+            "plan_party_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
+
     return MenuPlanResponse(**result)
 
 
@@ -1898,6 +1959,7 @@ async def post_weekly(
     user_id: str = Depends(get_current_user),
 ):
     """Generate weekly meal plan with configurable horizon"""
+    total_t0 = perf_counter()
     storage = get_storage()
     config = storage.get_config()
 
@@ -1962,7 +2024,9 @@ async def post_weekly(
     if req.servings:
         context["servings"] = req.servings
     
+    llm_t0 = perf_counter()
     result = await plan_weekly(context)
+    llm_ms = int((perf_counter() - llm_t0) * 1000)
 
     # Avoid duplicated recipes in the returned menu.
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -1999,6 +2063,33 @@ async def post_weekly(
                 user_id,
                 req.start_date,
             )
+
+    total_ms = int((perf_counter() - total_t0) * 1000)
+    try:
+        status_val = result.get("status") if isinstance(result, dict) else None
+        sel = result.get("selected_cuisine") if isinstance(result, dict) else None
+    except Exception:
+        status_val = None
+        sel = None
+
+    if total_ms >= 4000:
+        logger.info(
+            "plan_weekly_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
+    else:
+        logger.debug(
+            "plan_weekly_timing user_id=%s status=%s selected_cuisine=%s llm_ms=%s total_ms=%s",
+            user_id,
+            status_val,
+            sel,
+            llm_ms,
+            total_ms,
+        )
 
     return MenuPlanResponse(**result)
 
