@@ -30,25 +30,35 @@ class SupabaseDB:
         return cls._instance
     
     def __init__(self):
-        if self._client is None:
-            url = os.getenv("SUPABASE_URL")
-            key = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for backend
-            
-            if not url or not key:
-                raise ValueError(
-                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables"
-                )
-            
-            try:
-                self._client = create_client(url, key)
-                logger.info("Supabase client initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Supabase client: {e}")
-                raise
+        # Lazy initialization: do not hard-fail module import when env vars
+        # are not present (e.g., local unit tests, CI lint steps).
+        # The client will be created on first access to .client.
+        pass
+
+    def _ensure_client(self) -> None:
+        if self._client is not None:
+            return
+
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for backend
+
+        if not url or not key:
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables"
+            )
+
+        try:
+            self._client = create_client(url, key)
+            logger.info("Supabase client initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Supabase client: {e}")
+            raise
     
     @property
     def client(self) -> Client:
         """Get the Supabase client instance"""
+        if self._client is None:
+            self._ensure_client()
         if self._client is None:
             raise RuntimeError("Supabase client not initialized")
         return self._client
