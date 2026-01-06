@@ -416,7 +416,7 @@
           },
           "nutrition_summary": {
             "type": "object",
-            "required": ["total_calories_kcal", "per_member_estimates", "warnings"],
+            "required": ["total_calories_kcal", "warnings"],
             "properties": {
               "total_calories_kcal": { "type": "number" },
               "per_member_estimates": { "type": "array", "items": { "type": "object" } },
