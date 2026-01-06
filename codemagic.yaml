@@ -69,7 +69,18 @@ workflows:
           # you need to add/generate an iOS signing certificate (with private key) in Codemagic UI under Code signing.
 
       - name: Add signing certificates to keychain
-        script: keychain add-certificates
+        script: |
+          CERT_DIR="$HOME/Library/MobileDevice/Certificates"
+          if ls "$CERT_DIR"/*.p12 >/dev/null 2>&1; then
+            keychain add-certificates
+          else
+            echo "No .p12 certificates found in $CERT_DIR."
+            echo "Fix in Codemagic UI: Teams -> Code signing identities -> iOS certificates:"
+            echo "- Click 'Generate certificate' (recommended) and create an iOS Distribution/Production certificate, OR"
+            echo "- Upload an existing .p12 (must include the private key)."
+            echo "Note: 'Fetch certificate' from Apple typically does NOT include a private key, so signing will fail."
+            exit 1
+          fi
 
       - name: Fetch signing files
         script: |
