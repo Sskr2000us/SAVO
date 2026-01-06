@@ -28,6 +28,8 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
+      groups:
+        - ios_ipa
       flutter: stable
       xcode: latest
       vars:
