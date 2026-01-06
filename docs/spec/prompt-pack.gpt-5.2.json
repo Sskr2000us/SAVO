@@ -299,7 +299,7 @@
                             },
                             "health_fit": {
                               "type": "object",
-                              "required": ["flags", "scores", "adjustments"],
+                              "required": ["flags", "adjustments"],
                               "properties": {
                                 "flags": { "type": "array", "items": { "type": "string" } },
                                 "scores": {
