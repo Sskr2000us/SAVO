@@ -168,6 +168,11 @@ def _synthesize_minimal_recipe_option(*, recipe_id: str, recipe_name: str, cuisi
 
 def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Repair common LLM omissions so schema validation is less fragile."""
+    # Normalize legacy status values.
+    status = result.get("status")
+    if status == "success":
+        result["status"] = "ok"
+
     # Ensure required scalar fields have the correct type.
     # LLM occasionally returns null for required strings like selected_cuisine.
     selected_cuisine = result.get("selected_cuisine")
@@ -183,6 +188,157 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
             result["error_message"] = q[0].strip()
         else:
             result["error_message"] = "Planning requires additional information."
+
+    # Legacy/alternate shape normalization:
+    # Some older generators return menus as an object mapping course_header -> [recipe].
+    # Convert to the current menus[] schema so we can validate and serve it.
+    legacy_menus = result.get("menus")
+    if isinstance(legacy_menus, dict):
+        try:
+            course_headers = [str(k) for k in legacy_menus.keys() if str(k).strip()]
+        except Exception:
+            course_headers = []
+
+        # Best-effort servings inference.
+        servings_count = 2
+        try:
+            s = result.get("servings")
+            if isinstance(s, (int, float)) and s > 0:
+                servings_count = float(s)
+        except Exception:
+            pass
+
+        selected_cuisine_val = result.get("selected_cuisine")
+        cuisine_for_fallback = (
+            selected_cuisine_val
+            if isinstance(selected_cuisine_val, str) and selected_cuisine_val.strip()
+            else "unknown"
+        )
+
+        def _legacy_recipe_to_option(recipe: Any, *, course_header: str, idx: int) -> Dict[str, Any]:
+            if not isinstance(recipe, dict):
+                return _synthesize_minimal_recipe_option(
+                    recipe_id=f"r_{course_header.lower().replace(' ', '_')}_{idx}",
+                    recipe_name=f"{course_header} Option {idx}",
+                    cuisine=cuisine_for_fallback,
+                )
+
+            name = recipe.get("name") or recipe.get("recipe_name") or f"{course_header} Option {idx}"
+            if isinstance(name, dict):
+                name_en = str(name.get("en") or "").strip() or str(next(iter(name.values()), ""))
+            else:
+                name_en = str(name or "").strip()
+
+            ingredients_used: list[dict[str, Any]] = []
+            ing = recipe.get("ingredients")
+            if isinstance(ing, list):
+                for raw in ing[:32]:
+                    if isinstance(raw, str) and raw.strip():
+                        ingredients_used.append(
+                            {
+                                "inventory_id": "inv_unknown",
+                                "canonical_name": raw.strip(),
+                                "amount": 0,
+                                "unit": "",
+                            }
+                        )
+
+            steps_out: list[dict[str, Any]] = []
+            st = recipe.get("steps")
+            if isinstance(st, list):
+                for i, raw in enumerate(st[:10], start=1):
+                    if isinstance(raw, str) and raw.strip():
+                        steps_out.append(
+                            {
+                                "step": i,
+                                "instruction": {"en": raw.strip()},
+                                "time_minutes": 0,
+                                "tips": [],
+                            }
+                        )
+
+            if not steps_out:
+                steps_out = [
+                    {
+                        "step": 1,
+                        "instruction": {"en": "Prepare ingredients and cook until done."},
+                        "time_minutes": 15,
+                        "tips": [],
+                    }
+                ]
+
+            nutrition = recipe.get("nutrition") if isinstance(recipe.get("nutrition"), dict) else {}
+            calories = nutrition.get("calories") if isinstance(nutrition, dict) else None
+            macros = {
+                "protein_g": float(nutrition.get("protein_g", 0) or 0) if isinstance(nutrition, dict) else 0,
+                "carbs_g": float(nutrition.get("carbs_g", 0) or 0) if isinstance(nutrition, dict) else 0,
+                "fat_g": float(nutrition.get("fat_g", 0) or 0) if isinstance(nutrition, dict) else 0,
+            }
+            micros: dict[str, Any] = {}
+            if isinstance(nutrition, dict):
+                for k in ("fiber_g", "sodium_mg"):
+                    v = nutrition.get(k)
+                    if isinstance(v, (int, float)):
+                        micros[k] = v
+
+            health_fit_flags: list[str] = []
+            hf = recipe.get("health_fit")
+            if isinstance(hf, str) and hf.strip():
+                health_fit_flags = [hf.strip()]
+
+            preservation = recipe.get("preservation")
+            storage = "refrigerate"
+            if isinstance(preservation, str) and "freez" in preservation.lower():
+                storage = "freeze"
+
+            option: Dict[str, Any] = {
+                "recipe_id": f"r_{course_header.lower().replace(' ', '_')}_{idx}",
+                "recipe_name": {"en": name_en or f"{course_header} Option {idx}"},
+                "cuisine": cuisine_for_fallback,
+                "difficulty": "easy",
+                "estimated_times": {"prep_minutes": 10, "cook_minutes": 15, "total_minutes": 25},
+                "cooking_method": "stovetop",
+                "ingredients_used": ingredients_used or [
+                    {"inventory_id": "inv_unknown", "canonical_name": "salt", "amount": 1, "unit": "tsp"}
+                ],
+                "new_ingredients_optional": [],
+                "steps": steps_out,
+                "nutrition_per_serving": {
+                    "calories_kcal": float(calories or 0) if isinstance(calories, (int, float)) else 0,
+                    "macros": macros,
+                    "micros": micros,
+                },
+                "health_benefits": recipe.get("health_benefits") if isinstance(recipe.get("health_benefits"), list) else [],
+                "health_fit": {"flags": health_fit_flags, "scores": {}, "adjustments": []},
+                "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+                "preservation_guidance": {
+                    "storage": storage,
+                    "safe_duration_hours": 24,
+                    "reheat_methods": [],
+                    "quality_notes": "",
+                },
+                "youtube_references": recipe.get("youtube_references") if isinstance(recipe.get("youtube_references"), list) else [],
+                "agent_mode": "beginner_coach",
+            }
+            return option
+
+        courses_out: list[dict[str, Any]] = []
+        for ch in course_headers:
+            v = legacy_menus.get(ch)
+            recipe_list = v if isinstance(v, list) else []
+            options: list[dict[str, Any]] = []
+            for idx, rec in enumerate(recipe_list[:3], start=1):
+                options.append(_legacy_recipe_to_option(rec, course_header=ch, idx=idx))
+            courses_out.append({"course_header": ch, "recipe_options": options})
+
+        result["menu_headers"] = course_headers
+        result["menus"] = [
+            {
+                "menu_type": "daily",
+                "servings": {"count": servings_count, "scaling_factor": 1},
+                "courses": courses_out,
+            }
+        ]
 
     # Normalize common alias fields.
     if "questions" in result and "needs_clarification_questions" not in result:
