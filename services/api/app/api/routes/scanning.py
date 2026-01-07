@@ -489,18 +489,6 @@ async def analyze_image(
                 thumbnail_url=thumbnail_url,
                 full_image_url=image_url
             ))
-                confidence_category=vision_client.get_confidence_category(confidence),
-                category=ingredient_data.get("category", "other"),
-                quantity=ingredient_data.get("quantity"),
-                unit=ingredient_data.get("unit"),
-                quantity_confidence=ingredient_data.get("quantity_confidence"),
-                quantity_source=ingredient_data.get("quantity_source"),
-                close_alternatives=ingredient_data.get("close_alternatives", []),
-                visual_similarity_group=ingredient_data.get("visual_similarity_group"),
-                allergen_warnings=ingredient_data.get("allergen_warnings", []),
-                bbox=ingredient_data.get("bbox"),
-                confirmation_status="pending"
-            ))
         
         # Update scan processing time
         db.table("ingredient_scans").update({
