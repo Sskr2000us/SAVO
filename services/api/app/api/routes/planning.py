@@ -224,6 +224,221 @@ def _normalize_cuisine_id(value: Any) -> Optional[str]:
     return v
 
 
+def _generate_fallback_recipes(
+    *,
+    inventory: List[InventoryItem],
+    household: Dict[str, Any],
+    members: List[Dict[str, Any]],
+    servings: int,
+    time_available: int,
+    meal_type: str,
+) -> Dict[str, Any]:
+    """
+    EMERGENCY FALLBACK: Generate simple, safe recipes when LLM fails.
+    Uses inventory to suggest practical recipes that users can actually cook.
+    """
+    import random
+    from datetime import datetime
+    
+    # Detect cuisine from household preferences or default to Indian
+    cuisine = "Indian"
+    favs = household.get("favorite_cuisines") or household.get("favoriteCuisines") or []
+    if isinstance(favs, list) and favs:
+        cuisine = favs[0] if isinstance(favs[0], str) else "Indian"
+    
+    # Analyze inventory for common ingredients
+    has_rice = any("rice" in (item.canonical_name or "").lower() for item in inventory)
+    has_dal = any(any(x in (item.canonical_name or "").lower() for x in ["lentil", "dal", "toor", "moong"]) for item in inventory)
+    has_veggies = any(any(x in (item.canonical_name or "").lower() for x in ["tomato", "onion", "potato", "carrot"]) for item in inventory)
+    has_paneer = any("paneer" in (item.canonical_name or "").lower() for item in inventory)
+    has_chicken = any("chicken" in (item.canonical_name or "").lower() for item in inventory)
+    
+    # Check dietary restrictions
+    is_vegetarian = any("vegetarian" in str(m.get("dietary_restrictions", [])).lower() for m in members)
+    is_vegan = any("vegan" in str(m.get("dietary_restrictions", [])).lower() for m in members)
+    
+    # Generate simple fallback recipes based on what's available
+    recipes = []
+    
+    # Recipe 1: Dal Rice (if ingredients available)
+    if has_dal and has_rice:
+        recipes.append({
+            "recipe_id": "fallback_dal_rice",
+            "recipe_name": {"en": "Dal Rice", "hi": "दाल चावल"},
+            "cuisine": cuisine,
+            "cooking_method": "stovetop",
+            "difficulty_level": 1,
+            "estimated_time_minutes": 30,
+            "servings": servings,
+            "ingredients": [
+                {"name": "Lentils (Dal)", "amount": servings * 0.5, "unit": "cup", "in_inventory": True},
+                {"name": "Rice", "amount": servings * 0.75, "unit": "cup", "in_inventory": True},
+                {"name": "Salt", "amount": 1, "unit": "tsp", "in_inventory": False},
+                {"name": "Oil", "amount": 2, "unit": "tbsp", "in_inventory": False},
+            ],
+            "steps": [
+                {"step_number": 1, "instruction": {"en": "Pressure cook lentils with water and salt for 15 minutes"}, "tips": []},
+                {"step_number": 2, "instruction": {"en": "Cook rice separately in rice cooker or pot"}, "tips": []},
+                {"step_number": 3, "instruction": {"en": "Serve dal over rice with a drizzle of oil"}, "tips": []},
+            ],
+            "nutrition_estimate": {"calories_per_serving": 350, "protein_g": 15, "carbs_g": 65, "fat_g": 5},
+            "health_benefits": ["High in protein", "Complete meal", "Easy to digest"],
+            "chef_tips": ["Add turmeric for color", "Tempering with cumin enhances flavor"],
+            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
+            "dietary_information": {
+                "vegetarian": True,
+                "vegan": True,
+                "gluten_free": True,
+                "allergens": [],
+                "religious_compatibility": ["Hindu", "Jain", "Buddhist"]
+            },
+            "youtube_references": [],
+            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
+            "leftover_forecast": {"reuse_ideas": []},
+        })
+    
+    # Recipe 2: Veggie Stir Fry (if veggies available)
+    if has_veggies:
+        recipes.append({
+            "recipe_id": "fallback_veggie_stirfry",
+            "recipe_name": {"en": "Mixed Vegetable Stir Fry", "hi": "सब्जी"},
+            "cuisine": cuisine,
+            "cooking_method": "stovetop",
+            "difficulty_level": 1,
+            "estimated_time_minutes": 20,
+            "servings": servings,
+            "ingredients": [
+                {"name": "Mixed Vegetables", "amount": servings * 1.5, "unit": "cup", "in_inventory": True},
+                {"name": "Oil", "amount": 2, "unit": "tbsp", "in_inventory": False},
+                {"name": "Salt", "amount": 1, "unit": "tsp", "in_inventory": False},
+                {"name": "Spices", "amount": 1, "unit": "tsp", "in_inventory": False},
+            ],
+            "steps": [
+                {"step_number": 1, "instruction": {"en": "Chop all vegetables into bite-sized pieces"}, "tips": []},
+                {"step_number": 2, "instruction": {"en": "Heat oil in pan and add vegetables"}, "tips": []},
+                {"step_number": 3, "instruction": {"en": "Stir fry for 10-15 minutes until tender"}, "tips": []},
+            ],
+            "nutrition_estimate": {"calories_per_serving": 180, "protein_g": 5, "carbs_g": 25, "fat_g": 8},
+            "health_benefits": ["Rich in vitamins", "Low calorie", "High fiber"],
+            "chef_tips": ["Don't overcook vegetables", "Add garlic for extra flavor"],
+            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
+            "dietary_information": {
+                "vegetarian": True,
+                "vegan": True,
+                "gluten_free": True,
+                "allergens": [],
+                "religious_compatibility": ["Hindu", "Jain", "Buddhist"]
+            },
+            "youtube_references": [],
+            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
+            "leftover_forecast": {"reuse_ideas": []},
+        })
+    
+    # Recipe 3: Paneer dish (if available and not vegan)
+    if has_paneer and not is_vegan:
+        recipes.append({
+            "recipe_id": "fallback_paneer",
+            "recipe_name": {"en": "Simple Paneer Curry", "hi": "पनीर करी"},
+            "cuisine": cuisine,
+            "cooking_method": "stovetop",
+            "difficulty_level": 2,
+            "estimated_time_minutes": 25,
+            "servings": servings,
+            "ingredients": [
+                {"name": "Paneer", "amount": servings * 100, "unit": "g", "in_inventory": True},
+                {"name": "Tomato", "amount": servings * 2, "unit": "pcs", "in_inventory": has_veggies},
+                {"name": "Onion", "amount": servings, "unit": "pcs", "in_inventory": has_veggies},
+                {"name": "Spices", "amount": 2, "unit": "tsp", "in_inventory": False},
+            ],
+            "steps": [
+                {"step_number": 1, "instruction": {"en": "Cube paneer and sauté until golden"}, "tips": []},
+                {"step_number": 2, "instruction": {"en": "Make gravy with tomatoes and onions"}, "tips": []},
+                {"step_number": 3, "instruction": {"en": "Add paneer to gravy and simmer"}, "tips": []},
+            ],
+            "nutrition_estimate": {"calories_per_serving": 280, "protein_g": 18, "carbs_g": 15, "fat_g": 18},
+            "health_benefits": ["High protein", "Good calcium source"],
+            "chef_tips": ["Don't overcook paneer", "Add cream for richness"],
+            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
+            "dietary_information": {
+                "vegetarian": True,
+                "vegan": False,
+                "gluten_free": True,
+                "allergens": ["dairy"],
+                "religious_compatibility": ["Hindu"]
+            },
+            "youtube_references": [],
+            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
+            "leftover_forecast": {"reuse_ideas": []},
+        })
+    
+    # If no recipes generated, create a generic one
+    if not recipes:
+        recipes.append({
+            "recipe_id": "fallback_generic",
+            "recipe_name": {"en": "Simple Home Meal"},
+            "cuisine": cuisine,
+            "cooking_method": "stovetop",
+            "difficulty_level": 1,
+            "estimated_time_minutes": 30,
+            "servings": servings,
+            "ingredients": [
+                {"name": "Available Ingredients", "amount": 1, "unit": "serving", "in_inventory": True},
+            ],
+            "steps": [
+                {"step_number": 1, "instruction": {"en": "Use your available ingredients creatively"}, "tips": []},
+                {"step_number": 2, "instruction": {"en": "Cook with basic seasonings"}, "tips": []},
+            ],
+            "nutrition_estimate": {"calories_per_serving": 300, "protein_g": 10, "carbs_g": 40, "fat_g": 10},
+            "health_benefits": ["Home cooked", "Fresh ingredients"],
+            "chef_tips": ["Cook with love", "Adjust to taste"],
+            "cultural_context": {"origin": cuisine, "occasions": ["Daily"], "serving_style": "Family"},
+            "dietary_information": {
+                "vegetarian": True,
+                "vegan": False,
+                "gluten_free": False,
+                "allergens": [],
+                "religious_compatibility": []
+            },
+            "youtube_references": [],
+            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
+            "leftover_forecast": {"reuse_ideas": []},
+        })
+    
+    # Build the response in MenuPlanResponse format
+    return {
+        "status": "ok",
+        "selected_cuisine": cuisine,
+        "menu_headers": [{"menu_type": "daily", "meal_type": meal_type or "dinner", "servings": servings}],
+        "menus": [{
+            "menu_type": "daily",
+            "meal_type": meal_type or "dinner",
+            "courses": [{
+                "course_header": "Main Course",
+                "course_type": "main",
+                "recipe_options": recipes[:3]  # Max 3 options
+            }]
+        }],
+        "variety_log": {
+            "rules_applied": ["fallback_mode"],
+            "excluded_recent": [],
+            "diversity_scores": {}
+        },
+        "nutrition_summary": {
+            "total_calories_kcal": sum(r.get("nutrition_estimate", {}).get("calories_per_serving", 0) for r in recipes) / len(recipes) if recipes else 300,
+            "per_member_estimates": [],
+            "warnings": ["Generated using fallback mode - LLM unavailable"]
+        },
+        "waste_summary": {
+            "expiring_items_used": [],
+            "waste_reduction_score": 0.5,
+            "waste_avoided_value_estimate": {"currency": "USD", "value": 0}
+        },
+        "shopping_suggestions": [],
+        "_generated_at": datetime.utcnow().isoformat(),
+        "_fallback_mode": True,
+    }
+
+
 def _allowed_cuisines_from_profile_and_request(req: Any, household: Any) -> set[str]:
     """Strict allow-list for cuisine selection.
 
@@ -1801,15 +2016,34 @@ async def post_daily(
     safety_context = build_complete_safety_context(profile_dict)
     context["safety_constraints"] = safety_context
     
-    # Generate meal plan
+    # Generate meal plan with aggressive timeout and fallback
     llm_t0 = perf_counter()
     logger.info(f"Starting LLM call for user_id={user_id}")
+    result = None
     try:
-        result = await plan_daily(context)
+        import asyncio
+        # Set aggressive 10-second timeout - if LLM takes longer, generate fallback
+        result = await asyncio.wait_for(plan_daily(context), timeout=10.0)
         logger.info(f"LLM call completed: status={result.get('status')} time={int((perf_counter() - llm_t0) * 1000)}ms")
+    except asyncio.TimeoutError:
+        logger.warning(f"LLM timeout after 10s, generating fallback recipes for user_id={user_id}")
+        result = None
     except Exception as e:
         logger.exception("plan_daily crashed user_id=%s", user_id)
-        raise
+        result = None
+    
+    # FAIL-SAFE: If LLM failed, timed out, or returned needs_clarification, generate simple fallback
+    if result is None or result.get("status") != "ok":
+        logger.warning(f"LLM failed or returned non-ok status, generating FALLBACK recipes for user_id={user_id}")
+        result = _generate_fallback_recipes(
+            inventory=inventory_models,
+            household=household,
+            members=normalized_members,
+            servings=req.servings,
+            time_available=req.time_available_minutes,
+            meal_type=req.meal_type,
+        )
+    
     llm_ms = int((perf_counter() - llm_t0) * 1000)
 
     # Enforce cuisine allow-list on output (hard guarantee).
