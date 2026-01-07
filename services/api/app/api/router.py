@@ -24,6 +24,7 @@ from app.routers.search import router as search_router
 from app.routers.graph import router as graph_router
 from app.routers.regional import router as regional_router
 from app.routers.waste import router as waste_router
+from app.api.decision import router as decision_router
 
 api_router = APIRouter()
 
@@ -53,3 +54,4 @@ api_router.include_router(search_router, tags=["search"])
 api_router.include_router(graph_router, tags=["graph"])
 api_router.include_router(regional_router, tags=["regional"])
 api_router.include_router(waste_router, tags=["waste"])
+api_router.include_router(decision_router, tags=["decision"])
