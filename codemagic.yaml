@@ -31,6 +31,10 @@ workflows:
       # Must match the App Store Connect API key name configured in Codemagic UI
       # under Teams -> Integrations -> Developer Portal.
       app_store_connect: SAVO
+      # App Center integration for distribution
+      # Configure in Codemagic: Teams -> Integrations -> App Center
+      # Add API token from App Center: Account Settings -> API Tokens
+      app_center: SAVO_AppCenter
     environment:
       flutter: stable
       xcode: latest
@@ -38,6 +42,11 @@ workflows:
         # TestFlight/App Store distribution (no device UDID needed).
         distribution_type: app_store
         bundle_identifier: com.savo.savo
+      vars:
+        # App Center organization/owner name
+        APP_CENTER_OWNER: "YOUR_APP_CENTER_OWNER"
+        # App Center iOS app name
+        APP_CENTER_IOS_APP: "SAVO-iOS"
     scripts:
       - name: Flutter pub get
         script: |
@@ -90,6 +99,27 @@ workflows:
         auth: integration
         # Internal testing does not require beta review submission.
         submit_to_testflight: false
+      app_center:
+        # Upload IPA to App Center for broader distribution
+        auth: integration
+        # Will use APP_CENTER_OWNER and APP_CENTER_IOS_APP from environment vars
+        owner: $APP_CENTER_OWNER
+        app_name: $APP_CENTER_IOS_APP
+        # Notify testers automatically
+        notify_testers: true
+        # Distribution group (e.g., "Collaborators" or create custom group)
+        distribution_group: Collaborators
+        # Optional: release notes from commit messages
+        release_notes: |
+          Build: $BUILD_NUMBER
+          Commit: $CM_COMMIT
+          Branch: $CM_BRANCH
+          
+          Latest Changes:
+          - Continuous single-item scanning implementation
+          - Auto-capture with 3-second intervals
+          - Instant confirmation for high-confidence items
+          - Optimized Vision API (1-2s response time)
     artifacts:
       - apps/mobile/build/ios/ipa/*.ipa
       - apps/mobile/build/ios/ipa/**/*.ipa
