@@ -18,6 +18,12 @@ from app.api.routes.security import router as security_router
 from app.api.routes.debug import router as debug_router
 from app.api.routes.market import router as market_router, admin_router as admin_market_router
 
+# Ingredient Intelligence routers
+from app.routers.intelligence import router as intelligence_router
+from app.routers.search import router as search_router
+from app.routers.graph import router as graph_router
+from app.routers.regional import router as regional_router
+
 api_router = APIRouter()
 
 api_router.include_router(config_router, tags=["config"])
@@ -39,3 +45,9 @@ api_router.include_router(security_router, tags=["security"])
 api_router.include_router(debug_router, prefix="/debug", tags=["debug"])
 api_router.include_router(market_router, tags=["market"])
 api_router.include_router(admin_market_router, tags=["admin", "market"])
+
+# Ingredient Intelligence routers
+api_router.include_router(intelligence_router, tags=["intelligence"])
+api_router.include_router(search_router, tags=["search"])
+api_router.include_router(graph_router, tags=["graph"])
+api_router.include_router(regional_router, tags=["regional"])
