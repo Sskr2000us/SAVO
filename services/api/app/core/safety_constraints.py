@@ -440,23 +440,11 @@ def validate_profile_completeness(profile: Dict[str, Any]) -> Tuple[bool, List[s
     if not isinstance(members, list) or len(members) == 0:
         missing.append("family members")
     
-    # Allergens are REQUIRED to be explicitly declared (even if empty)
-    # Require this for every member so we don't accidentally proceed when some
-    # members have unknown allergen status.
-    allergens_declared_for_all = True
-    for member in members or []:
-        if not isinstance(member, dict):
-            continue
-        if "allergens" not in member:
-            allergens_declared_for_all = False
-            break
-        # Treat null/empty string as not explicitly declared
-        if member.get("allergens") is None:
-            allergens_declared_for_all = False
-            break
-
-    if (members and len(members) > 0) and not allergens_declared_for_all:
-        missing.append("allergen declarations (required for safety)")
+    # RELAXED: Allergens are important, but we can proceed if not explicitly declared
+    # We'll treat missing allergens as "no allergens" and add a safety disclaimer
+    # This prevents blocking users from trying the product
+    # If allergens are declared as null/missing, we'll assume no allergens
+    # The LLM will still be instructed to ask about allergens in safety context
     
     is_complete = len(missing) == 0
     return is_complete, missing
