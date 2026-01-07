@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS public.barcode_scans (
     -- Barcode data
     barcode TEXT NOT NULL,
     barcode_type TEXT, -- EAN13, UPCA, UPCE, EAN8
-    product_id UUID REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL,
+    product_barcode TEXT REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL,
     
     -- Detected information
     product_name TEXT,
@@ -283,7 +283,7 @@ CREATE TABLE IF NOT EXISTS public.barcode_scans (
 
 CREATE INDEX idx_barcode_scans_user ON public.barcode_scans(user_id);
 CREATE INDEX idx_barcode_scans_barcode ON public.barcode_scans(barcode);
-CREATE INDEX idx_barcode_scans_product ON public.barcode_scans(product_id);
+CREATE INDEX idx_barcode_scans_product ON public.barcode_scans(product_barcode);
 
 COMMENT ON TABLE public.barcode_scans IS 'History of barcode scans by users';
 
