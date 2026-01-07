@@ -275,6 +275,27 @@ def _coerce_menu_headers(payload: Any) -> Any:
     return payload
 
 
+def _payload_has_recipes(payload: Any) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return False
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return False
+    for m in menus:
+        if not isinstance(m, dict):
+            continue
+        courses = m.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for c in courses:
+            if not isinstance(c, dict):
+                continue
+            opts = c.get("recipe_options")
+            if isinstance(opts, list) and len(opts) >= 1:
+                return True
+    return False
+
+
 def _generate_fallback_recipes(
     *,
     inventory: List[InventoryItem],
@@ -328,6 +349,9 @@ def _generate_fallback_recipes(
             benefits.append({"ingredient": "pantry staples", "benefit": "Convenient home cooking."})
         return benefits
 
+    top_names = [str(x.get("canonical_name")) for x in _ingredients_used(3) if isinstance(x, dict) and x.get("canonical_name")]
+    top_phrase = ", ".join([n.title() for n in top_names[:3]]) if top_names else "pantry ingredients"
+
     def _recipe(
         recipe_id: str,
         name_en: str,
@@ -353,13 +377,13 @@ def _generate_fallback_recipes(
             "steps": [
                 {
                     "step": 1,
-                    "instruction": {"en": "Prep ingredients from your pantry (wash/chop as needed)."},
+                    "instruction": {"en": f"Prep {top_phrase} (wash/chop as needed)."},
                     "time_minutes": prep,
                     "tips": [],
                 },
                 {
                     "step": 2,
-                    "instruction": {"en": "Cook on medium heat, season to taste, and serve hot."},
+                    "instruction": {"en": f"Cook {top_phrase} on medium heat, season to taste, and serve hot."},
                     "time_minutes": cook,
                     "tips": [],
                 },
@@ -394,13 +418,13 @@ def _generate_fallback_recipes(
     # Always return at least 2 recipe_options (schema minItems=2).
     r1 = _recipe(
         "fallback_pantry_meal_1",
-        "Pantry Comfort Meal",
+        f"Pantry Comfort Meal ({top_phrase})",
         total_minutes=min(int(time_available or 30), 45),
         cooking_method="stovetop",
     )
     r2 = _recipe(
         "fallback_pantry_meal_2",
-        "Quick Pantry Stir-Fry",
+        f"Quick Pantry Stir-Fry ({top_phrase})",
         total_minutes=min(int(time_available or 25), 35),
         cooking_method="stovetop",
     )
@@ -421,6 +445,132 @@ def _generate_fallback_recipes(
         ],
         "variety_log": {"rules_applied": ["fallback_mode"]},
         "nutrition_summary": {"total_calories_kcal": 700, "warnings": ["Fallback mode: simplified recipes."]},
+        "waste_summary": {
+            "expiring_items_used": [],
+            "waste_reduction_score": 0.0,
+            "waste_avoided_value_estimate": {"currency": "USD", "value": 0.0},
+        },
+        "shopping_suggestions": [],
+        "needs_clarification_questions": [],
+        "error_message": None,
+        "_generated_at": datetime.utcnow().isoformat(),
+        "_fallback_mode": True,
+    }
+
+
+def _generate_fallback_party_plan(
+    *,
+    inventory: List[InventoryItem],
+    household: Dict[str, Any],
+    members: List[Dict[str, Any]],
+    guest_count: int,
+) -> Dict[str, Any]:
+    from datetime import datetime
+
+    cuisine = "Indian"
+    favs = household.get("favorite_cuisines") or household.get("favoriteCuisines") or []
+    if isinstance(favs, list) and favs and isinstance(favs[0], str) and favs[0].strip():
+        cuisine = favs[0].strip()
+
+    inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
+    inv_items = inv_items[:10]
+
+    def _ingredients_used(max_n: int = 6) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for it in inv_items[:max_n]:
+            out.append(
+                {
+                    "inventory_id": str(getattr(it, "inventory_id")),
+                    "canonical_name": str(getattr(it, "canonical_name")),
+                    "amount": float(getattr(it, "quantity", 1) or 1),
+                    "unit": str(getattr(it, "unit", "pcs")),
+                }
+            )
+        return out
+
+    def _health_benefits(ings: list[dict[str, Any]]) -> list[dict[str, str]]:
+        benefits: list[dict[str, str]] = []
+        for it in ings[:3]:
+            ing = str(it.get("canonical_name") or "ingredient")
+            benefits.append({"ingredient": ing, "benefit": "Adds nutrition and balance to the menu."})
+        return benefits or [{"ingredient": "pantry staples", "benefit": "Convenient home cooking."}]
+
+    def _recipe(recipe_id: str, name_en: str, total_minutes: int) -> dict[str, Any]:
+        total = max(10, int(total_minutes or 30))
+        prep = max(3, int(total * 0.35))
+        cook = max(5, total - prep)
+        difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
+        ings = _ingredients_used()
+        top_names = [str(x.get("canonical_name")) for x in ings[:3] if x.get("canonical_name")]
+        top_phrase = ", ".join([n.title() for n in top_names]) if top_names else "pantry ingredients"
+        return {
+            "recipe_id": recipe_id,
+            "recipe_name": {"en": f"{name_en} ({top_phrase})"},
+            "cuisine": cuisine,
+            "difficulty": difficulty,
+            "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},
+            "cooking_method": "stovetop",
+            "ingredients_used": ings,
+            "new_ingredients_optional": [],
+            "steps": [
+                {"step": 1, "instruction": {"en": f"Prep {top_phrase}."}, "time_minutes": prep, "tips": []},
+                {"step": 2, "instruction": {"en": "Cook on medium heat; serve warm."}, "time_minutes": cook, "tips": []},
+            ],
+            "nutrition_per_serving": {
+                "calories_kcal": 320,
+                "macros": {"protein_g": 12, "carbs_g": 40, "fat_g": 10},
+                "micros": {"fiber_g": 5, "sodium_mg": 650, "sugar_g": 7},
+            },
+            "health_benefits": _health_benefits(ings),
+            "health_fit": {"flags": [], "adjustments": []},
+            "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+            "preservation_guidance": {
+                "storage": "refrigerate",
+                "safe_duration_hours": 24,
+                "reheat_methods": ["stovetop", "microwave"],
+                "quality_notes": "Refrigerate leftovers promptly.",
+            },
+            "chef_tips": ["Scale seasoning gradually for guests.", "Keep one mild option if kids are present."],
+            "cultural_context": {"origin": cuisine, "occasions": "Party", "serving": "Buffet / family style"},
+            "dietary_information": {
+                "vegetarian": False,
+                "vegan": False,
+                "gluten_free": False,
+                "allergens": [],
+                "religious_compatibility": [],
+            },
+            "youtube_references": [],
+            "agent_mode": "kid_friendly",
+        }
+
+    courses = []
+    for label in ("Appetizers", "Mains", "Sides", "Desserts"):
+        courses.append(
+            {
+                "course_header": label,
+                "recipe_options": [
+                    _recipe(f"fallback_party_{label.lower()}_1", f"{label} Option 1", 35),
+                    _recipe(f"fallback_party_{label.lower()}_2", f"{label} Option 2", 40),
+                ],
+            }
+        )
+
+    return {
+        "status": "ok",
+        "selected_cuisine": cuisine,
+        "planning_window": None,
+        "menu_headers": ["Party"],
+        "menus": [
+            {
+                "menu_type": "party",
+                "day_index": None,
+                "date": None,
+                "servings": {"count": guest_count, "scaling_factor": 1},
+                "courses": courses,
+            }
+        ],
+        "variety_log": {"rules_applied": ["fallback_mode"]},
+        "nutrition_summary": {"total_calories_kcal": 1200, "warnings": ["Fallback mode: simplified party menu."]},
         "waste_summary": {
             "expiring_items_used": [],
             "waste_reduction_score": 0.0,
@@ -2023,11 +2173,11 @@ async def post_daily(
     logger.info(f"Starting LLM call for user_id={user_id}")
     result = None
     try:
-        # Set aggressive 10-second timeout - if LLM takes longer, generate fallback
-        result = await asyncio.wait_for(plan_daily(context), timeout=10.0)
+        # Prefer real LLM generation; fall back only if it stalls.
+        result = await asyncio.wait_for(plan_daily(context), timeout=20.0)
         logger.info(f"LLM call completed: status={result.get('status')} time={int((perf_counter() - llm_t0) * 1000)}ms")
     except asyncio.TimeoutError:
-        logger.warning(f"LLM timeout after 10s, generating fallback recipes for user_id={user_id}")
+        logger.warning(f"LLM timeout after 20s, generating fallback recipes for user_id={user_id}")
         result = None
     except Exception as e:
         logger.exception("plan_daily crashed user_id=%s", user_id)
@@ -2368,10 +2518,16 @@ async def post_party(
                 if isinstance(existing_inv_hash, str) and existing_inv_hash and existing_inv_hash != inventory_hash:
                     existing_payload = None
 
-            if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+            if (
+                isinstance(existing_payload, dict)
+                and existing_payload.get("status") == "ok"
+                and not existing_payload.get("_fallback_mode")
+            ):
                 existing_req_hash = existing_payload.get("_request_hash")
                 if request_hash and isinstance(existing_req_hash, str) and existing_req_hash == request_hash:
-                    return MenuPlanResponse(**existing_payload)
+                    existing_payload = _coerce_menu_headers(existing_payload)
+                    if _payload_has_recipes(existing_payload):
+                        return MenuPlanResponse(**existing_payload)
 
     context = _build_planning_context(
         req,
@@ -2393,13 +2549,35 @@ async def post_party(
     if not allowed_cuisines:
         allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
     llm_t0 = perf_counter()
-    result = await plan_party(context)
+    result = None
+    try:
+        result = await asyncio.wait_for(plan_party(context), timeout=25.0)
+    except asyncio.TimeoutError:
+        logger.warning("LLM timeout for /plan/party user_id=%s, using fallback party plan", user_id)
+        result = None
+    except Exception:
+        logger.exception("plan_party crashed user_id=%s", user_id)
+        result = None
+
     llm_ms = int((perf_counter() - llm_t0) * 1000)
+
+    if not isinstance(result, dict) or result.get("status") != "ok" or not _payload_has_recipes(result):
+        logger.warning("/plan/party using fallback plan user_id=%s", user_id)
+        result = _generate_fallback_party_plan(
+            inventory=inventory_models,
+            household=household,
+            members=normalized_members,
+            guest_count=getattr(req.party_settings, "guest_count", 6) or 6,
+        )
+
     # Enforce a recent-recipe cooldown so users see variety across parties.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
+    # Normalize menu_headers so Pydantic response_model never 500s.
+    result = _coerce_menu_headers(result)
 
     # Keep shopping_suggestions consistent with the selected dishes' missing ingredients.
     # (The LLM may omit shopping_suggestions; the client shopping cart/list depends on it.)
