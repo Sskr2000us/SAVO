@@ -391,17 +391,9 @@ CREATE POLICY reference_objects_read_policy ON public.reference_objects
 ALTER TABLE public.inventory_items
 ADD COLUMN IF NOT EXISTS expiry_date DATE,
 ADD COLUMN IF NOT EXISTS purchase_date DATE,
-ADD COLUMN IF NOT EXISTS barcode TEXT,
-ADD COLUMN IF NOT EXISTS days_until_expiry INTEGER GENERATED ALWAYS AS (
-    CASE 
-        WHEN expiry_date IS NOT NULL 
-        THEN EXTRACT(DAY FROM expiry_date - CURRENT_DATE)::INTEGER
-        ELSE NULL
-    END
-) STORED;
+ADD COLUMN IF NOT EXISTS barcode TEXT;
 
 COMMENT ON COLUMN public.inventory_items.expiry_date IS 'Expiry date from package or barcode';
-COMMENT ON COLUMN public.inventory_items.days_until_expiry IS 'Auto-calculated days remaining';
 
 CREATE INDEX IF NOT EXISTS idx_inventory_items_expiry ON public.inventory_items(expiry_date) 
 WHERE expiry_date IS NOT NULL;

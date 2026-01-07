@@ -1,0 +1,573 @@
+# SAVO Ingredient Intelligence System - Architecture & Implementation
+
+## 🎯 Strategic Vision
+
+Transform SAVO from a simple ingredient scanner into a **Visual-First Ingredient Intelligence Platform** that:
+
+1. **Identifies ingredients** through computer vision (not just barcodes)
+2. **Understands culinary context** (regional variations, substitutions, pairings)
+3. **Prevents food waste** through spoilage prediction and smart storage
+4. **Educates users** with multi-language support and cultural context
+5. **Learns continuously** from user confirmations and corrections
+
+---
+
+## 🏗️ System Architecture
+
+### High-Level Components
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        SAVO Mobile App                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │ Camera Scan  │  │ Search       │  │ Recipe       │         │
+│  │ - Visual     │  │ - Multi-lang │  │ - Smart Sub  │         │
+│  │ - Barcode    │  │ - Voice      │  │ - Pairings   │         │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘         │
+└─────────┼──────────────────┼──────────────────┼────────────────┘
+          │                  │                  │
+          ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend Layer                        │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐   │
+│  │ Visual Intel   │  │ Search Engine  │  │ Graph Engine   │   │
+│  │ Endpoints      │  │ Endpoints      │  │ Endpoints      │   │
+│  └────────┬───────┘  └────────┬───────┘  └────────┬───────┘   │
+└───────────┼──────────────────────┼────────────────────┼─────────┘
+            │                     │                    │
+            ▼                     ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Service Layer                              │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐   │
+│  │ CV Processor   │  │ Embedding      │  │ Graph Resolver │   │
+│  │ - GPT-4 Vision │  │ Service        │  │ - Substitutions│   │
+│  │ - Color Extract│  │ - Vector Search│  │ - Confusion    │   │
+│  │ - Texture Anal.│  │ - Semantic     │  │ - Pairing      │   │
+│  └────────┬───────┘  └────────┬───────┘  └────────┬───────┘   │
+└───────────┼──────────────────────┼────────────────────┼─────────┘
+            │                     │                    │
+            ▼                     ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       Data Layer                                │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐   │
+│  │ PostgreSQL     │  │ Supabase       │  │ Vector DB      │   │
+│  │ - Master Data  │  │ Storage        │  │ (pgvector)     │   │
+│  │ - Relationships│  │ - Images       │  │ - Embeddings   │   │
+│  │ - User Data    │  │ - Thumbnails   │  │ - Similarity   │   │
+│  └────────────────┘  └────────────────┘  └────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Enhanced Database Schema
+
+### New Tables Required
+
+```sql
+-- 1. Enhanced master_ingredients (extend existing)
+ALTER TABLE master_ingredients ADD COLUMN IF NOT EXISTS
+    ingredient_type TEXT DEFAULT 'single_ingredient', -- single, blend, composite
+    scientific_name TEXT,
+    status TEXT DEFAULT 'active', -- active, deprecated, seasonal
+    
+    -- Visual intelligence
+    visual_states TEXT[], -- raw_whole, raw_cut, powdered, cooked
+    dominant_colors TEXT[],
+    shape_features TEXT[],
+    surface_texture TEXT[],
+    
+    -- Sensory
+    taste_profile TEXT[],
+    aroma_profile TEXT[],
+    mouthfeel TEXT[],
+    intensity_level TEXT,
+    heat_level TEXT,
+    
+    -- Culinary
+    common_uses TEXT[],
+    cooking_methods TEXT[],
+    
+    -- Storage
+    storage_conditions JSONB,
+    shelf_life_days JSONB, -- {fresh: 30, powder: 180}
+    waste_risk_level TEXT,
+    spoilage_signs TEXT[],
+    
+    -- AI metadata
+    cv_labels TEXT[],
+    embedding_tags TEXT[],
+    llm_prompt_hints TEXT[],
+    confidence_threshold NUMERIC(3,2) DEFAULT 0.85;
+
+-- 2. ingredient_aliases (multi-language names)
+CREATE TABLE ingredient_aliases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    alias_name TEXT NOT NULL,
+    language_code TEXT NOT NULL, -- hi-IN, ta-IN, es-ES
+    region TEXT,
+    is_primary BOOLEAN DEFAULT false,
+    usage_frequency INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_aliases_ingredient ON ingredient_aliases(ingredient_id);
+CREATE INDEX idx_aliases_name ON ingredient_aliases(alias_name);
+CREATE INDEX idx_aliases_language ON ingredient_aliases(language_code);
+
+-- 3. ingredient_images (organized image sets)
+CREATE TABLE ingredient_images (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    image_id TEXT UNIQUE NOT NULL,
+    
+    -- Storage
+    storage_uri TEXT NOT NULL, -- s3:// or supabase://
+    thumbnail_uri TEXT,
+    
+    -- Context
+    visual_state TEXT NOT NULL, -- raw_whole, powdered, cooked
+    lighting_type TEXT, -- natural, indoor, studio
+    background_type TEXT, -- market, kitchen, bowl, plate
+    angle TEXT, -- top, side, 45deg
+    
+    -- Quality
+    resolution_width INTEGER,
+    resolution_height INTEGER,
+    file_size_bytes BIGINT,
+    
+    -- AI metadata
+    is_verified BOOLEAN DEFAULT false,
+    verification_source TEXT, -- human, ai_confident, ai_uncertain
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_images_ingredient ON ingredient_images(ingredient_id);
+CREATE INDEX idx_images_state ON ingredient_images(visual_state);
+
+-- 4. ingredient_substitutions (directed graph)
+CREATE TABLE ingredient_substitutions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    target_ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    
+    -- Relationship
+    substitution_type TEXT NOT NULL, -- primary, emergency, regional, dietary
+    similarity_score NUMERIC(3,2) NOT NULL, -- 0.0 to 1.0
+    
+    -- Context
+    applicable_forms TEXT[], -- fresh, dried, powdered
+    applicable_dishes TEXT[], -- curries, stews, marinades
+    notes TEXT,
+    
+    -- Usage stats
+    user_acceptance_rate NUMERIC(3,2),
+    times_suggested INTEGER DEFAULT 0,
+    times_accepted INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_substitutions_source ON ingredient_substitutions(source_ingredient_id);
+CREATE INDEX idx_substitutions_target ON ingredient_substitutions(target_ingredient_id);
+CREATE INDEX idx_substitutions_score ON ingredient_substitutions(similarity_score DESC);
+
+-- 5. ingredient_confusion (disambiguation)
+CREATE TABLE ingredient_confusion (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_a_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    ingredient_b_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    
+    -- Confusion details
+    confusion_reason TEXT NOT NULL, -- similar_appearance, similar_name, same_category
+    confusion_frequency INTEGER DEFAULT 0, -- how often confused
+    
+    -- Disambiguation
+    disambiguation_rules TEXT[],
+    key_visual_differences TEXT[],
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_confusion_a ON ingredient_confusion(ingredient_a_id);
+CREATE INDEX idx_confusion_b ON ingredient_confusion(ingredient_b_id);
+
+-- 6. ingredient_pairings (culinary intelligence)
+CREATE TABLE ingredient_pairings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_a_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    ingredient_b_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    
+    -- Pairing strength
+    pairing_score NUMERIC(3,2) NOT NULL, -- 0.0 to 1.0
+    pairing_type TEXT, -- classic, modern, regional, experimental
+    
+    -- Context
+    cuisine_types TEXT[], -- indian, italian, chinese
+    dish_types TEXT[], -- curry, pasta, stir_fry
+    
+    -- Evidence
+    source TEXT, -- recipe_analysis, expert_knowledge, user_behavior
+    times_used_together INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_pairings_a ON ingredient_pairings(ingredient_a_id);
+CREATE INDEX idx_pairings_b ON ingredient_pairings(ingredient_b_id);
+CREATE INDEX idx_pairings_score ON ingredient_pairings(pairing_score DESC);
+
+-- 7. regional_variants (geographic variations)
+CREATE TABLE ingredient_regional_variants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    
+    -- Location
+    region TEXT NOT NULL, -- India, Thailand, Mexico
+    country_code TEXT,
+    
+    -- Variant details
+    variant_notes TEXT,
+    flavor_differences TEXT[],
+    appearance_differences TEXT[],
+    typical_uses TEXT[],
+    
+    -- Sourcing
+    is_native BOOLEAN DEFAULT false,
+    availability_level TEXT, -- abundant, common, rare, imported
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_variants_ingredient ON ingredient_regional_variants(ingredient_id);
+CREATE INDEX idx_variants_region ON ingredient_regional_variants(region);
+
+-- 8. ingredient_embeddings (vector search)
+CREATE TABLE ingredient_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ingredient_id UUID REFERENCES master_ingredients(id) ON DELETE CASCADE,
+    
+    -- Vector data (requires pgvector extension)
+    text_embedding VECTOR(1536), -- OpenAI ada-002
+    image_embedding VECTOR(512), -- CLIP or similar
+    
+    -- Metadata
+    embedding_model TEXT NOT NULL,
+    embedding_version TEXT,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_embeddings_ingredient ON ingredient_embeddings(ingredient_id);
+-- Vector similarity indexes (after enabling pgvector)
+-- CREATE INDEX idx_embeddings_text ON ingredient_embeddings USING ivfflat (text_embedding vector_cosine_ops);
+-- CREATE INDEX idx_embeddings_image ON ingredient_embeddings USING ivfflat (image_embedding vector_cosine_ops);
+
+-- 9. visual_scan_results (CV processing logs)
+CREATE TABLE visual_scan_results (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    
+    -- Input
+    scan_image_url TEXT NOT NULL,
+    scan_type TEXT NOT NULL, -- ingredient_identification, quality_check, quantity_estimate
+    
+    -- Detection results
+    detected_ingredients JSONB, -- [{"ingredient_id": "...", "confidence": 0.85}]
+    visual_features JSONB, -- {"colors": [...], "textures": [...]}
+    
+    -- User feedback
+    user_confirmed_ingredient_id UUID REFERENCES master_ingredients(id),
+    was_correct BOOLEAN,
+    correction_reason TEXT,
+    
+    -- Performance
+    processing_time_ms INTEGER,
+    model_version TEXT,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_visual_scans_user ON visual_scan_results(user_id);
+CREATE INDEX idx_visual_scans_confirmed ON visual_scan_results(user_confirmed_ingredient_id);
+```
+
+---
+
+## 🚀 Implementation Phases
+
+### **Phase 1: Foundation (Week 1-2)** ✅ CURRENT
+- [x] Basic master_ingredients table
+- [x] Product barcodes integration
+- [x] OpenFoodFacts API
+- [ ] **NEW**: Create 9 new tables above
+- [ ] **NEW**: Seed 100+ ingredients with taxonomy
+- [ ] **NEW**: Set up Supabase Storage buckets
+
+### **Phase 2: Visual Intelligence (Week 3-4)**
+- [ ] Image upload and storage system
+- [ ] Color extraction service (PIL/OpenCV)
+- [ ] Texture analysis (basic CV)
+- [ ] GPT-4 Vision integration for ingredient ID
+- [ ] Visual similarity search
+- [ ] User confirmation feedback loop
+
+### **Phase 3: Search & Discovery (Week 5-6)**
+- [ ] Multi-language search (existing + aliases)
+- [ ] Vector embeddings generation
+- [ ] Semantic search with pgvector
+- [ ] Fuzzy matching for typos
+- [ ] Voice search support (speech-to-text)
+
+### **Phase 4: Graph Intelligence (Week 7-8)**
+- [ ] Substitution recommendation engine
+- [ ] Confusion disambiguation system
+- [ ] Ingredient pairing suggestions
+- [ ] Recipe compatibility scoring
+- [ ] Smart grocery list optimization
+
+### **Phase 5: Regional Intelligence (Week 9-10)**
+- [ ] Regional variant database
+- [ ] Cuisine-specific recommendations
+- [ ] Cultural context in recipes
+- [ ] Seasonal availability tracking
+- [ ] Local sourcing suggestions
+
+### **Phase 6: Waste Prevention (Week 11-12)**
+- [ ] Spoilage prediction models
+- [ ] Expiry date tracking (existing + enhanced)
+- [ ] Storage condition alerts
+- [ ] Use-by-date recipe suggestions
+- [ ] Waste analytics dashboard
+
+---
+
+## 🔧 New Services Required
+
+### 1. **Visual Intelligence Service**
+```python
+# services/api/app/services/visual_intelligence.py
+
+class VisualIntelligenceService:
+    def __init__(self):
+        self.vision_client = OpenAIVisionClient()
+        self.color_extractor = ColorExtractor()
+        
+    async def identify_ingredient(
+        self, 
+        image_url: str,
+        context: dict = None
+    ) -> IngredientIdentificationResult:
+        """
+        Identify ingredient from image using multi-step process:
+        1. Extract visual features (color, texture, shape)
+        2. Query GPT-4 Vision with context
+        3. Match against master_ingredients
+        4. Check confusion graph for disambiguation
+        5. Return ranked results with confidence
+        """
+        
+    async def extract_visual_signature(self, image_url: str) -> dict:
+        """Extract color, texture, shape features"""
+        
+    async def find_visually_similar(
+        self, 
+        ingredient_id: UUID, 
+        limit: int = 10
+    ) -> List[SimilarIngredient]:
+        """Find ingredients with similar visual features"""
+```
+
+### 2. **Graph Intelligence Service**
+```python
+# services/api/app/services/graph_intelligence.py
+
+class GraphIntelligenceService:
+    async def get_substitutions(
+        self,
+        ingredient_id: UUID,
+        context: SubstitutionContext
+    ) -> List[SubstitutionSuggestion]:
+        """
+        Find best substitutes based on:
+        - Similarity score
+        - Context (dish type, cuisine, dietary)
+        - User preferences
+        - Availability
+        """
+        
+    async def resolve_confusion(
+        self,
+        detected_ingredients: List[UUID],
+        image_url: str
+    ) -> DisambiguationResult:
+        """
+        When multiple similar ingredients detected:
+        1. Check confusion graph
+        2. Apply disambiguation rules
+        3. Extract key visual differences
+        4. Return best match
+        """
+        
+    async def get_pairings(
+        self,
+        ingredient_ids: List[UUID],
+        cuisine_type: str = None
+    ) -> List[IngredientPairing]:
+        """Suggest complementary ingredients"""
+```
+
+### 3. **Embedding Service**
+```python
+# services/api/app/services/embedding_service.py
+
+class EmbeddingService:
+    def __init__(self):
+        self.openai_client = OpenAI()
+        
+    async def generate_text_embedding(
+        self,
+        text: str
+    ) -> List[float]:
+        """Generate text embedding for search"""
+        
+    async def generate_image_embedding(
+        self,
+        image_url: str
+    ) -> List[float]:
+        """Generate image embedding using CLIP"""
+        
+    async def semantic_search(
+        self,
+        query: str,
+        limit: int = 20
+    ) -> List[SearchResult]:
+        """
+        Search ingredients using vector similarity:
+        1. Generate query embedding
+        2. Find nearest neighbors in pgvector
+        3. Rank by relevance
+        4. Apply filters (category, region, etc.)
+        """
+```
+
+---
+
+## 📡 New API Endpoints
+
+```python
+# Visual Intelligence Endpoints
+POST   /api/intelligence/identify-ingredient
+POST   /api/intelligence/extract-visual-features
+GET    /api/intelligence/similar-ingredients/{ingredient_id}
+
+# Search Endpoints
+GET    /api/intelligence/search
+POST   /api/intelligence/semantic-search
+POST   /api/intelligence/voice-search
+
+# Graph Endpoints
+GET    /api/intelligence/substitutions/{ingredient_id}
+POST   /api/intelligence/resolve-confusion
+GET    /api/intelligence/pairings
+
+# Regional Intelligence
+GET    /api/intelligence/regional-variants/{ingredient_id}
+GET    /api/intelligence/regional-availability
+
+# Training & Feedback
+POST   /api/intelligence/confirm-identification
+POST   /api/intelligence/report-confusion
+POST   /api/intelligence/rate-substitution
+```
+
+---
+
+## 🔄 Migration Path
+
+### Step 1: Database Migration
+```bash
+# Create migration file
+# services/api/migrations/005_ingredient_intelligence.sql
+
+# Run migration
+psql $env:DATABASE_URL -f services/api/migrations/005_ingredient_intelligence.sql
+```
+
+### Step 2: Seed Master Data
+```bash
+# Seed 100+ ingredients with full intelligence data
+python services/api/scripts/seed_ingredient_intelligence.py
+
+# Includes:
+# - Turmeric, Ginger, Cumin, Coriander, etc. (spices)
+# - Tomato, Onion, Garlic, Potato, etc. (vegetables)
+# - Rice, Wheat, Lentils, etc. (grains/legumes)
+# - Chicken, Paneer, Tofu, etc. (proteins)
+```
+
+### Step 3: Image Collection
+```bash
+# Set up Supabase Storage buckets
+# - savo-ingredients (raw images)
+# - savo-ingredients-thumbnails (optimized)
+# - savo-user-scans (user uploads)
+
+# Upload seed images
+python services/api/scripts/upload_ingredient_images.py
+```
+
+### Step 4: Generate Embeddings
+```bash
+# Generate text + image embeddings for all ingredients
+python services/api/scripts/generate_embeddings.py
+```
+
+---
+
+## 🎯 Key Differentiators
+
+### 1. **Visual-First Approach**
+- Users scan ingredients directly, no need to know names
+- Works across languages and cultures
+- Handles raw, cooked, and processed forms
+
+### 2. **Cultural Intelligence**
+- Multi-language support (Hindi, Tamil, Spanish, Chinese, Arabic)
+- Regional variants (Indian turmeric vs Indonesian)
+- Cuisine-specific recommendations
+
+### 3. **Learning System**
+- Learns from user confirmations
+- Improves confusion disambiguation
+- Tracks substitution acceptance rates
+
+### 4. **Waste Prevention**
+- Smart expiry tracking
+- Recipe suggestions based on expiring items
+- Storage condition monitoring
+
+---
+
+## 📊 Success Metrics
+
+1. **Identification Accuracy**: >90% on first scan
+2. **Multi-language Coverage**: 6+ languages
+3. **Substitution Acceptance**: >70% user acceptance
+4. **Waste Reduction**: 20% reduction in user food waste
+5. **User Engagement**: 3x increase in scanning frequency
+
+---
+
+## 🛠️ Next Immediate Steps
+
+1. **Create migration 005** with all new tables
+2. **Build seed script** with 100+ ingredients
+3. **Set up Supabase Storage** for images
+4. **Implement VisualIntelligenceService** with GPT-4 Vision
+5. **Create identification endpoint** for testing
+
+Would you like me to start with any specific phase?
