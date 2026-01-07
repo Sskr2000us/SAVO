@@ -26,6 +26,7 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
     TEMPORARY: Validation disabled for debugging
     """
     if not authorization:
+        logger.error("AUTH_FAIL: Missing authorization header (client did not send Authorization header)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header",
@@ -35,11 +36,13 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
+            logger.error(f"AUTH_FAIL: Invalid scheme '{scheme}' (expected 'Bearer')")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication scheme",
             )
-    except ValueError:
+    except ValueError as e:
+        logger.error(f"AUTH_FAIL: Header parse error: {e} (header value: '{authorization[:50]}...')")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authorization header format",
@@ -51,16 +54,23 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         user_id = payload.get("sub")
         
         if not user_id:
+            logger.error(f"AUTH_FAIL: Token missing 'sub' field. Payload keys: {list(payload.keys())}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing user ID",
             )
         
-        logger.info(f"Auth bypassed for user: {user_id}")
+        logger.info(f"AUTH_SUCCESS: user_id={user_id}")
         return user_id
         
+    except jwt.InvalidTokenError as e:
+        logger.error(f"AUTH_FAIL: JWT decode error: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+        )
     except Exception as e:
-        logger.error(f"Token decode error: {e}")
+        logger.error(f"AUTH_FAIL: Unexpected error during token decode: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
