@@ -635,7 +635,7 @@ class GoogleClient(LlmClient):
             "- Set youtube_references to [] for EVERY recipe (empty array). "
             "- Set new_ingredients_optional to [] unless absolutely necessary. "
             "- Use 1–2 steps per recipe; each instruction <= 120 chars; tips must be []. "
-            "- Keep health_fit.flags=[] and health_fit.adjustments=[]; scores may be {}. "
+            "- Keep health_fit.flags=[] and health_fit.adjustments=[]. "
             "- Keep leftover_forecast.reuse_ideas to [] and expected_leftover_servings=0 unless clearly needed. "
             "- Keep preservation_guidance.reheat_methods to [] or 1 item; quality_notes <= 80 chars. "
             "- Prefer short strings everywhere; do NOT pretty-print; output minified JSON with no newlines."
@@ -997,7 +997,7 @@ def _base_recipe_option(*, recipe_id: str, recipe_name: str, cuisine: str, agent
             "micros": {"fiber_g": 6, "sodium_mg": 500},
         },
         "health_benefits": [],
-        "health_fit": {"flags": [], "scores": {"simplicity": 0.8}, "adjustments": []},
+        "health_fit": {"flags": [], "adjustments": []},
         "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": ["N/A"]},
         "preservation_guidance": {
             "storage": "refrigerate",

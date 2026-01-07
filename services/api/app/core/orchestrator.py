@@ -174,7 +174,7 @@ def _synthesize_minimal_recipe_option(*, recipe_id: str, recipe_name: str, cuisi
             "micros": {"fiber_g": 0, "sodium_mg": 0},
         },
         "health_benefits": [],
-        "health_fit": {"flags": [], "scores": {}, "adjustments": []},
+        "health_fit": {"flags": [], "adjustments": []},
         "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
         "preservation_guidance": {
             "storage": "refrigerate",
@@ -330,7 +330,7 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
                     "micros": micros,
                 },
                 "health_benefits": recipe.get("health_benefits") if isinstance(recipe.get("health_benefits"), list) else [],
-                "health_fit": {"flags": health_fit_flags, "scores": {}, "adjustments": []},
+                "health_fit": {"flags": health_fit_flags, "adjustments": []},
                 "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
                 "preservation_guidance": {
                     "storage": storage,
@@ -514,7 +514,7 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
 
                 hf = opt.get("health_fit")
                 if not isinstance(hf, dict):
-                    opt["health_fit"] = {"flags": [], "scores": {}, "adjustments": []}
+                    opt["health_fit"] = {"flags": [], "adjustments": []}
                 else:
                     if not isinstance(hf.get("flags"), list):
                         hf["flags"] = []
@@ -994,7 +994,7 @@ async def _try_provider(
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
                     f"Do NOT include unexpected fields like 'questions'. Use needs_clarification_questions only. "
                     f"For each recipe: youtube_references=[]; health_benefits=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
-                    f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
+                    f"health_fit.flags=[], health_fit.adjustments=[]; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will correct my response."})
                 messages.append({"role": "user", "content": correction})
@@ -1087,7 +1087,7 @@ async def _try_provider(
                     f"Error: {str(e)}. Please return ONLY valid JSON matching the schema. "
                     f"IMPORTANT: keep output minimal to avoid truncation. Use minified JSON (no newlines). "
                     f"For each recipe: youtube_references=[]; new_ingredients_optional max 3 items (only truly needed); steps length 1-2 with tips=[]; "
-                    f"health_fit.flags=[], health_fit.adjustments=[], health_fit.scores={{}}; leftover_forecast.reuse_ideas=[]."
+                    f"health_fit.flags=[], health_fit.adjustments=[]; leftover_forecast.reuse_ideas=[]."
                 )
                 messages.append({"role": "assistant", "content": "I will return valid JSON."})
                 messages.append({"role": "user", "content": correction})
