@@ -2038,5 +2038,426 @@ async def check_recipe_sufficiency(
     except Exception as e:
         logger.error(f"Failed to check sufficiency: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check sufficiency: {str(e)}")
-        logger.error(f"Failed to remove from pantry: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to remove from pantry: {str(e)}")
+
+
+# ============================================================================
+# BARCODE SCANNING
+# ============================================================================
+
+class BarcodeScanRequest(BaseModel):
+    barcode: str = Field(..., description="UPC/EAN barcode number")
+    image_url: Optional[str] = Field(None, description="Optional image of the product")
+    add_to_inventory: bool = Field(True, description="Automatically add to inventory")
+    quantity: Optional[float] = Field(None, description="Override quantity")
+    storage_location: Optional[str] = Field("pantry", description="pantry/fridge/freezer")
+
+
+class BarcodeScanResponse(BaseModel):
+    scan_id: UUID
+    barcode: str
+    product_name: str
+    brand: Optional[str]
+    quantity_value: Optional[float]
+    quantity_unit: Optional[str]
+    expiry_date: Optional[str]
+    image_url: Optional[str]
+    ingredient_canonical_name: Optional[str]
+    confidence: float
+    data_source: str
+    added_to_inventory: bool
+
+
+@router.post("/barcode", response_model=BarcodeScanResponse)
+async def scan_barcode(
+    request: BarcodeScanRequest,
+    user = Depends(get_current_user),
+    db = Depends(get_db_client)
+):
+    """
+    Scan a barcode (UPC/EAN) and get product information
+    Automatically adds to inventory if requested
+    """
+    from app.integrations.openfoodfacts import get_openfoodfacts_client
+    
+    try:
+        # Look up barcode in our database first
+        existing = await db.fetchrow(
+            "SELECT * FROM product_barcodes WHERE upc_ean = $1",
+            request.barcode
+        )
+        
+        if existing:
+            product_data = dict(existing)
+            product_data["data_source"] = "cached"
+            logger.info(f"Barcode {request.barcode} found in cache")
+        else:
+            # Look up in OpenFoodFacts
+            off_client = get_openfoodfacts_client()
+            product_data = await off_client.lookup_barcode(request.barcode)
+            
+            if not product_data:
+                raise HTTPException(status_code=404, detail="Barcode not found")
+            
+            # Cache the barcode data
+            await db.execute(
+                """
+                INSERT INTO product_barcodes 
+                (upc_ean, product_name, brand, manufacturer, quantity_value, quantity_unit,
+                 country_code, image_url, nutrition_facts, external_id, data_source)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (upc_ean) DO UPDATE SET
+                    product_name = EXCLUDED.product_name,
+                    last_scanned_at = NOW(),
+                    scan_count = product_barcodes.scan_count + 1
+                """,
+                product_data["barcode"],
+                product_data["product_name"],
+                product_data["brand"],
+                product_data["manufacturer"],
+                product_data["quantity_value"],
+                product_data["quantity_unit"],
+                product_data["country_code"],
+                product_data["image_url"],
+                product_data.get("nutrition_facts"),
+                product_data.get("external_id"),
+                product_data["data_source"],
+            )
+        
+        # Try to match to master ingredient
+        ingredient_name = None
+        if product_data.get("product_name"):
+            # Search master ingredients
+            results = await db.fetch(
+                "SELECT * FROM search_ingredients_multilang($1, 'en', 5)",
+                product_data["product_name"]
+            )
+            if results:
+                ingredient_name = results[0]["canonical_name"]
+        
+        # Create barcode scan record
+        scan_id = uuid4()
+        await db.execute(
+            """
+            INSERT INTO barcode_scans
+            (id, user_id, barcode, barcode_type, product_name, brand,
+             quantity_value, quantity_unit, image_url, confidence, data_source)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            scan_id,
+            user["id"],
+            request.barcode,
+            "EAN13" if len(request.barcode) == 13 else "UPCA",
+            product_data["product_name"],
+            product_data.get("brand"),
+            request.quantity or product_data.get("quantity_value"),
+            product_data.get("quantity_unit"),
+            request.image_url or product_data.get("image_url"),
+            0.95,
+            product_data["data_source"],
+        )
+        
+        # Add to inventory if requested
+        added_to_inventory = False
+        if request.add_to_inventory and ingredient_name:
+            quantity_val = request.quantity or product_data.get("quantity_value", 1)
+            unit = product_data.get("quantity_unit", "pieces")
+            
+            await db.execute(
+                """
+                INSERT INTO inventory_items
+                (id, user_id, canonical_name, current_quantity, unit, storage_location,
+                 barcode, image_url, image_source, is_current)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+                """,
+                uuid4(),
+                user["id"],
+                ingredient_name,
+                Decimal(str(quantity_val)),
+                unit,
+                request.storage_location,
+                request.barcode,
+                request.image_url or product_data.get("image_url"),
+                "scan",
+            )
+            added_to_inventory = True
+            
+            # Update barcode scan record
+            await db.execute(
+                "UPDATE barcode_scans SET added_to_inventory = true WHERE id = $1",
+                scan_id
+            )
+        
+        return BarcodeScanResponse(
+            scan_id=scan_id,
+            barcode=request.barcode,
+            product_name=product_data["product_name"],
+            brand=product_data.get("brand"),
+            quantity_value=product_data.get("quantity_value"),
+            quantity_unit=product_data.get("quantity_unit"),
+            expiry_date=None,  # TODO: Add OCR for expiry date
+            image_url=product_data.get("image_url"),
+            ingredient_canonical_name=ingredient_name,
+            confidence=0.95,
+            data_source=product_data["data_source"],
+            added_to_inventory=added_to_inventory,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Barcode scan failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# CONTAINER SCANNING
+# ============================================================================
+
+class ContainerScanRequest(BaseModel):
+    image_url: Optional[str] = None
+    scan_type: str = Field("container", description="container/transparent_jar/glass_bottle")
+    user_hints: Optional[Dict[str, Any]] = Field(None, description="User hints like expected ingredient")
+
+
+class ContainerScanResponse(BaseModel):
+    scan_id: UUID
+    container_type: Optional[str]
+    container_material: Optional[str]
+    transparency_level: Optional[str]
+    detected_ingredient: Optional[str]
+    visual_cues: Dict[str, Any]
+    estimated_quantity: Optional[float]
+    estimated_unit: Optional[str]
+    confidence_ingredient: float
+    confidence_quantity: float
+
+
+@router.post("/container", response_model=ContainerScanResponse)
+async def scan_container(
+    image: UploadFile = File(...),
+    scan_type: str = Form("container"),
+    expected_ingredient: Optional[str] = Form(None),
+    user = Depends(get_current_user),
+    db = Depends(get_db_client)
+):
+    """
+    Scan ingredients in containers (jars, bottles, transparent containers)
+    Uses enhanced vision model to identify through transparency
+    """
+    from app.core.vision_api import get_vision_client
+    from app.core.media_storage import upload_inventory_image
+    from app.core.quantity_estimator import QuantityEstimator, BoundingBox
+    
+    try:
+        # Upload image
+        image_bytes = await image.read()
+        image_obj = Image.open(io.BytesIO(image_bytes))
+        
+        image_url = await upload_inventory_image(
+            image_bytes, 
+            user["id"],
+            f"container_scan_{uuid4()}.jpg"
+        )
+        
+        # Enhanced vision prompt for container recognition
+        vision_client = get_vision_client()
+        
+        prompt = """Analyze this image of an ingredient in a container.
+
+CONTAINER ANALYSIS:
+1. Container type: jar/bottle/plastic_container/glass_jar/ziplock_bag/bowl
+2. Material: glass/plastic/metal
+3. Transparency: transparent/translucent/opaque
+
+INGREDIENT IDENTIFICATION:
+4. Visual cues of the ingredient inside:
+   - Color (white, brown, yellow, green, etc.)
+   - Texture (grainy, powdery, liquid, solid, chunky)
+   - Particle size (fine powder, small grains, large pieces)
+5. Ingredient name based on visual characteristics
+6. Fill level percentage (0-100%)
+
+REFERENCE OBJECTS:
+7. Any reference objects visible (hand, coin, phone, spoon) for size estimation
+
+Return JSON:
+{
+  "container_type": "glass_jar",
+  "container_material": "glass",
+  "transparency_level": "transparent",
+  "visual_cues": {
+    "color": "white",
+    "texture": "grainy",
+    "particle_size": "small_grains"
+  },
+  "detected_ingredient": "rice",
+  "confidence": 0.85,
+  "fill_percentage": 75,
+  "reference_objects": [{"type": "hand", "bbox": {...}}],
+  "ingredient_bbox": {"x_min": 100, "y_min": 50, "x_max": 300, "y_max": 400}
+}"""
+        
+        if expected_ingredient:
+            prompt += f"\n\nUser expects this to be: {expected_ingredient}"
+        
+        vision_result = await vision_client.analyze_ingredient_image(
+            image_bytes, 
+            prompt_override=prompt
+        )
+        
+        # Extract detection results
+        container_type = vision_result.get("container_type")
+        detected_ingredient = vision_result.get("detected_ingredient")
+        visual_cues = vision_result.get("visual_cues", {})
+        confidence = vision_result.get("confidence", 0.70)
+        fill_percentage = vision_result.get("fill_percentage", 75)
+        
+        # Estimate quantity
+        estimator = QuantityEstimator()
+        quantity_estimate = None
+        quantity_value = None
+        quantity_unit = None
+        quantity_confidence = 0.0
+        
+        if vision_result.get("ingredient_bbox"):
+            bbox_data = vision_result["ingredient_bbox"]
+            ingredient_bbox = BoundingBox(
+                x_min=bbox_data["x_min"],
+                y_min=bbox_data["y_min"],
+                x_max=bbox_data["x_max"],
+                y_max=bbox_data["y_max"],
+                image_width=image_obj.width,
+                image_height=image_obj.height,
+            )
+            
+            # Detect reference objects
+            reference_objects = estimator.detect_reference_objects_from_vision(
+                vision_result, image_obj.width, image_obj.height
+            )
+            
+            quantity_estimate = estimator.estimate_from_bbox_and_reference(
+                ingredient_bbox,
+                reference_objects,
+                container_type,
+                fill_percentage
+            )
+            
+            quantity_value = quantity_estimate.estimated_value
+            quantity_unit = quantity_estimate.unit
+            quantity_confidence = quantity_estimate.confidence
+            
+            # Convert to weight if we have density data
+            if detected_ingredient:
+                density_row = await db.fetchrow(
+                    """
+                    SELECT density_g_per_ml, confidence
+                    FROM ingredient_densities id
+                    JOIN master_ingredients mi ON id.ingredient_id = mi.id
+                    WHERE mi.canonical_name = $1 AND id.form = 'raw'
+                    LIMIT 1
+                    """,
+                    detected_ingredient
+                )
+                
+                if density_row:
+                    weight_estimate = estimator.convert_volume_to_weight(
+                        quantity_value,
+                        float(density_row["density_g_per_ml"]),
+                        float(density_row["confidence"])
+                    )
+                    quantity_value = weight_estimate.estimated_value
+                    quantity_unit = weight_estimate.unit
+                    quantity_confidence = weight_estimate.confidence
+        
+        # Save container scan
+        scan_id = uuid4()
+        await db.execute(
+            """
+            INSERT INTO container_scans
+            (id, user_id, image_url, scan_type, container_type, container_material,
+             transparency_level, detected_ingredient_name, visual_cues,
+             estimated_quantity, estimated_unit, confidence_ingredient, confidence_quantity)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            """,
+            scan_id,
+            user["id"],
+            image_url,
+            scan_type,
+            container_type,
+            vision_result.get("container_material"),
+            vision_result.get("transparency_level"),
+            detected_ingredient,
+            visual_cues,
+            quantity_value,
+            quantity_unit,
+            confidence,
+            quantity_confidence,
+        )
+        
+        return ContainerScanResponse(
+            scan_id=scan_id,
+            container_type=container_type,
+            container_material=vision_result.get("container_material"),
+            transparency_level=vision_result.get("transparency_level"),
+            detected_ingredient=detected_ingredient,
+            visual_cues=visual_cues,
+            estimated_quantity=quantity_value,
+            estimated_unit=quantity_unit,
+            confidence_ingredient=confidence,
+            confidence_quantity=quantity_confidence,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Container scan failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# GLOBAL INGREDIENTS SEARCH
+# ============================================================================
+
+class IngredientSearchResponse(BaseModel):
+    id: UUID
+    canonical_name: str
+    matched_name: str
+    match_language: str
+    category: str
+    default_image_url: Optional[str]
+    relevance: float
+
+
+@router.get("/ingredients/search-global", response_model=List[IngredientSearchResponse])
+async def search_global_ingredients(
+    query: str,
+    lang: str = "en",
+    limit: int = 20,
+    db = Depends(get_db_client)
+):
+    """
+    Search ingredients in multiple languages
+    Supported languages: en, hi, ta, es, zh, ar
+    """
+    try:
+        results = await db.fetch(
+            "SELECT * FROM search_ingredients_multilang($1, $2, $3)",
+            query, lang, limit
+        )
+        
+        return [
+            IngredientSearchResponse(
+                id=row["id"],
+                canonical_name=row["canonical_name"],
+                matched_name=row["matched_name"],
+                match_language=row["match_language"],
+                category=row["category"] or "other",
+                default_image_url=row["default_image_url"],
+                relevance=float(row["relevance"]),
+            )
+            for row in results
+        ]
+        
+    except Exception as e:
+        logger.error(f"Ingredient search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
