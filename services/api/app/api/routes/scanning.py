@@ -203,6 +203,9 @@ class DetectedIngredient(BaseModel):
     allergen_warnings: List[Dict] = []
     bbox: Optional[Dict] = None
     confirmation_status: str = "pending"
+    # Visual verification fields
+    thumbnail_url: Optional[str] = None  # Cropped image of this ingredient
+    full_image_url: Optional[str] = None  # Full scan image for reference
 
 
 class AnalyzeImageResponse(BaseModel):
@@ -429,6 +432,23 @@ async def analyze_image(
             if confidence < Decimal("0.80"):
                 requires_confirmation = True
             
+            # Process ingredient thumbnail (async, non-blocking)
+            bbox = ingredient_data.get("bbox")
+            thumbnail_url = None
+            try:
+                from app.core.image_processor import upload_ingredient_thumbnail
+                thumbnail_url = await upload_ingredient_thumbnail(
+                    user_id=user_id,
+                    scan_id=scan_id,
+                    detected_id=detected_id,
+                    image_data=image_data,
+                    bbox=bbox,
+                    confidence=float(confidence),
+                    confidence_category=vision_client.get_confidence_category(confidence)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create thumbnail for {detected_id}: {e}")
+            
             # Insert detected ingredient
             db.table("detected_ingredients").insert({
                 "id": detected_id,
@@ -444,6 +464,8 @@ async def analyze_image(
                 "close_alternatives": ingredient_data.get("close_alternatives", []),
                 "visual_similarity_group": ingredient_data.get("visual_similarity_group"),
                 "allergen_warnings": ingredient_data.get("allergen_warnings", []),
+                "thumbnail_url": thumbnail_url,
+                "full_image_url": image_url,
                 "confirmation_status": "pending"
             }).execute()
             
@@ -453,6 +475,20 @@ async def analyze_image(
                 detected_name=ingredient_data["detected_name"],
                 canonical_name=ingredient_data.get("canonical_name"),
                 confidence=confidence,
+                confidence_category=vision_client.get_confidence_category(confidence),
+                category=ingredient_data.get("category", "other"),
+                quantity=ingredient_data.get("quantity"),
+                unit=ingredient_data.get("unit"),
+                quantity_confidence=ingredient_data.get("quantity_confidence"),
+                quantity_source=ingredient_data.get("quantity_source"),
+                close_alternatives=ingredient_data.get("close_alternatives", []),
+                visual_similarity_group=ingredient_data.get("visual_similarity_group"),
+                allergen_warnings=ingredient_data.get("allergen_warnings", []),
+                bbox=ingredient_data.get("bbox"),
+                confirmation_status="pending",
+                thumbnail_url=thumbnail_url,
+                full_image_url=image_url
+            ))
                 confidence_category=vision_client.get_confidence_category(confidence),
                 category=ingredient_data.get("category", "other"),
                 quantity=ingredient_data.get("quantity"),
