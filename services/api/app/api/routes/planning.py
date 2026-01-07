@@ -264,7 +264,7 @@ async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_
                 return
 
             async with semaphore:
-                candidates = await _yt_search_candidates(recipe_name=name, cuisine=str(cuisine or ""), max_results=6)
+                candidates = await _yt_search_candidates(recipe_name=name, cuisine=str(cuisine or ""), max_results=10)
             ranked = _rank_youtube_candidates(recipe_name=name, candidates=candidates, top_n=max_per_recipe)
             cache[cache_key] = ranked
             opt["youtube_references"] = ranked
@@ -2761,6 +2761,11 @@ async def post_daily(
                         existing_payload = None
 
                 if isinstance(existing_payload, dict):
+                    existing_include_inactive = bool(existing_payload.get("_include_inactive_inventory", False))
+                    if existing_include_inactive != include_inactive_inv:
+                        existing_payload = None
+
+                if isinstance(existing_payload, dict):
                     # Only reuse if core request knobs match.
                     if (
                         (existing.get("servings") == req.servings)
@@ -2984,6 +2989,7 @@ async def post_daily(
     # Persist inventory snapshot hash inside the stored payload (response model ignores unknown keys).
     if isinstance(result, dict) and result.get("status") == "ok":
         result["_inventory_hash"] = inventory_hash
+        result["_include_inactive_inventory"] = include_inactive_inv
 
     # Normalize menu_headers so Pydantic response_model never 500s.
     result = _coerce_menu_headers(result)
@@ -3122,7 +3128,8 @@ async def get_latest_plan(
 
     # If the inventory has changed since this plan was generated, treat it as stale.
     try:
-        db_inventory = await get_inventory(user_id)
+        include_inactive_for_hash = bool(payload.get("_include_inactive_inventory", False))
+        db_inventory = await get_inventory(user_id, include_inactive=include_inactive_for_hash)
     except Exception:
         db_inventory = []
     current_hash = _inventory_snapshot_hash(_db_inventory_to_models(db_inventory))
@@ -3298,6 +3305,11 @@ async def post_party(
                 if isinstance(existing_inv_hash, str) and existing_inv_hash and existing_inv_hash != inventory_hash:
                     existing_payload = None
 
+            if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+                existing_include_inactive = bool(existing_payload.get("_include_inactive_inventory", False))
+                if existing_include_inactive != include_inactive_inv:
+                    existing_payload = None
+
             if (
                 isinstance(existing_payload, dict)
                 and existing_payload.get("status") == "ok"
@@ -3395,6 +3407,7 @@ async def post_party(
     if isinstance(result, dict) and result.get("status") == "ok":
         try:
             result["_inventory_hash"] = inventory_hash
+            result["_include_inactive_inventory"] = include_inactive_inv
             if request_hash:
                 result["_request_hash"] = request_hash
             await create_meal_plan(
@@ -3478,6 +3491,7 @@ async def post_weekly(
         db_history = []
 
     inventory_models = _db_inventory_to_models(db_inventory)
+    inventory_hash = _inventory_snapshot_hash(inventory_models)
     if not getattr(req, "planning_goal", None) and inventory_models:
         try:
             req.planning_goal = "use_what_i_have"
@@ -3538,6 +3552,13 @@ async def post_weekly(
         # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
         try:
             result = await _enrich_plan_payload_with_youtube_references(result)
+        except Exception:
+            pass
+
+        # Persist inventory snapshot metadata for exact rehydration + staleness detection.
+        try:
+            result["_inventory_hash"] = inventory_hash
+            result["_include_inactive_inventory"] = include_inactive_inv
         except Exception:
             pass
         try:

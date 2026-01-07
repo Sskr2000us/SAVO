@@ -190,6 +190,47 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
     }
   }
 
+  Future<void> _deleteSavedPartyPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove plan'),
+        content: const Text('Remove the saved party plan so you can generate a new one?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      await apiClient.delete('/plan/latest?plan_type=party');
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Party plan removed.')),
+      );
+
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove plan: $e')),
+      );
+    }
+  }
+
   Future<void> _swapItems() async {
     if (_swapping) return;
 
@@ -231,6 +272,13 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
+        actions: [
+          IconButton(
+            tooltip: 'Remove plan',
+            onPressed: _swapping || _approving ? null : _deleteSavedPartyPlan,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
       ),
       body: Column(
         children: [
