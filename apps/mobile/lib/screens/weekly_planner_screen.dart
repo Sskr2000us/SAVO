@@ -19,6 +19,10 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
   int _numDays = 3;
   bool _planning = false;
 
+  static const String _prefsPlanningIncludeInactiveKey = 'savo.planning.include_inactive_inventory';
+  static const String _prefsInventoryShowInactiveKey = 'savo.inventory.show_inactive_items';
+  bool _includeInactiveInventory = false;
+
   static const Map<String, String> _planningGoalLabels = {
     'balanced': 'Balanced',
     'fastest': 'Fastest',
@@ -31,6 +35,42 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
   String _planningGoal = 'balanced';
   bool _avoidWaste = false;
   bool _useLeftovers = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIncludeInactivePreference();
+  }
+
+  Future<void> _loadIncludeInactivePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final includeInactive = prefs.containsKey(_prefsPlanningIncludeInactiveKey)
+          ? (prefs.getBool(_prefsPlanningIncludeInactiveKey) ?? false)
+          : (prefs.getBool(_prefsInventoryShowInactiveKey) ?? false);
+      if (!mounted) return;
+      setState(() {
+        _includeInactiveInventory = includeInactive;
+      });
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  void _setIncludeInactiveInventory(bool value) {
+    setState(() {
+      _includeInactiveInventory = value;
+    });
+
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_prefsPlanningIncludeInactiveKey, value);
+      } catch (_) {
+        // Best-effort only.
+      }
+    }();
+  }
 
   Future<List<Map<String, dynamic>>> _fetchVerifyItems(ApiClient apiClient) async {
     try {
@@ -157,15 +197,8 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
         'num_days': _numDays,
       };
 
-      // Reuse the inventory screen preference so weekly planning can consider older (inactive) pantry items.
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
-        if (includeInactive) {
-          body['include_inactive_inventory'] = true;
-        }
-      } catch (_) {
-        // Best-effort only
+      if (_includeInactiveInventory) {
+        body['include_inactive_inventory'] = true;
       }
 
       final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
@@ -301,6 +334,13 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
                         if (value == null) return;
                         setState(() => _planningGoal = value);
                       },
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _includeInactiveInventory,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use older pantry items'),
+                      subtitle: const Text('Include inactive items from previous scans'),
+                      onChanged: _planning ? null : _setIncludeInactiveInventory,
                     ),
                     SwitchListTile.adaptive(
                       value: _avoidWaste,

@@ -40,11 +40,46 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
   List<Cuisine> _cuisines = const [];
   bool _loadingCuisines = true;
 
+  static const String _prefsPlanningIncludeInactiveKey = 'savo.planning.include_inactive_inventory';
+  static const String _prefsInventoryShowInactiveKey = 'savo.inventory.show_inactive_items';
+  bool _includeInactiveInventory = false;
+
   @override
   void initState() {
     super.initState();
     fireAndForget(MetricsService.instance.recordWorkflowStep('PlanParty', 'CollectInputs'));
+    _loadIncludeInactivePreference();
     _loadCuisines();
+  }
+
+  Future<void> _loadIncludeInactivePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final includeInactive = prefs.containsKey(_prefsPlanningIncludeInactiveKey)
+          ? (prefs.getBool(_prefsPlanningIncludeInactiveKey) ?? false)
+          : (prefs.getBool(_prefsInventoryShowInactiveKey) ?? false);
+      if (!mounted) return;
+      setState(() {
+        _includeInactiveInventory = includeInactive;
+      });
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  void _setIncludeInactiveInventory(bool value) {
+    setState(() {
+      _includeInactiveInventory = value;
+    });
+
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_prefsPlanningIncludeInactiveKey, value);
+      } catch (_) {
+        // Best-effort only.
+      }
+    }();
   }
 
   Future<void> _loadCuisines() async {
@@ -246,15 +281,8 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
       'use_leftovers': true,
     };
 
-    // Reuse the inventory screen preference so party planning can consider older (inactive) pantry items.
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
-      if (includeInactive) {
-        body['include_inactive_inventory'] = true;
-      }
-    } catch (_) {
-      // Best-effort only
+    if (_includeInactiveInventory) {
+      body['include_inactive_inventory'] = true;
     }
 
     final familyOverride = _familyProfileOverride();
@@ -337,6 +365,8 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
           child0To12: _child0To12,
           teen13To17: _teen13To17,
           adult18Plus: _adult18Plus,
+          includeInactiveInventory: _includeInactiveInventory,
+          onIncludeInactiveChanged: _setIncludeInactiveInventory,
           onChanged: (c, t, a) => _updateGuests(
             child0To12: c,
             teen13To17: t,
@@ -364,6 +394,8 @@ class _GuestsStep extends StatelessWidget {
   final int child0To12;
   final int teen13To17;
   final int adult18Plus;
+  final bool includeInactiveInventory;
+  final ValueChanged<bool> onIncludeInactiveChanged;
   final void Function(int child0To12, int teen13To17, int adult18Plus) onChanged;
   final VoidCallback onNext;
 
@@ -371,6 +403,8 @@ class _GuestsStep extends StatelessWidget {
     required this.child0To12,
     required this.teen13To17,
     required this.adult18Plus,
+    required this.includeInactiveInventory,
+    required this.onIncludeInactiveChanged,
     required this.onChanged,
     required this.onNext,
   });
@@ -452,6 +486,14 @@ class _GuestsStep extends StatelessWidget {
               Text(
                 'Total: $_total',
                 style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              SwitchListTile.adaptive(
+                value: includeInactiveInventory,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Use older pantry items'),
+                subtitle: const Text('Include inactive items from previous scans'),
+                onChanged: onIncludeInactiveChanged,
               ),
             ],
           ),

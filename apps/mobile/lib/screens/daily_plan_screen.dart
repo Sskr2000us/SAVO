@@ -23,6 +23,10 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
   bool _generating = false;
   String? _error;
 
+  static const String _prefsPlanningIncludeInactiveKey = 'savo.planning.include_inactive_inventory';
+  static const String _prefsInventoryShowInactiveKey = 'savo.inventory.show_inactive_items';
+  bool _includeInactiveInventory = false;
+
   Future<List<Map<String, dynamic>>> _fetchVerifyItems(ApiClient apiClient) async {
     try {
       final res = await apiClient.get('/api/scanning/pantry/summary?max_verify=5');
@@ -119,7 +123,38 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
   @override
   void initState() {
     super.initState();
+    _loadIncludeInactivePreference();
     _loadLatest();
+  }
+
+  Future<void> _loadIncludeInactivePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final includeInactive = prefs.containsKey(_prefsPlanningIncludeInactiveKey)
+          ? (prefs.getBool(_prefsPlanningIncludeInactiveKey) ?? false)
+          : (prefs.getBool(_prefsInventoryShowInactiveKey) ?? false);
+      if (!mounted) return;
+      setState(() {
+        _includeInactiveInventory = includeInactive;
+      });
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  void _setIncludeInactiveInventory(bool value) {
+    setState(() {
+      _includeInactiveInventory = value;
+    });
+
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_prefsPlanningIncludeInactiveKey, value);
+      } catch (_) {
+        // Best-effort only.
+      }
+    }();
   }
 
   Future<void> _loadLatest() async {
@@ -218,15 +253,8 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
         'date': _todayIsoDate(),
       };
 
-      // Reuse the inventory screen preference so planning can consider older (inactive) pantry items.
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
-        if (includeInactive) {
-          body['include_inactive_inventory'] = true;
-        }
-      } catch (_) {
-        // Best-effort only
+      if (_includeInactiveInventory) {
+        body['include_inactive_inventory'] = true;
       }
 
       final preferred = profileState.favoriteCuisines;
@@ -318,6 +346,16 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
       body: Column(
         children: [
           Expanded(child: body),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: SwitchListTile.adaptive(
+              value: _includeInactiveInventory,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Use older pantry items'),
+              subtitle: const Text('Include inactive items from previous scans'),
+              onChanged: _generating ? null : _setIncludeInactiveInventory,
+            ),
+          ),
           if (_latest != null)
             Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
@@ -329,6 +367,8 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
                 ),
               ),
             ),
+          if (_latest == null)
+            const SizedBox(height: AppSpacing.md),
         ],
       ),
     );

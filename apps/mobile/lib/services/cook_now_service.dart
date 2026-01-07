@@ -6,6 +6,9 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class CookNowService {
+  static const String _prefsPlanningIncludeInactiveKey = 'savo.planning.include_inactive_inventory';
+  static const String _prefsInventoryShowInactiveKey = 'savo.inventory.show_inactive_items';
+
   String _inferMealType() {
     final hour = DateTime.now().hour;
     if (hour < 11) return 'breakfast';
@@ -30,7 +33,9 @@ class CookNowService {
     // Reuse the inventory screen preference so Cook Now can consider older (inactive) pantry items.
     try {
       final prefs = await SharedPreferences.getInstance();
-      final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
+      final includeInactive = prefs.containsKey(_prefsPlanningIncludeInactiveKey)
+          ? (prefs.getBool(_prefsPlanningIncludeInactiveKey) ?? false)
+          : (prefs.getBool(_prefsInventoryShowInactiveKey) ?? false);
       if (includeInactive) {
         body['include_inactive_inventory'] = true;
       }
