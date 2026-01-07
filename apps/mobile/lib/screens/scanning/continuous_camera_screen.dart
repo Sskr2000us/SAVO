@@ -136,7 +136,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           if (autoSaved) {
             // High confidence - just show success and continue
             _onIngredientConfirmed(ingredient);
-            _showSuccessSnackbar('${ingredient['detected_name']} ($estimatedQuantity) added!');
+            _showSuccessSnackbar('${ingredient['detected_name']} ($_estimatedQuantity) added!');
             
             // Dismiss onboarding after first success
             if (_showOnboarding) {
