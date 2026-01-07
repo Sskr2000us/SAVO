@@ -52,10 +52,12 @@ COMMENT ON COLUMN public.master_ingredients.density_g_per_ml IS 'Density for vol
 ALTER TABLE public.master_ingredients ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can read master ingredients
+DROP POLICY IF EXISTS master_ingredients_read_policy ON public.master_ingredients;
 CREATE POLICY master_ingredients_read_policy ON public.master_ingredients
     FOR SELECT USING (true);
 
 -- Only authenticated users can suggest new ingredients
+DROP POLICY IF EXISTS master_ingredients_insert_policy ON public.master_ingredients;
 CREATE POLICY master_ingredients_insert_policy ON public.master_ingredients
     FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
@@ -107,10 +109,12 @@ COMMENT ON COLUMN public.product_barcodes.expiry_date_format IS 'Pattern to pars
 ALTER TABLE public.product_barcodes ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can read barcodes
+DROP POLICY IF EXISTS product_barcodes_read_policy ON public.product_barcodes;
 CREATE POLICY product_barcodes_read_policy ON public.product_barcodes
     FOR SELECT USING (true);
 
 -- Authenticated users can add barcodes
+DROP POLICY IF EXISTS product_barcodes_insert_policy ON public.product_barcodes;
 CREATE POLICY product_barcodes_insert_policy ON public.product_barcodes
     FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
@@ -143,6 +147,7 @@ COMMENT ON TABLE public.ingredient_densities IS 'Density lookup for different in
 -- Enable RLS
 ALTER TABLE public.ingredient_densities ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS ingredient_densities_read_policy ON public.ingredient_densities;
 CREATE POLICY ingredient_densities_read_policy ON public.ingredient_densities
     FOR SELECT USING (true);
 
@@ -187,6 +192,7 @@ COMMENT ON COLUMN public.quantity_calibrations.error_percentage IS 'Accuracy met
 -- Enable RLS
 ALTER TABLE public.quantity_calibrations ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS quantity_calibrations_user_policy ON public.quantity_calibrations;
 CREATE POLICY quantity_calibrations_user_policy ON public.quantity_calibrations
     FOR ALL USING (auth.uid() = user_id);
 
@@ -242,6 +248,7 @@ COMMENT ON COLUMN public.container_scans.visual_cues IS 'Visual characteristics 
 -- Enable RLS
 ALTER TABLE public.container_scans ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS container_scans_user_policy ON public.container_scans;
 CREATE POLICY container_scans_user_policy ON public.container_scans
     FOR ALL USING (auth.uid() = user_id);
 
@@ -290,6 +297,7 @@ COMMENT ON TABLE public.barcode_scans IS 'History of barcode scans by users';
 -- Enable RLS
 ALTER TABLE public.barcode_scans ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS barcode_scans_user_policy ON public.barcode_scans;
 CREATE POLICY barcode_scans_user_policy ON public.barcode_scans
     FOR ALL USING (auth.uid() = user_id);
 
@@ -325,6 +333,7 @@ COMMENT ON TABLE public.reference_objects IS 'Standard reference objects for siz
 -- Enable RLS
 ALTER TABLE public.reference_objects ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS reference_objects_read_policy ON public.reference_objects;
 CREATE POLICY reference_objects_read_policy ON public.reference_objects
     FOR SELECT USING (true);
 
@@ -355,6 +364,8 @@ WHERE barcode IS NOT NULL;
 -- ============================================================================
 -- 9. Functions for multi-language ingredient search
 -- ============================================================================
+DROP FUNCTION IF EXISTS search_ingredients_multilang(TEXT, TEXT, INTEGER);
+
 CREATE OR REPLACE FUNCTION search_ingredients_multilang(
     search_query TEXT,
     search_lang TEXT DEFAULT 'en',
@@ -403,6 +414,8 @@ COMMENT ON FUNCTION search_ingredients_multilang IS 'Search ingredients in any l
 -- ============================================================================
 -- 10. Function to get ingredient by barcode
 -- ============================================================================
+DROP FUNCTION IF EXISTS get_ingredient_by_barcode(TEXT);
+
 CREATE OR REPLACE FUNCTION get_ingredient_by_barcode(barcode_input TEXT)
 RETURNS TABLE (
     ingredient_id UUID,
@@ -436,6 +449,8 @@ COMMENT ON FUNCTION get_ingredient_by_barcode IS 'Lookup product details by barc
 -- ============================================================================
 -- 11. Function to estimate quantity from volume
 -- ============================================================================
+DROP FUNCTION IF EXISTS estimate_quantity_from_volume(TEXT, NUMERIC, TEXT);
+
 CREATE OR REPLACE FUNCTION estimate_quantity_from_volume(
     ingredient_canonical_name TEXT,
     volume_ml NUMERIC,
