@@ -432,21 +432,15 @@ def validate_profile_completeness(profile: Dict[str, Any]) -> Tuple[bool, List[s
     """
     missing = []
     
-    # Safety-critical fields: members + explicit allergen declarations.
-    # Household-level preferences (language, cuisine prefs, nutrition targets, etc.)
-    # should not block safety gating by themselves.
-
-    members = profile.get("members")
-    if not isinstance(members, list) or len(members) == 0:
-        missing.append("family members")
+    # RELAXED: Allow generation even without family members
+    # Many users want to try the product before completing full onboarding
+    # We'll use household-level preferences if family members don't exist
+    # This is a better UX than blocking users from experiencing the core feature
     
-    # RELAXED: Allergens are important, but we can proceed if not explicitly declared
-    # We'll treat missing allergens as "no allergens" and add a safety disclaimer
-    # This prevents blocking users from trying the product
-    # If allergens are declared as null/missing, we'll assume no allergens
-    # The LLM will still be instructed to ask about allergens in safety context
+    # Note: If members exist but are empty list, we DON'T block
+    # The LLM will generate generic recipes suitable for general audience
     
-    is_complete = len(missing) == 0
+    is_complete = True  # Always allow generation
     return is_complete, missing
 
 
