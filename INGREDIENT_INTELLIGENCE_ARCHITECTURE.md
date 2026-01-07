@@ -367,6 +367,73 @@ CREATE INDEX idx_visual_scans_confirmed ON visual_scan_results(user_confirmed_in
 
 ---
 
+## 🚀 PHASE 7-12: DECISION INTELLIGENCE LAYER
+
+### **Phase 7: Decision Intelligence (Week 13-14)** 📋 PLANNED
+- [ ] Auto-action engine with confidence thresholds (>0.85 = auto, >0.60 = suggest)
+- [ ] Decision rules engine (cook_now, store_better, substitute, buy, discard)
+- [ ] Context-aware action recommendations
+- [ ] User feedback learning loop
+- [ ] Database: decision_rules, ingredient_actions tables (Migration 007)
+- [ ] Service: DecisionIntelligenceService (650+ lines) ✅ CREATED
+- [ ] FastAPI endpoints (7 decision endpoints)
+- [ ] Flutter integration with action UI
+
+### **Phase 8: Daily Habit Loop (Week 15-16)** 📋 PLANNED
+- [ ] Morning digest (3 core questions: What to cook? What expires? What wasted?)
+- [ ] Evening check-in with quick feedback
+- [ ] Streak tracking (no_waste, daily_scan, daily_cook)
+- [ ] Push notification system (Firebase)
+- [ ] Passive learning signals (opened, clicked, ignored)
+- [ ] Database: daily_digests, user_streaks, passive_learning_signals (Migration 007)
+- [ ] Service: DailyHabitService
+- [ ] Digest generation and scheduling
+
+### **Phase 9: Self-Learning Loop (Week 17-18)** 📋 PLANNED
+- [ ] CV model reinforcement from user confirmations
+- [ ] Substitution ranking updates based on acceptance
+- [ ] Decision rule confidence adjustment
+- [ ] Model performance tracking dashboard
+- [ ] Human confirmation rate monitoring (target: 40% → 20%)
+- [ ] Database: model_performance_metrics, learning_feedback (Migration 007)
+- [ ] Service: SelfLearningService
+- [ ] Automated retraining pipeline
+
+### **Phase 10: Productization (Week 19-20)** 📋 PLANNED
+- [ ] SmartChef Home (B2C): Family profiles, meal planning, premium subscription
+- [ ] SAVO B2B (Restaurants): POS integration, waste cost dashboard
+- [ ] Ingredient Intelligence API (B2B SaaS): White-label licensing
+- [ ] Monetization: Freemium, per-location licenses, API pricing
+- [ ] Multi-tenant architecture
+- [ ] Billing and subscription management
+
+### **Phase 11: Trust & Explainability (Week 21-22)** 📋 PLANNED
+- [ ] Explainability templates for all decisions
+- [ ] Confidence score display with alternatives
+- [ ] Conservative allergen handling policy
+- [ ] Legal disclaimers and compliance
+- [ ] Privacy policy updates
+- [ ] User trust metrics tracking
+
+### **Phase 12: Success Metrics Dashboard (Week 23-24)** 📋 PLANNED
+- [ ] Scan-to-action rate (target: >60%)
+- [ ] Food waste reduction tracking (target: >20%)
+- [ ] Time saved per user (target: >30 min/week)
+- [ ] Confidence improvement curve
+- [ ] Weekly active return rate (target: >40%)
+- [ ] Database: success_metrics_daily (Migration 007)
+- [ ] Analytics dashboard UI
+- [ ] Executive reporting
+
+### 📊 Phase 7-12 Statistics
+- **New Tables**: 8 (decision_rules, ingredient_actions, daily_digests, user_streaks, passive_learning_signals, model_performance_metrics, learning_feedback, success_metrics_daily)
+- **New Services**: 4 (DecisionIntelligenceService ✅, DailyHabitService, SelfLearningService, MetricsService)
+- **New API Endpoints**: 20+ across decision, habit, learning, and metrics routers
+- **Implementation Timeline**: 12 weeks (Weeks 13-24)
+- **Documentation**: [PHASE_7_12_IMPLEMENTATION_PLAN.md](PHASE_7_12_IMPLEMENTATION_PLAN.md)
+
+---
+
 ## 🔧 New Services Required
 
 ### 1. **Visual Intelligence Service**
@@ -675,6 +742,32 @@ python services/api/scripts/generate_embeddings.py
     - waste_prevention_service.dart (Flutter integration)
     - Features: ML-based spoilage prediction, urgency categorization, storage condition monitoring, health score tracking
     - Supports: category-based risk assessment, temperature/humidity monitoring, sustainability metrics
+
+### 📋 Phase 7-12 Planning Complete (2026-01-06)
+11. ✅ **Phase 7-12 Implementation Plan** created
+    - Comprehensive roadmap: [PHASE_7_12_IMPLEMENTATION_PLAN.md](PHASE_7_12_IMPLEMENTATION_PLAN.md)
+    - 6 new phases covering decision intelligence, daily habits, self-learning, productization, trust, and metrics
+    - 30-day execution priorities with week-by-week breakdown
+    - Success criteria and key metrics defined
+    
+12. ✅ **Decision Intelligence Database Schema** created
+    - Migration 007: 8 new tables (decision_rules, ingredient_actions, daily_digests, user_streaks, passive_learning_signals, model_performance_metrics, learning_feedback, success_metrics_daily)
+    - 5 seed decision rules with auto-action logic
+    - Helper functions for rule updates and streak tracking
+    - RLS policies for data security
+    
+13. ✅ **DecisionIntelligenceService** implemented
+    - Auto-action engine with confidence thresholds (>0.85 = auto, >0.60 = suggest)
+    - Rule evaluation engine with priority ordering
+    - Urgency scoring (0-100) for intelligent prioritization
+    - Feedback tracking and learning loop integration
+    - 650+ lines of production-ready code
+    
+14. ✅ **Supabase Storage Setup** documented
+    - SQL migration 006: Storage bucket policies (savo-ingredients, savo-ingredients-thumbnails, savo-user-scans)
+    - Comprehensive setup guide: [SUPABASE_STORAGE_SETUP_GUIDE.md](SUPABASE_STORAGE_SETUP_GUIDE.md)
+    - RLS policies for public/private access control
+    - Image upload and retrieval examples
 
 ### 🔄 In Progress
 11. **Expand ingredient database** to 100+ ingredients
