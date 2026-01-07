@@ -65,38 +65,33 @@ CREATE POLICY master_ingredients_insert_policy ON public.master_ingredients
 -- 2. Product Barcodes Table (UPC/EAN Database)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.product_barcodes (
-    upc_ean TEXT PRIMARY KEY, -- EAN-13, UPC-A, UPC-E
-    ingredient_id UUID REFERENCES public.master_ingredients(id) ON DELETE SET NULL,
-    
-    -- Product details
-    product_name TEXT NOT NULL,
-    brand TEXT,
-    manufacturer TEXT,
-    country_code TEXT, -- ISO 3166-1 alpha-2 (IN, US, GB, etc.)
-    
-    -- Quantity information
-    quantity_value NUMERIC,
-    quantity_unit TEXT, -- g, kg, ml, l, oz, lb
-    
-    -- Packaging and expiry
-    package_type TEXT, -- bottle, jar, box, bag, can
-    expiry_date_format TEXT, -- Pattern like "DD/MM/YYYY" or "MFG: DD MMM YYYY"
-    
-    -- Nutritional info from package
-    nutrition_facts JSONB,
-    
-    -- Data source
-    data_source TEXT DEFAULT 'openfoodfacts', -- openfoodfacts, manual, user_contributed
-    external_id TEXT, -- OpenFoodFacts product ID
-    confidence NUMERIC(3,2) DEFAULT 0.95,
-    
-    -- Metadata
-    image_url TEXT, -- Package image
-    last_scanned_at TIMESTAMPTZ,
-    scan_count INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    upc_ean TEXT PRIMARY KEY
 );
+
+-- Add columns one by one to handle existing tables
+ALTER TABLE public.product_barcodes 
+ADD COLUMN IF NOT EXISTS ingredient_id UUID REFERENCES public.master_ingredients(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS product_name TEXT,
+ADD COLUMN IF NOT EXISTS brand TEXT,
+ADD COLUMN IF NOT EXISTS manufacturer TEXT,
+ADD COLUMN IF NOT EXISTS country_code TEXT,
+ADD COLUMN IF NOT EXISTS quantity_value NUMERIC,
+ADD COLUMN IF NOT EXISTS quantity_unit TEXT,
+ADD COLUMN IF NOT EXISTS package_type TEXT,
+ADD COLUMN IF NOT EXISTS expiry_date_format TEXT,
+ADD COLUMN IF NOT EXISTS nutrition_facts JSONB,
+ADD COLUMN IF NOT EXISTS data_source TEXT DEFAULT 'openfoodfacts',
+ADD COLUMN IF NOT EXISTS external_id TEXT,
+ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2) DEFAULT 0.95,
+ADD COLUMN IF NOT EXISTS image_url TEXT,
+ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ,
+ADD COLUMN IF NOT EXISTS scan_count INTEGER DEFAULT 0,
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Update product_name to NOT NULL only if it's NULL
+UPDATE public.product_barcodes SET product_name = 'Unknown' WHERE product_name IS NULL;
+ALTER TABLE public.product_barcodes ALTER COLUMN product_name SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_product_barcodes_ingredient ON public.product_barcodes(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_product_barcodes_country ON public.product_barcodes(country_code);
@@ -257,36 +252,31 @@ CREATE POLICY container_scans_user_policy ON public.container_scans
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.barcode_scans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    
-    -- Barcode data
-    barcode TEXT NOT NULL,
-    barcode_type TEXT, -- EAN13, UPCA, UPCE, EAN8
-    product_barcode TEXT REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL,
-    
-    -- Detected information
-    product_name TEXT,
-    brand TEXT,
-    quantity_value NUMERIC,
-    quantity_unit TEXT,
-    expiry_date DATE,
-    expiry_date_raw TEXT, -- Raw OCR text
-    
-    -- Image data
-    image_url TEXT,
-    package_image_url TEXT,
-    
-    -- Processing results
-    added_to_inventory BOOLEAN DEFAULT false,
-    inventory_item_id UUID REFERENCES public.inventory_items(id) ON DELETE SET NULL,
-    
-    -- Confidence
-    confidence NUMERIC(3,2),
-    data_source TEXT, -- openfoodfacts, manual_ocr, cached
-    
-    -- Metadata
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE
 );
+
+-- Add columns incrementally
+ALTER TABLE public.barcode_scans
+ADD COLUMN IF NOT EXISTS barcode TEXT,
+ADD COLUMN IF NOT EXISTS barcode_type TEXT,
+ADD COLUMN IF NOT EXISTS product_barcode TEXT REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS product_name TEXT,
+ADD COLUMN IF NOT EXISTS brand TEXT,
+ADD COLUMN IF NOT EXISTS quantity_value NUMERIC,
+ADD COLUMN IF NOT EXISTS quantity_unit TEXT,
+ADD COLUMN IF NOT EXISTS expiry_date DATE,
+ADD COLUMN IF NOT EXISTS expiry_date_raw TEXT,
+ADD COLUMN IF NOT EXISTS image_url TEXT,
+ADD COLUMN IF NOT EXISTS package_image_url TEXT,
+ADD COLUMN IF NOT EXISTS added_to_inventory BOOLEAN DEFAULT false,
+ADD COLUMN IF NOT EXISTS inventory_item_id UUID REFERENCES public.inventory_items(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2),
+ADD COLUMN IF NOT EXISTS data_source TEXT,
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Set barcode NOT NULL if possible
+UPDATE public.barcode_scans SET barcode = 'unknown' WHERE barcode IS NULL;
+ALTER TABLE public.barcode_scans ALTER COLUMN barcode SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_barcode_scans_user ON public.barcode_scans(user_id);
 CREATE INDEX IF NOT EXISTS idx_barcode_scans_barcode ON public.barcode_scans(barcode);
