@@ -31,10 +31,6 @@ workflows:
       # Must match the App Store Connect API key name configured in Codemagic UI
       # under Teams -> Integrations -> Developer Portal.
       app_store_connect: SAVO
-      # App Center integration for distribution
-      # Configure in Codemagic: Teams -> Integrations -> App Center
-      # Add API token from App Center: Account Settings -> API Tokens
-      app_center: SAVO_AppCenter
     environment:
       flutter: stable
       xcode: latest
@@ -43,6 +39,8 @@ workflows:
         distribution_type: app_store
         bundle_identifier: com.savo.savo
       vars:
+        # App Center API token (add in Codemagic UI as secure environment variable)
+        # APP_CENTER_API_TOKEN: Encrypted in Codemagic
         # App Center organization/owner name
         APP_CENTER_OWNER: "YOUR_APP_CENTER_OWNER"
         # App Center iOS app name
@@ -93,33 +91,54 @@ workflows:
             /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST_PATH" || true
             /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST_PATH" || true
           fi
+
+      - name: Upload to App Center
+        script: |
+          cd apps/mobile
+          IPA_PATH=$(find build -type f -name "*.ipa" | head -n 1)
+          
+          if [ -z "$APP_CENTER_API_TOKEN" ]; then
+            echo "⚠️  APP_CENTER_API_TOKEN not set - skipping App Center upload"
+            echo "To enable: Add APP_CENTER_API_TOKEN in Codemagic environment variables"
+            exit 0
+          fi
+          
+          if [ -z "$IPA_PATH" ]; then
+            echo "❌ No IPA file found - cannot upload to App Center"
+            exit 1
+          fi
+          
+          echo "📤 Uploading to App Center..."
+          echo "Owner: $APP_CENTER_OWNER"
+          echo "App: $APP_CENTER_IOS_APP"
+          echo "IPA: $IPA_PATH"
+          
+          # Install App Center CLI
+          npm install -g appcenter-cli
+          
+          # Login with API token
+          appcenter login --token "$APP_CENTER_API_TOKEN"
+          
+          # Upload IPA
+          appcenter distribute release \
+            --app "$APP_CENTER_OWNER/$APP_CENTER_IOS_APP" \
+            --file "$IPA_PATH" \
+            --group Collaborators \
+            --release-notes "Build: $BUILD_NUMBER | Commit: $CM_COMMIT | Branch: $CM_BRANCH
+          
+          Continuous single-item scanning:
+          - Auto-capture with 3-second intervals
+          - Instant confirmation for high-confidence items
+          - Optimized Vision API (1-2s response time)" \
+            --debug
+          
+          echo "✅ Successfully uploaded to App Center"
     publishing:
       app_store_connect:
         # Upload IPA to App Store Connect/TestFlight.
         auth: integration
         # Internal testing does not require beta review submission.
         submit_to_testflight: false
-      app_center:
-        # Upload IPA to App Center for broader distribution
-        auth: integration
-        # Will use APP_CENTER_OWNER and APP_CENTER_IOS_APP from environment vars
-        owner: $APP_CENTER_OWNER
-        app_name: $APP_CENTER_IOS_APP
-        # Notify testers automatically
-        notify_testers: true
-        # Distribution group (e.g., "Collaborators" or create custom group)
-        distribution_group: Collaborators
-        # Optional: release notes from commit messages
-        release_notes: |
-          Build: $BUILD_NUMBER
-          Commit: $CM_COMMIT
-          Branch: $CM_BRANCH
-          
-          Latest Changes:
-          - Continuous single-item scanning implementation
-          - Auto-capture with 3-second intervals
-          - Instant confirmation for high-confidence items
-          - Optimized Vision API (1-2s response time)
     artifacts:
       - apps/mobile/build/ios/ipa/*.ipa
       - apps/mobile/build/ios/ipa/**/*.ipa
