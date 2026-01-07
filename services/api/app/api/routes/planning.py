@@ -1836,9 +1836,10 @@ async def post_daily(
                 if existing_payload.get("_fallback_mode") is True:
                     existing_payload = None
 
-                existing_hash = existing_payload.get("_inventory_hash")
-                if isinstance(existing_hash, str) and existing_hash and existing_hash != inventory_hash:
-                    existing_payload = None
+                if isinstance(existing_payload, dict):
+                    existing_hash = existing_payload.get("_inventory_hash")
+                    if isinstance(existing_hash, str) and existing_hash and existing_hash != inventory_hash:
+                        existing_payload = None
 
                 if isinstance(existing_payload, dict):
                     # Only reuse if core request knobs match.
