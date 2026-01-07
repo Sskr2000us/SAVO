@@ -9,6 +9,7 @@ from datetime import datetime, date
 import re
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
+import asyncpg
 import logging
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,26 @@ db = SupabaseDB()
 def get_db_client() -> Client:
     """Get the Supabase client instance for direct database operations"""
     return db.client
+
+
+async def get_db_connection() -> asyncpg.Connection:
+    """
+    Get a direct asyncpg connection to the PostgreSQL database.
+    Used by routers that need raw SQL access (search, graph, regional, waste).
+    
+    Returns a connection that should be closed after use.
+    For use with FastAPI Depends(), it will be automatically closed.
+    """
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is required for direct database connections")
+    
+    try:
+        conn = await asyncpg.connect(database_url)
+        return conn
+    except Exception as e:
+        logger.error(f"Failed to create database connection: {e}")
+        raise
 
 
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
