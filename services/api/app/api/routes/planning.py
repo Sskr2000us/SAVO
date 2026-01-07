@@ -656,7 +656,25 @@ def _generate_fallback_party_plan(
         cuisine = favs[0].strip()
 
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
-    inv_items = inv_items[:10]
+    # Keep a wider window so deterministic selection can avoid branded/packaged items
+    # and still find sensible ingredients for each course.
+    inv_items = inv_items[:40]
+
+    inv_names_lower: list[str] = []
+    for it in inv_items:
+        try:
+            inv_names_lower.append(str(getattr(it, "canonical_name", "") or "").strip().lower())
+        except Exception:
+            inv_names_lower.append("")
+
+    def _has_any(*needles: str) -> bool:
+        for n in needles:
+            nn = (n or "").strip().lower()
+            if not nn:
+                continue
+            if any(nn in s for s in inv_names_lower):
+                return True
+        return False
 
     def _singular(label: str) -> str:
         s = (label or "").strip()
@@ -708,7 +726,73 @@ def _generate_fallback_party_plan(
 
         return (min(qty, max(1.0, qty * 0.5)), unit)
 
-    def _ingredients_used(seed: str, max_n: int = 6) -> list[dict[str, Any]]:
+    def _looks_branded_or_packaged(name_lower: str) -> bool:
+        s = (name_lower or "").strip().lower()
+        if not s:
+            return True
+        return any(
+            b in s
+            for b in [
+                "kroger",
+                "great value",
+                "walmart",
+                "costco",
+                "target",
+                "signature select",
+                "private selection",
+                "brand",
+            ]
+        )
+
+    def _allowed_for_course(name_lower: str, course_label: str) -> bool:
+        s = (name_lower or "").strip().lower()
+        if not s:
+            return False
+        if _looks_branded_or_packaged(s):
+            return False
+
+        course_l = (course_label or "").strip().lower()
+
+        sweet = ["sugar", "jaggery", "honey", "chocolate", "cocoa", "dates", "raisins", "vanilla"]
+        dairy = ["milk", "yogurt", "curd", "cream", "paneer", "butter", "ghee"]
+        fruit = ["banana", "mango", "apple", "berries", "strawberry", "grapes", "pomegranate", "orange"]
+
+        protein = ["paneer", "tofu", "chicken", "egg", "lentil", "dal", "chana", "beans", "chickpea"]
+        carb = ["rice", "basmati", "bread", "naan", "roti", "flour", "pasta", "noodle", "potato"]
+        veg = ["tomato", "onion", "cucumber", "carrot", "pepper", "spinach", "greens", "peas", "cauliflower"]
+        spice_herb = [
+            "cumin",
+            "coriander",
+            "turmeric",
+            "chili",
+            "garam",
+            "masala",
+            "ginger",
+            "garlic",
+            "mint",
+            "cilantro",
+            "cardamom",
+        ]
+
+        def _hit(keys: list[str]) -> bool:
+            return any(k in s for k in keys)
+
+        if "dess" in course_l or "sweet" in course_l:
+            return _hit(sweet) or _hit(dairy) or _hit(fruit) or "rice" in s
+
+        if "side" in course_l:
+            # Prefer savory sides; avoid packaged carb-heavy items like pasta/bread.
+            if _hit(["pasta", "noodle", "bread", "bun", "roll"]) and not _hit(["rice", "flour"]):
+                return False
+            return _hit(veg) or _hit(spice_herb) or _hit(dairy)
+
+        if "main" in course_l or "curry" in course_l:
+            return _hit(protein) or _hit(carb) or _hit(veg) or _hit(spice_herb)
+
+        # Appetizers / default
+        return _hit(veg) or _hit(spice_herb) or _hit(dairy)
+
+    def _ingredients_used(seed: str, course_label: str, max_n: int = 6) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         if not inv_items:
             return out
@@ -718,9 +802,26 @@ def _generate_fallback_party_plan(
         except Exception:
             start = 0
 
+        # Filter for course-appropriate, non-branded items first.
+        candidates: list[InventoryItem] = []
+        for it in inv_items:
+            name_l = str(getattr(it, "canonical_name", "") or "").strip().lower()
+            if _allowed_for_course(name_l, course_label):
+                candidates.append(it)
+
+        if not candidates:
+            # Fall back to anything that doesn't look branded; better than nothing.
+            for it in inv_items:
+                name_l = str(getattr(it, "canonical_name", "") or "").strip().lower()
+                if not _looks_branded_or_packaged(name_l):
+                    candidates.append(it)
+
+        if not candidates:
+            return out
+
         chosen: list[InventoryItem] = []
-        for i in range(min(max_n, len(inv_items))):
-            chosen.append(inv_items[(start + i) % len(inv_items)])
+        for i in range(min(max_n, len(candidates))):
+            chosen.append(candidates[(start + i) % len(candidates)])
 
         for it in chosen:
             amt, unit = _suggest_amount_and_unit(it)
@@ -741,52 +842,163 @@ def _generate_fallback_party_plan(
             benefits.append({"ingredient": ing, "benefit": "Adds nutrition and balance to the menu."})
         return benefits or [{"ingredient": "pantry staples", "benefit": "Convenient home cooking."}]
 
+    def _dish_name_en(*, cuisine: str, course_label: str, option_idx: int) -> str:
+        c = (cuisine or "").strip().lower()
+        cl = (course_label or "").strip().lower()
+        idx = 1 if int(option_idx or 1) <= 1 else 2
+
+        if c in {"indian", "punjabi", "gujarati", "south indian", "north indian"}:
+            if "main" in cl:
+                if _has_any("paneer"):
+                    return "Paneer Butter Masala" if idx == 1 else "Paneer Biryani"
+                if _has_any("chicken"):
+                    return "Chicken Curry" if idx == 1 else "Chicken Biryani"
+                if _has_any("lentil", "dal", "chana", "chickpea"):
+                    return "Chana Masala" if idx == 1 else "Dal Tadka with Jeera Rice"
+                return "Vegetable Pulao" if idx == 1 else "Mixed Vegetable Curry"
+
+            if "side" in cl:
+                if _has_any("yogurt", "curd"):
+                    return "Cucumber Raita" if idx == 1 else "Boondi Raita"
+                if _has_any("cucumber", "tomato", "onion"):
+                    return "Kachumber Salad" if idx == 1 else "Onion-Tomato Salad"
+                return "Mint Chutney" if idx == 1 else "Spiced Roasted Vegetables"
+
+            if "dess" in cl or "sweet" in cl:
+                if _has_any("milk") and _has_any("rice"):
+                    return "Kheer (Rice Pudding)" if idx == 1 else "Kesar Kheer"
+                if _has_any("carrot"):
+                    return "Gajar Halwa" if idx == 1 else "Carrot Kheer"
+                if _has_any("yogurt"):
+                    return "Sweet Yogurt Parfait" if idx == 1 else "Mango Lassi Bowl"
+                return "Fruit Chaat" if idx == 1 else "Coconut Ladoo"
+
+            if "appet" in cl or "starter" in cl:
+                if _has_any("paneer"):
+                    return "Paneer Tikka Skewers" if idx == 1 else "Paneer Pakora"
+                if _has_any("corn"):
+                    return "Masala Corn" if idx == 1 else "Corn Chaat"
+                return "Cucumber Chaat" if idx == 1 else "Spiced Roasted Chickpeas"
+
+        # Generic fallback (non-cuisine-specific)
+        if "dess" in cl or "sweet" in cl:
+            return "Simple Dessert" if idx == 1 else "Fresh Fruit Bowl"
+        if "side" in cl:
+            return "Quick Side Salad" if idx == 1 else "Herbed Yogurt Dip"
+        if "main" in cl:
+            return "Hearty Main Course" if idx == 1 else "One-Pot Main Dish"
+        return "Party Appetizer" if idx == 1 else "Party Starter"
+
+    def _cooking_method_for(dish_name: str, course_label: str) -> str:
+        name_l = (dish_name or "").strip().lower()
+        cl = (course_label or "").strip().lower()
+        if any(k in name_l for k in ["salad", "chutney", "raita", "parfait", "fruit", "lassi"]):
+            return "no_cook"
+        if any(k in name_l for k in ["tikka", "skewer", "grill"]):
+            return "grill"
+        if "dess" in cl and any(k in name_l for k in ["kheer", "halwa", "ladoo"]):
+            return "stovetop"
+        return "stovetop"
+
+    def _steps_for(dish_name: str, course_label: str, prep: int, cook: int) -> list[dict[str, Any]]:
+        name_l = (dish_name or "").strip().lower()
+        cl = (course_label or "").strip().lower()
+
+        if any(k in name_l for k in ["raita", "parfait", "fruit", "salad", "chutney", "lassi"]):
+            return [
+                {
+                    "step": 1,
+                    "instruction": {"en": "Prep and chop the fresh ingredients; season to taste."},
+                    "time_minutes": prep,
+                    "tips": [],
+                },
+                {
+                    "step": 2,
+                    "instruction": {"en": "Mix, taste, and chill briefly before serving."},
+                    "time_minutes": cook,
+                    "tips": [],
+                },
+            ]
+
+        if "biryani" in name_l or "pulao" in name_l or "rice" in name_l:
+            return [
+                {
+                    "step": 1,
+                    "instruction": {"en": "Rinse/soak rice; prep aromatics and spices."},
+                    "time_minutes": prep,
+                    "tips": [],
+                },
+                {
+                    "step": 2,
+                    "instruction": {"en": "Cook the masala and simmer rice until fluffy; rest before serving."},
+                    "time_minutes": cook,
+                    "tips": [],
+                },
+            ]
+
+        if "curry" in name_l or "masala" in name_l:
+            return [
+                {
+                    "step": 1,
+                    "instruction": {"en": "Sauté onions/ginger/garlic; bloom spices."},
+                    "time_minutes": prep,
+                    "tips": [],
+                },
+                {
+                    "step": 2,
+                    "instruction": {"en": "Add tomatoes and protein/veg; simmer until rich and serve."},
+                    "time_minutes": cook,
+                    "tips": [],
+                },
+            ]
+
+        if "dess" in cl or "sweet" in cl:
+            return [
+                {
+                    "step": 1,
+                    "instruction": {"en": "Prepare the base ingredients and measure sweetener/spices."},
+                    "time_minutes": prep,
+                    "tips": [],
+                },
+                {
+                    "step": 2,
+                    "instruction": {"en": "Cook gently until thickened, then cool and serve."},
+                    "time_minutes": cook,
+                    "tips": [],
+                },
+            ]
+
+        return [
+            {
+                "step": 1,
+                "instruction": {"en": "Prep ingredients and season thoughtfully."},
+                "time_minutes": prep,
+                "tips": [],
+            },
+            {"step": 2, "instruction": {"en": "Cook on medium heat and serve."}, "time_minutes": cook, "tips": []},
+        ]
+
     def _recipe(recipe_id: str, course_label: str, option_idx: int, total_minutes: int) -> dict[str, Any]:
         total = max(10, int(total_minutes or 30))
         prep = max(3, int(total * 0.35))
         cook = max(5, total - prep)
         difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
         seed = f"{course_label}:{option_idx}:{recipe_id}"
-        ings = _ingredients_used(seed, max_n=6)
-        top_names = [str(x.get("canonical_name")) for x in ings[:3] if x.get("canonical_name")]
-        top_phrase = ", ".join([_display_name(n) for n in top_names]) if top_names else "pantry ingredients"
-        primary = _display_name(top_names[0]) if top_names else ""
-
-        course_singular = _singular(course_label)
-        base_name = f"{cuisine}-Style {course_singular}" if cuisine else f"{course_singular}"
-        name_en = f"{base_name} with {primary}" if primary else base_name
-
-        cooking_method = "stovetop"
-        if course_label.lower().startswith("appet"):
-            cooking_method = "no_cook"
-        elif course_label.lower().startswith("dess"):
-            cooking_method = "no_cook"
-        elif course_label.lower().startswith("side"):
-            cooking_method = "stovetop"
-        elif course_label.lower().startswith("main"):
-            cooking_method = "stovetop"
-
-        step2 = "Cook on medium heat; serve warm."
-        if cooking_method == "no_cook":
-            step2 = "Mix, taste, and serve; chill briefly if desired."
-        if course_label.lower().startswith("dess"):
-            step2 = "Assemble and chill; serve cold."
-        if course_label.lower().startswith("side"):
-            step2 = "Season, cook briefly, and serve alongside the main."
+        dish_name = _dish_name_en(cuisine=cuisine, course_label=course_label, option_idx=option_idx)
+        ings = _ingredients_used(seed, course_label, max_n=6)
+        cooking_method = _cooking_method_for(dish_name, course_label)
+        steps = _steps_for(dish_name, course_label, prep, cook)
 
         return {
             "recipe_id": recipe_id,
-            "recipe_name": {"en": f"{name_en}"},
+            "recipe_name": {"en": dish_name},
             "cuisine": cuisine,
             "difficulty": difficulty,
             "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},
             "cooking_method": cooking_method,
             "ingredients_used": ings,
             "new_ingredients_optional": [],
-            "steps": [
-                {"step": 1, "instruction": {"en": f"Prep {top_phrase}."}, "time_minutes": prep, "tips": []},
-                {"step": 2, "instruction": {"en": step2}, "time_minutes": cook, "tips": []},
-            ],
+            "steps": steps,
             "nutrition_per_serving": {
                 "calories_kcal": 320,
                 "macros": {"protein_g": 12, "carbs_g": 40, "fat_g": 10},
@@ -815,7 +1027,8 @@ def _generate_fallback_party_plan(
         }
 
     courses = []
-    for label in ("Appetizers", "Mains", "Sides", "Desserts"):
+    # Keep the same coarse-grained party structure the UI expects.
+    for label in ("Mains", "Sides", "Desserts"):
         courses.append(
             {
                 "course_header": label,
