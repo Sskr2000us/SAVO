@@ -355,12 +355,15 @@ CREATE INDEX idx_visual_scans_confirmed ON visual_scan_results(user_confirmed_in
 - [x] Flutter regional intelligence service integration
 - [x] Regional data seeding (42+ regional variants across 14 ingredients)
 
-### **Phase 6: Waste Prevention (Week 11-12)**
-- [ ] Spoilage prediction models
-- [ ] Expiry date tracking (existing + enhanced)
-- [ ] Storage condition alerts
-- [ ] Use-by-date recipe suggestions
-- [ ] Waste analytics dashboard
+### **Phase 6: Waste Prevention (Week 11-12)** ✅ COMPLETED
+- [x] Spoilage prediction models
+- [x] Expiry date tracking (existing + enhanced)
+- [x] Storage condition alerts
+- [x] Use-by-date recipe suggestions
+- [x] Waste analytics dashboard
+- [x] FastAPI waste endpoints (7 endpoints + utilities)
+- [x] Flutter waste prevention service integration
+- [x] Health score calculation and sustainability tracking
 
 ---
 
@@ -666,37 +669,37 @@ python services/api/scripts/generate_embeddings.py
    - Features: multi-region support, seasonal tracking, native/imported classification, cuisine comparison
    - Supports: India, China, Thailand, Japan, Italy, Greece, Turkey, Mexico, Peru, Caribbean, Middle East, Southeast Asia, Mediterranean, United States
 
+10. ✅ **Waste Prevention System** implemented
+    - waste_prevention_service.py (spoilage prediction, expiry tracking, storage alerts, recipe suggestions, waste analytics)
+    - waste.py (FastAPI router with 7 endpoints + utilities)
+    - waste_prevention_service.dart (Flutter integration)
+    - Features: ML-based spoilage prediction, urgency categorization, storage condition monitoring, health score tracking
+    - Supports: category-based risk assessment, temperature/humidity monitoring, sustainability metrics
+
 ### 🔄 In Progress
-10. **Expand ingredient database** to 100+ ingredients
+11. **Expand ingredient database** to 100+ ingredients
    - Need: 60+ more ingredients across all categories
    - Regional variants (Indian, Chinese, Mexican cuisines)
    - Seasonal ingredients
    - More herbs, spices, and specialty items
 
-### 📋 Upcoming (Phase 6+)
-11. **Upload reference images** to Supabase Storage
+### 📋 Upcoming (Future Phases)
+12. **Upload reference images** to Supabase Storage
    - Create image dataset for each ingredient
    - Multiple states (raw, cut, powdered, cooked)
    - Various backgrounds and lighting conditions
    - Generate thumbnails for fast loading
 
-12. **Seed graph data** for intelligent recommendations
+13. **Seed graph data** for intelligent recommendations
     - Run: `python services/api/scripts/seed_graph_data.py`
     - Creates substitutions, confusions, and pairings
     - Enables graph intelligence features
 
-13. **Generate embeddings** for semantic search
+14. **Generate embeddings** for semantic search
     - Run: `python services/api/scripts/generate_embeddings.py`
     - Requires: OPENAI_API_KEY environment variable
     - Creates embeddings for all 37 ingredients
     - Enables semantic search functionality
-
-14. **Implement Phase 6: Waste Prevention**
-    - Spoilage prediction models
-    - Expiry date tracking and alerts
-    - Storage condition monitoring
-    - Use-by-date recipe suggestions
-    - Waste analytics dashboard
 
 15. **Test and optimize**
     - End-to-end testing with real images
