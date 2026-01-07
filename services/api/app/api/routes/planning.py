@@ -1551,14 +1551,18 @@ async def post_daily(
     force_regenerate: bool = False,
 ):
     """Generate daily meal plan with full family profile and product intelligence"""
+    logger.info(f"=== DAILY PLAN START === user_id={user_id} meal_type={req.meal_type} servings={req.servings}")
     total_t0 = perf_counter()
     storage = get_storage()
     config = storage.get_config()
 
     # Pull DB-backed profile (source of truth)
     try:
+        logger.info(f"Fetching profile for user_id={user_id}")
         full_profile = await get_full_profile(user_id)
+        logger.info(f"Profile fetched: members={len(full_profile.get('members', []))}")
     except Exception as e:
+        logger.error(f"Failed to load profile: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to load user profile: {str(e)}")
 
     household = full_profile.get("household") or full_profile.get("profile") or {}
@@ -1634,6 +1638,7 @@ async def post_daily(
     
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
+    logger.info(f"Golden Rule check: can_proceed={golden_check['can_proceed']}")
     if not golden_check["can_proceed"]:
         # Render/Uvicorn often defaults to WARNING+ in production; keep this visible.
         # Do not log the full profile (PII/health-related fields may exist).
@@ -1798,9 +1803,11 @@ async def post_daily(
     
     # Generate meal plan
     llm_t0 = perf_counter()
+    logger.info(f"Starting LLM call for user_id={user_id}")
     try:
         result = await plan_daily(context)
-    except Exception:
+        logger.info(f"LLM call completed: status={result.get('status')} time={int((perf_counter() - llm_t0) * 1000)}ms")
+    except Exception as e:
         logger.exception("plan_daily crashed user_id=%s", user_id)
         raise
     llm_ms = int((perf_counter() - llm_t0) * 1000)
