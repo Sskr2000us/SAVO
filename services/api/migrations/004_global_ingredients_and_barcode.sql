@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS public.master_ingredients (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_master_ingredients_canonical ON public.master_ingredients(canonical_name);
-CREATE INDEX idx_master_ingredients_category ON public.master_ingredients(category);
-CREATE INDEX idx_master_ingredients_names ON public.master_ingredients USING gin(names);
+CREATE INDEX IF NOT EXISTS idx_master_ingredients_canonical ON public.master_ingredients(canonical_name);
+CREATE INDEX IF NOT EXISTS idx_master_ingredients_category ON public.master_ingredients(category);
+CREATE INDEX IF NOT EXISTS idx_master_ingredients_names ON public.master_ingredients USING gin(names);
 
 COMMENT ON TABLE public.master_ingredients IS 'Global ingredient database with multi-language support';
 COMMENT ON COLUMN public.master_ingredients.names IS 'Multi-language names in JSONB: {en, hi, ta, es, zh, ar}';
@@ -98,9 +98,9 @@ CREATE TABLE IF NOT EXISTS public.product_barcodes (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_product_barcodes_ingredient ON public.product_barcodes(ingredient_id);
-CREATE INDEX idx_product_barcodes_country ON public.product_barcodes(country_code);
-CREATE INDEX idx_product_barcodes_brand ON public.product_barcodes(brand);
+CREATE INDEX IF NOT EXISTS idx_product_barcodes_ingredient ON public.product_barcodes(ingredient_id);
+CREATE INDEX IF NOT EXISTS idx_product_barcodes_country ON public.product_barcodes(country_code);
+CREATE INDEX IF NOT EXISTS idx_product_barcodes_brand ON public.product_barcodes(brand);
 
 COMMENT ON TABLE public.product_barcodes IS 'UPC/EAN barcode database linked to master ingredients';
 COMMENT ON COLUMN public.product_barcodes.expiry_date_format IS 'Pattern to parse expiry date from package';
@@ -139,8 +139,8 @@ CREATE TABLE IF NOT EXISTS public.ingredient_densities (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_ingredient_densities_ingredient ON public.ingredient_densities(ingredient_id);
-CREATE INDEX idx_ingredient_densities_form ON public.ingredient_densities(form);
+CREATE INDEX IF NOT EXISTS idx_ingredient_densities_ingredient ON public.ingredient_densities(ingredient_id);
+CREATE INDEX IF NOT EXISTS idx_ingredient_densities_form ON public.ingredient_densities(form);
 
 COMMENT ON TABLE public.ingredient_densities IS 'Density lookup for different ingredient forms';
 
@@ -182,9 +182,9 @@ CREATE TABLE IF NOT EXISTS public.quantity_calibrations (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_quantity_calibrations_user ON public.quantity_calibrations(user_id);
-CREATE INDEX idx_quantity_calibrations_ingredient ON public.quantity_calibrations(ingredient_id);
-CREATE INDEX idx_quantity_calibrations_container ON public.quantity_calibrations(container_type);
+CREATE INDEX IF NOT EXISTS idx_quantity_calibrations_user ON public.quantity_calibrations(user_id);
+CREATE INDEX IF NOT EXISTS idx_quantity_calibrations_ingredient ON public.quantity_calibrations(ingredient_id);
+CREATE INDEX IF NOT EXISTS idx_quantity_calibrations_container ON public.quantity_calibrations(container_type);
 
 COMMENT ON TABLE public.quantity_calibrations IS 'Training data for quantity estimation ML model';
 COMMENT ON COLUMN public.quantity_calibrations.error_percentage IS 'Accuracy metric for model improvement';
@@ -238,9 +238,9 @@ CREATE TABLE IF NOT EXISTS public.container_scans (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_container_scans_user ON public.container_scans(user_id);
-CREATE INDEX idx_container_scans_ingredient ON public.container_scans(detected_ingredient_id);
-CREATE INDEX idx_container_scans_type ON public.container_scans(container_type);
+CREATE INDEX IF NOT EXISTS idx_container_scans_user ON public.container_scans(user_id);
+CREATE INDEX IF NOT EXISTS idx_container_scans_ingredient ON public.container_scans(detected_ingredient_id);
+CREATE INDEX IF NOT EXISTS idx_container_scans_type ON public.container_scans(container_type);
 
 COMMENT ON TABLE public.container_scans IS 'Container-based ingredient recognition results';
 COMMENT ON COLUMN public.container_scans.visual_cues IS 'Visual characteristics used for identification';
@@ -288,9 +288,9 @@ CREATE TABLE IF NOT EXISTS public.barcode_scans (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_barcode_scans_user ON public.barcode_scans(user_id);
-CREATE INDEX idx_barcode_scans_barcode ON public.barcode_scans(barcode);
-CREATE INDEX idx_barcode_scans_product ON public.barcode_scans(product_barcode);
+CREATE INDEX IF NOT EXISTS idx_barcode_scans_user ON public.barcode_scans(user_id);
+CREATE INDEX IF NOT EXISTS idx_barcode_scans_barcode ON public.barcode_scans(barcode);
+CREATE INDEX IF NOT EXISTS idx_barcode_scans_product ON public.barcode_scans(product_barcode);
 
 COMMENT ON TABLE public.barcode_scans IS 'History of barcode scans by users';
 
@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS public.reference_objects (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_reference_objects_type ON public.reference_objects(object_type);
+CREATE INDEX IF NOT EXISTS idx_reference_objects_type ON public.reference_objects(object_type);
 
 COMMENT ON TABLE public.reference_objects IS 'Standard reference objects for size estimation';
 
@@ -355,10 +355,10 @@ ADD COLUMN IF NOT EXISTS days_until_expiry INTEGER GENERATED ALWAYS AS (
 COMMENT ON COLUMN public.inventory_items.expiry_date IS 'Expiry date from package or barcode';
 COMMENT ON COLUMN public.inventory_items.days_until_expiry IS 'Auto-calculated days remaining';
 
-CREATE INDEX idx_inventory_items_expiry ON public.inventory_items(expiry_date) 
+CREATE INDEX IF NOT EXISTS idx_inventory_items_expiry ON public.inventory_items(expiry_date) 
 WHERE expiry_date IS NOT NULL;
 
-CREATE INDEX idx_inventory_items_barcode ON public.inventory_items(barcode) 
+CREATE INDEX IF NOT EXISTS idx_inventory_items_barcode ON public.inventory_items(barcode) 
 WHERE barcode IS NOT NULL;
 
 -- ============================================================================
