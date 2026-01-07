@@ -13,7 +13,7 @@ from app.services.visual_intelligence import (
     IdentificationResult,
     VisualFeatures
 )
-from app.core.database import get_db
+from app.core.database import get_db_client
 
 router = APIRouter(prefix="/api/intelligence", tags=["intelligence"])
 
@@ -61,8 +61,7 @@ async def identify_ingredient(
     file: UploadFile = File(...),
     user_location: Optional[str] = None,
     cuisine_preference: Optional[str] = None,
-    service: VisualIntelligenceService = Depends(get_visual_service),
-    db = Depends(get_db)
+    service: VisualIntelligenceService = Depends(get_visual_service)
 ):
     """
     Identify ingredient from uploaded image using GPT-4 Vision
@@ -104,41 +103,19 @@ async def identify_ingredient(
         # Identify ingredient
         result = await service.identify_ingredient(image_data, context)
         
-        # Match against database
+        # Match against database - using Supabase client
         if result.top_matches:
+            client = get_db_client()
             for match in result.top_matches:
                 # Query database for ingredient
-                db_ingredient = await db.fetchrow(
-                    """
-                    SELECT id, canonical_name 
-                    FROM master_ingredients 
-                    WHERE LOWER(canonical_name) = LOWER($1)
-                    LIMIT 1
-                    """,
-                    match.canonical_name
-                )
+                db_result = client.table("master_ingredients").select("id, canonical_name").ilike("canonical_name", match.canonical_name).limit(1).execute()
                 
-                if db_ingredient:
-                    match.ingredient_id = str(db_ingredient['id'])
+                if db_result.data:
+                    match.ingredient_id = str(db_result.data[0]['id'])
                 else:
-                    # Try fuzzy match
-                    db_ingredient = await db.fetchrow(
-                        """
-                        SELECT id, canonical_name,
-                               similarity(canonical_name, $1) as sim
-                        FROM master_ingredients
-                        WHERE similarity(canonical_name, $1) > 0.3
-                        ORDER BY sim DESC
-                        LIMIT 1
-                        """,
-                        match.canonical_name
-                    )
-                    
-                    if db_ingredient:
-                        match.ingredient_id = str(db_ingredient['id'])
-                        match.canonical_name = db_ingredient['canonical_name']
-                    else:
-                        match.ingredient_id = str(uuid.uuid4())  # Temporary ID
+                    # For now, assign a temporary ID
+                    # TODO: Implement fuzzy matching with pg_trgm similarity
+                    match.ingredient_id = str(uuid.uuid4())
         
         # Convert to response model
         return IdentificationResponse(
@@ -204,8 +181,7 @@ async def extract_visual_features(
 @router.get("/similar-ingredients/{ingredient_id}", response_model=List[SimilarIngredientResponse])
 async def get_similar_ingredients(
     ingredient_id: str,
-    limit: int = 10,
-    db = Depends(get_db)
+    limit: int = 10
 ):
     """
     Find visually similar ingredients to the given ingredient
@@ -214,38 +190,25 @@ async def get_similar_ingredients(
     """
     
     try:
-        # Get target ingredient features
-        target = await db.fetchrow(
-            """
-            SELECT id, canonical_name, 
-                   dominant_colors, surface_texture
-            FROM master_ingredients
-            WHERE id = $1
-            """,
-            uuid.UUID(ingredient_id)
-        )
+        client = get_db_client()
         
-        if not target:
+        # Get target ingredient features
+        target_result = client.table("master_ingredients").select("id, canonical_name, dominant_colors, surface_texture").eq("id", ingredient_id).execute()
+        
+        if not target_result.data:
             raise HTTPException(status_code=404, detail="Ingredient not found")
         
+        target = target_result.data[0]
+        
         # Get all ingredients with visual features
-        candidates = await db.fetch(
-            """
-            SELECT id, canonical_name,
-                   dominant_colors, surface_texture
-            FROM master_ingredients
-            WHERE id != $1
-              AND dominant_colors IS NOT NULL
-            """,
-            uuid.UUID(ingredient_id)
-        )
+        candidates_result = client.table("master_ingredients").select("id, canonical_name, dominant_colors, surface_texture").neq("id", ingredient_id).not_.is_("dominant_colors", "null").execute()
         
         # Calculate similarity (simplified - just color overlap for now)
         similarities = []
-        target_colors = set(target['dominant_colors'] or [])
+        target_colors = set(target.get('dominant_colors') or [])
         
-        for candidate in candidates:
-            candidate_colors = set(candidate['dominant_colors'] or [])
+        for candidate in candidates_result.data:
+            candidate_colors = set(candidate.get('dominant_colors') or [])
             
             if not candidate_colors:
                 continue
@@ -295,8 +258,7 @@ async def confirm_identification(
     scan_result_id: str,
     confirmed_ingredient_id: str,
     was_correct: bool,
-    correction_reason: Optional[str] = None,
-    db = Depends(get_db)
+    correction_reason: Optional[str] = None
 ):
     """
     User confirms or corrects an identification result
@@ -308,20 +270,14 @@ async def confirm_identification(
     """
     
     try:
+        client = get_db_client()
+        
         # Update visual_scan_results
-        await db.execute(
-            """
-            UPDATE visual_scan_results
-            SET user_confirmed_ingredient_id = $1,
-                was_correct = $2,
-                correction_reason = $3
-            WHERE id = $4
-            """,
-            uuid.UUID(confirmed_ingredient_id),
-            was_correct,
-            correction_reason,
-            uuid.UUID(scan_result_id)
-        )
+        client.table("visual_scan_results").update({
+            "user_confirmed_ingredient_id": confirmed_ingredient_id,
+            "was_correct": was_correct,
+            "correction_reason": correction_reason
+        }).eq("id", scan_result_id).execute()
         
         return {
             "success": True,
