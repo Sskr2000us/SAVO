@@ -14,7 +14,8 @@ from ..services.decision_intelligence_service import (
     DecisionResult,
     ActionFeedback
 )
-from ..dependencies import get_supabase_client, get_current_user
+from ..core.database import get_db_client
+from ..middleware.auth import get_current_user
 
 router = APIRouter(prefix="/api/decision", tags=["decision"])
 
@@ -58,7 +59,7 @@ class DecisionRuleCreate(BaseModel):
 async def evaluate_ingredient(
     request: EvaluateIngredientRequest,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Evaluate a single ingredient and recommend action.
@@ -96,7 +97,7 @@ async def evaluate_ingredient(
 async def evaluate_inventory(
     request: EvaluateInventoryRequest,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Evaluate all ingredients in user's inventory.
@@ -125,7 +126,7 @@ async def get_recommended_actions(
     action_types: Optional[str] = None,
     limit: int = 10,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Get recent recommended actions for user.
@@ -159,7 +160,7 @@ async def get_recommended_actions(
 async def apply_action(
     request: ActionFeedbackRequest,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Record user feedback on a recommended action.
@@ -213,7 +214,7 @@ async def apply_action(
 async def get_decision_rules(
     is_active: bool = True,
     action: Optional[str] = None,
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Get all decision rules (for debugging/admin).
@@ -244,7 +245,7 @@ async def get_decision_rules(
 async def create_decision_rule(
     rule_data: DecisionRuleCreate,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Create new decision rule (admin only).
@@ -300,7 +301,7 @@ async def health_check():
 async def get_decision_stats(
     days: int = 30,
     current_user: dict = Depends(get_current_user),
-    supabase = Depends(get_supabase_client)
+    supabase = Depends(get_db_client)
 ):
     """
     Get decision intelligence statistics for user.
