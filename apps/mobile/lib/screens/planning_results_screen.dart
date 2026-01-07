@@ -588,6 +588,10 @@ class _RecipeCardState extends State<_RecipeCard> {
   bool _usesLeftovers = false;
   bool _checkingExpiring = true;
 
+  bool _checkingSaved = true;
+  bool _isSaved = false;
+  bool _savingToggle = false;
+
   String _stripIngredientDumpSuffix(String input) {
     var s = (input).trim();
     if (s.isEmpty) return input;
@@ -643,6 +647,61 @@ class _RecipeCardState extends State<_RecipeCard> {
   void initState() {
     super.initState();
     _checkExpiringIngredients();
+    _loadSavedStatus();
+  }
+
+  Future<void> _loadSavedStatus() async {
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final rid = widget.recipe.recipeId.trim();
+      if (rid.isEmpty) return;
+
+      final response = await apiClient.get(
+        '/recipes/saved/exists?recipe_id=${Uri.encodeComponent(rid)}',
+      );
+
+      if (!mounted) return;
+      if (response is Map && response['saved'] == true) {
+        setState(() => _isSaved = true);
+      }
+    } catch (_) {
+      // Best-effort only.
+    } finally {
+      if (mounted) setState(() => _checkingSaved = false);
+    }
+  }
+
+  Future<void> _toggleSaved() async {
+    if (_savingToggle) return;
+    final rid = widget.recipe.recipeId.trim();
+    if (rid.isEmpty) return;
+
+    setState(() => _savingToggle = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      if (_isSaved) {
+        await apiClient.delete('/recipes/saved/${Uri.encodeComponent(rid)}');
+      } else {
+        await apiClient.post('/recipes/saved', {
+          'recipe': widget.recipe.toJson(),
+        });
+      }
+
+      if (!mounted) return;
+      final next = !_isSaved;
+      setState(() => _isSaved = next);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(next ? 'Recipe saved.' : 'Recipe removed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update saved recipe: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingToggle = false);
+    }
   }
 
   Future<void> _checkExpiringIngredients() async {
@@ -733,6 +792,28 @@ class _RecipeCardState extends State<_RecipeCard> {
                       errorBuilder: (_, __, ___) => Container(
                         color: cs.surfaceVariant,
                         child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
+                      ),
+                    ),
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Material(
+                        color: cs.surfaceVariant.withOpacity(0.9),
+                        shape: const CircleBorder(),
+                        child: IconButton(
+                          tooltip: _isSaved ? 'Remove saved recipe' : 'Save recipe',
+                          onPressed: (_checkingSaved || _savingToggle) ? null : _toggleSaved,
+                          icon: _savingToggle
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Icon(
+                                  _isSaved ? Icons.bookmark : Icons.bookmark_border,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                        ),
                       ),
                     ),
                     // Subtle scrim for readability.

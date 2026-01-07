@@ -6,6 +6,8 @@ import logging
 import hashlib
 import re
 import os
+import json
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +44,7 @@ from app.core.database import (
     create_meal_plan,
     get_meal_plan_for_date,
     get_meal_plans,
+    update_meal_plan,
     delete_latest_meal_plan,
     upsert_household_shopping_items,
 )
@@ -222,13 +225,43 @@ def _rank_youtube_candidates(*, recipe_name: str, candidates: list[dict[str, Any
                 "trust_score": max(0.0, min(1.0, ts)),
                 "match_score": max(0.0, min(1.0, ms)),
                 "reasons": [
-                    "Auto-attached from YouTube search",
+                    "Auto-attached from YouTube search (rule-vetted)",
                     f"Match score: {ms:.2f}",
                 ],
             }
         )
     ranked.sort(key=lambda v: (v.get("match_score", 0.0), v.get("trust_score", 0.0)), reverse=True)
-    return ranked[: max(0, int(top_n))]
+
+    # Strict vetting before showing to users.
+    # If nothing passes, return [] rather than low-trust recommendations.
+    vetted: list[dict[str, Any]] = []
+    for v in ranked:
+        try:
+            vid = str(v.get("video_id") or "").strip()
+            if not vid:
+                continue
+            title = str(v.get("title") or "").strip().lower()
+            channel = str(v.get("channel") or "").strip().lower()
+            trust = float(v.get("trust_score") or 0.0)
+            match = float(v.get("match_score") or 0.0)
+
+            # Reject low-signal/low-trust formats.
+            if any(k in title for k in ["shorts", "asmr", "mukbang", "challenge", "prank", "tiktok"]):
+                continue
+            if any(k in channel for k in ["shorts", "asmr", "mukbang"]):
+                continue
+
+            # Require both relevance and trust.
+            if trust < 0.70:
+                continue
+            if match < 0.30:
+                continue
+
+            vetted.append(v)
+        except Exception:
+            continue
+
+    return vetted[: max(0, int(top_n))]
 
 
 async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_recipe: int = 3) -> Any:
@@ -301,6 +334,238 @@ async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_
     return payload
 
 
+def _recipe_option_is_meaningful(opt: dict[str, Any]) -> bool:
+    try:
+        name = _recipe_name_text(opt.get("recipe_name"))
+        if not name or len(name.strip()) < 4:
+            return False
+
+        steps = opt.get("steps")
+        if not isinstance(steps, list) or len(steps) < 3:
+            return False
+        has_instruction = False
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            instr = s.get("instruction")
+            if isinstance(instr, dict):
+                txt = (instr.get("en") or next(iter(instr.values()), "") or "").strip()
+                if txt:
+                    has_instruction = True
+                    break
+            elif isinstance(instr, str) and instr.strip():
+                has_instruction = True
+                break
+        if not has_instruction:
+            return False
+
+        ing = opt.get("ingredients_used")
+        if not isinstance(ing, list) or not ing:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _vet_and_filter_menu_payload(
+    payload: dict[str, Any],
+    *,
+    profile_dict: dict[str, Any],
+    pantry_canonical_names: Optional[set[str]] = None,
+    min_options_per_course: int = 1,
+) -> dict[str, Any]:
+    """Remove recipe options that are not meaningful or violate safety constraints.
+
+    If filtering would empty any course, keep the original payload (best-effort) and
+    set a private flag so we can detect regressions.
+    """
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    removed_any = False
+    would_break = False
+
+    pantry_set = pantry_canonical_names if isinstance(pantry_canonical_names, set) else None
+
+    # The product requirement: recipes are generated from major pantry ingredients;
+    # spices/oil/salt/sugar are assumed to exist in most homes.
+    staple_allow = {
+        "salt",
+        "pepper",
+        "black_pepper",
+        "water",
+        "oil",
+        "olive_oil",
+        "vegetable_oil",
+        "canola_oil",
+        "butter",
+        "ghee",
+        "sugar",
+        "brown_sugar",
+    }
+
+    spice_keywords = {
+        "cumin",
+        "coriander",
+        "turmeric",
+        "paprika",
+        "chili",
+        "chilli",
+        "cinnamon",
+        "cardamom",
+        "clove",
+        "cloves",
+        "nutmeg",
+        "mustard_seed",
+        "fenugreek",
+        "garam_masala",
+        "biryani_masala",
+        "curry_powder",
+        "bay_leaf",
+        "oregano",
+        "basil",
+        "thyme",
+        "rosemary",
+        "ginger",
+        "garlic",
+    }
+
+    def _major_group(nm: str) -> str:
+        s = (nm or "").strip().lower()
+        if not s:
+            return ""
+        if any(k in s for k in ["pasta", "rotini", "penne", "spaghetti", "noodle", "macaroni", "rigatoni", "fusilli", "farfalle", "orzo"]):
+            return "pasta"
+        if "rice" in s:
+            return "rice"
+        return s
+
+    pantry_groups: set[str] = set()
+    if pantry_set is not None:
+        for nm in pantry_set:
+            g = _major_group(nm)
+            if g:
+                pantry_groups.add(g)
+
+    def _is_assumed_available(nm: str) -> bool:
+        s = (nm or "").strip().lower()
+        if not s:
+            return False
+        if s in staple_allow:
+            return True
+        if s.endswith("_powder") or s.endswith("_masala"):
+            return True
+        if any(k in s for k in spice_keywords):
+            return True
+        return False
+
+    catalog = _get_recipe_catalog_index()
+
+    def _opt_uses_pantry(opt: dict[str, Any]) -> bool:
+        if pantry_set is None:
+            return True
+        ing = opt.get("ingredients_used")
+        if not isinstance(ing, list) or not ing:
+            return False
+        for it in ing:
+            if not isinstance(it, dict):
+                continue
+            nm = str(it.get("canonical_name") or "").strip().lower()
+            if not nm:
+                continue
+            if _is_assumed_available(nm):
+                continue
+            if nm in pantry_set:
+                continue
+            # Allow coarse matches (e.g., pantry has 'rice' but recipe says 'basmati_rice').
+            g = _major_group(nm)
+            if g and g in pantry_groups:
+                continue
+            return False
+        return True
+
+    def _opt_is_real_cuisine_recipe(opt: dict[str, Any]) -> bool:
+        if not isinstance(catalog, dict) or not catalog:
+            return True
+        title = _recipe_name_text(opt.get("recipe_name"))
+        if not title:
+            return False
+        cuisine = str(opt.get("cuisine") or payload.get("selected_cuisine") or "").strip()
+        if not cuisine:
+            return True
+        return _catalog_has_recipe_name(catalog, cuisine=cuisine, recipe_title=title)
+
+    def _fill_from_catalog(*, cuisine: str, limit: int) -> list[dict[str, Any]]:
+        if not isinstance(catalog, dict) or not catalog:
+            return []
+        return _pick_catalog_recipes(
+            catalog,
+            cuisine=cuisine,
+            pantry_set=pantry_set or set(),
+            limit=limit,
+        )
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list) or not opts:
+                continue
+
+            kept: list[Any] = []
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                if not _recipe_option_is_meaningful(opt):
+                    removed_any = True
+                    continue
+                if not _opt_uses_pantry(opt):
+                    removed_any = True
+                    continue
+                if not _opt_is_real_cuisine_recipe(opt):
+                    removed_any = True
+                    continue
+                try:
+                    is_safe, _violations = validate_recipe_safety(opt, profile_dict)
+                except Exception:
+                    is_safe = True
+                if not is_safe:
+                    removed_any = True
+                    continue
+                kept.append(opt)
+
+            min_needed = max(1, int(min_options_per_course))
+            if len(kept) < min_needed:
+                # Try to fill missing options from the curated catalog so we always return real recipes.
+                cuisine = str(payload.get("selected_cuisine") or "").strip()
+                if not cuisine and isinstance(kept, list) and kept and isinstance(kept[0], dict):
+                    cuisine = str(kept[0].get("cuisine") or "").strip()
+                fill = _fill_from_catalog(cuisine=cuisine or "", limit=max(0, min_needed - len(kept)))
+                if fill:
+                    course["recipe_options"] = kept + fill
+                    payload["_catalog_fill_applied"] = True
+                else:
+                    would_break = True
+            else:
+                course["recipe_options"] = kept
+
+    if removed_any:
+        payload["_vetting_applied"] = True
+    if would_break:
+        payload["_vetting_incomplete"] = True
+    return payload
+
+
 def _sanitize_recipe_title(text: str) -> str:
     s = str(text or "").strip()
     if not s:
@@ -328,6 +593,454 @@ def _sanitize_recipe_title(text: str) -> str:
                 s = base
 
     return s.strip()
+
+
+def _clean_inventory_name_for_planning(raw: str) -> str:
+    """Make inventory item names cook-friendly (remove brand/packaging noise).
+
+    This is used for two things:
+    - Prompt/LLM context: avoid barcode-derived strings like 'barilla_classic_tri_color_rotini'
+    - Matching/vetting: make sure pantry items match recipe ingredient names
+    """
+    s = (raw or "").strip().lower()
+    if not s:
+        return raw or ""
+    s = s.replace("_", " ").replace("-", " ")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    tokens = [t for t in re.split(r"\s+", s) if t]
+    brand_tokens = {
+        "kroger",
+        "barilla",
+        "walmart",
+        "target",
+        "costco",
+        "aldi",
+        "trader",
+        "joes",
+        "whole",
+        "foods",
+        "amazon",
+        "basics",
+        "great",
+        "value",
+    }
+    stop_tokens = {
+        "classic",
+        "signature",
+        "select",
+        "original",
+        "brand",
+        "private",
+        "label",
+        "pack",
+        "package",
+        "bag",
+        "box",
+        "jar",
+        "bottle",
+        "can",
+        "canned",
+        "frozen",
+        "fresh",
+        "organic",
+        "gluten",
+        "free",
+    }
+    tokens = [t for t in tokens if t not in brand_tokens and t not in stop_tokens]
+    if not tokens:
+        return raw or ""
+
+    pasta_shapes = {
+        "rotini",
+        "penne",
+        "spaghetti",
+        "linguine",
+        "fettuccine",
+        "fusilli",
+        "macaroni",
+        "rigatoni",
+        "farfalle",
+        "orzo",
+    }
+    is_pasta = ("pasta" in tokens) or any(t in pasta_shapes for t in tokens)
+    if is_pasta:
+        shape = next((t for t in tokens if t in pasta_shapes), None)
+        tri = any(t in {"tri", "tricolor", "tri_color", "rainbow"} for t in tokens)
+        parts: list[str] = []
+        if tri:
+            parts.append("tri-color")
+        if shape:
+            parts.append(shape)
+        parts.append("pasta")
+        return " ".join(parts).strip()
+
+    return " ".join(tokens).strip()
+
+
+def _canonicalize_inventory_name_for_planning(raw: str) -> str:
+    clean = _clean_inventory_name_for_planning(raw)
+    s = (clean or "").strip().lower().replace(" ", "_").replace("-", "_")
+    s = re.sub(r"[^a-z0-9_]", "", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or (raw or "")
+
+
+def _display_inventory_name_for_planning(raw: str) -> str:
+    clean = _clean_inventory_name_for_planning(raw)
+    clean = re.sub(r"\s+", " ", (clean or "").strip())
+    return clean.title() if clean else (raw or "")
+
+
+def _maybe_improve_generic_title(*, title: str, recipe: dict[str, Any]) -> str:
+    t = (title or "").strip()
+    if not t:
+        return ""
+    generic = {
+        "pantry comfort meal",
+        "quick pantry stir-fry",
+        "pantry stir-fry",
+        "easy dinner",
+        "quick dinner",
+        "simple meal",
+    }
+    if t.lower() not in generic:
+        return t
+
+    ings = recipe.get("ingredients_used")
+    names: list[str] = []
+    if isinstance(ings, list):
+        for it in ings:
+            if not isinstance(it, dict):
+                continue
+            nm = str(it.get("canonical_name") or "").strip()
+            if not nm:
+                continue
+            names.append(_display_inventory_name_for_planning(nm))
+    # De-dupe preserving order
+    seen: set[str] = set()
+    names = [n for n in names if n and not (n.lower() in seen or seen.add(n.lower()))]
+    main = names[0] if names else "Pantry"
+    accent = names[1] if len(names) > 1 else ""
+    method = str(recipe.get("cooking_method") or "").strip()
+    method = method.replace("_", " ").strip().title()
+    if accent:
+        out = f"{main} with {accent}"
+    else:
+        out = main
+    if method and method.lower() not in {"unknown", "n/a"}:
+        out = f"{out} ({method})"
+    return out.strip()
+
+
+_RECIPE_CATALOG_CACHE: Optional[list[dict[str, Any]]] = None
+_RECIPE_CATALOG_INDEX_CACHE: Optional[dict[str, Any]] = None
+
+
+def _normalize_catalog_key(value: str) -> str:
+    s = (value or "").strip().lower()
+    s = s.replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _normalize_title_key(value: str) -> str:
+    s = (value or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _get_recipe_catalog_index() -> dict[str, Any]:
+    """Load ALL_RECIPES_COMPLETE.json and build lookup structures.
+
+    Returns:
+      {
+        "by_cuisine": {"indian": [entry, ...], ...},
+        "title_set": {"indian": {"paneer biryani", ...}, ...}
+      }
+    """
+    global _RECIPE_CATALOG_CACHE, _RECIPE_CATALOG_INDEX_CACHE
+    if isinstance(_RECIPE_CATALOG_INDEX_CACHE, dict):
+        return _RECIPE_CATALOG_INDEX_CACHE
+
+    catalog_path = Path(__file__).resolve().parents[5] / "ALL_RECIPES_COMPLETE.json"
+    if not catalog_path.exists():
+        _RECIPE_CATALOG_INDEX_CACHE = {}
+        return _RECIPE_CATALOG_INDEX_CACHE
+
+    try:
+        raw = catalog_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        _RECIPE_CATALOG_INDEX_CACHE = {}
+        return _RECIPE_CATALOG_INDEX_CACHE
+
+    if not isinstance(data, list) or not data:
+        _RECIPE_CATALOG_INDEX_CACHE = {}
+        return _RECIPE_CATALOG_INDEX_CACHE
+
+    _RECIPE_CATALOG_CACHE = [d for d in data if isinstance(d, dict)]
+    by_cuisine: dict[str, list[dict[str, Any]]] = {}
+    title_set: dict[str, set[str]] = {}
+
+    for entry in _RECIPE_CATALOG_CACHE:
+        cuisine = entry.get("cuisine") or entry.get("cuisine_code") or ""
+        cuisine_k = _normalize_catalog_key(str(cuisine))
+        if not cuisine_k:
+            continue
+        by_cuisine.setdefault(cuisine_k, []).append(entry)
+
+        rn = entry.get("recipe_name")
+        title = ""
+        if isinstance(rn, dict):
+            title = str(rn.get("en") or next(iter(rn.values()), "") or "")
+        elif isinstance(rn, str):
+            title = rn
+        title_k = _normalize_title_key(title)
+        if title_k:
+            title_set.setdefault(cuisine_k, set()).add(title_k)
+
+    _RECIPE_CATALOG_INDEX_CACHE = {"by_cuisine": by_cuisine, "title_set": title_set}
+    return _RECIPE_CATALOG_INDEX_CACHE
+
+
+def _catalog_has_recipe_name(catalog: dict[str, Any], *, cuisine: str, recipe_title: str) -> bool:
+    try:
+        cuisine_k = _normalize_catalog_key(cuisine)
+        title_k = _normalize_title_key(recipe_title)
+        if not cuisine_k or not title_k:
+            return False
+        title_set = catalog.get("title_set")
+        if not isinstance(title_set, dict):
+            return False
+
+        # Accept exact cuisine match. If cuisine isn't known ("auto"), don't enforce.
+        if cuisine_k in {"auto", "unknown"}:
+            return True
+
+        allowed = title_set.get(cuisine_k)
+        if isinstance(allowed, set):
+            return title_k in allowed
+        if isinstance(allowed, list):
+            return title_k in set([_normalize_title_key(x) for x in allowed if isinstance(x, str)])
+
+        # Some callers might pass a display cuisine; try a loose match on known cuisines.
+        for k, titles in title_set.items():
+            if not isinstance(k, str):
+                continue
+            if k and cuisine_k and (k == cuisine_k or cuisine_k in k or k in cuisine_k):
+                if isinstance(titles, set) and title_k in titles:
+                    return True
+        return False
+    except Exception:
+        return True
+
+
+def _parse_amount_to_float(value: Any) -> float:
+    if value is None:
+        return 1.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return 1.0
+    # Fractions like 1/2
+    m = re.match(r"^(\d+)\s*/\s*(\d+)$", s)
+    if m:
+        try:
+            a = float(m.group(1))
+            b = float(m.group(2))
+            return a / b if b else 1.0
+        except Exception:
+            return 1.0
+    # Mixed like 1 1/2
+    m2 = re.match(r"^(\d+)\s+(\d+)\s*/\s*(\d+)$", s)
+    if m2:
+        try:
+            whole = float(m2.group(1))
+            a = float(m2.group(2))
+            b = float(m2.group(3))
+            return whole + (a / b if b else 0.0)
+        except Exception:
+            return 1.0
+    try:
+        return float(s)
+    except Exception:
+        return 1.0
+
+
+def _catalog_entry_to_recipe_option(entry: dict[str, Any], *, pantry_set: set[str]) -> dict[str, Any]:
+    rn = entry.get("recipe_name")
+    recipe_name = rn if isinstance(rn, dict) else {"en": str(rn or "Recipe")}
+    cuisine = str(entry.get("cuisine") or "")
+    diff_raw = str(entry.get("difficulty") or "easy").strip().lower()
+    diff_map = {"beginner": "easy", "easy": "easy", "intermediate": "medium", "medium": "medium", "advanced": "hard", "hard": "hard"}
+    difficulty = diff_map.get(diff_raw, "easy")
+
+    prep = int(entry.get("prep_time_minutes") or entry.get("prep_minutes") or 10)
+    cook = int(entry.get("cook_time_minutes") or entry.get("cook_minutes") or 20)
+    total = int(entry.get("total_time_minutes") or entry.get("total_minutes") or max(prep + cook, 30))
+
+    # Build ingredients_used/new_ingredients_optional.
+    ingredients_used: list[dict[str, Any]] = []
+    new_optional: list[dict[str, Any]] = []
+
+    def _is_assumed(nm: str) -> bool:
+        s = (nm or "").strip().lower()
+        if not s:
+            return False
+        if s in {"salt", "pepper", "black_pepper", "oil", "olive_oil", "vegetable_oil", "butter", "ghee", "sugar", "water"}:
+            return True
+        if s.endswith("_powder") or s.endswith("_masala"):
+            return True
+        if any(k in s for k in ["cumin", "coriander", "turmeric", "paprika", "chili", "cinnamon", "cardamom", "clove", "ginger", "garlic"]):
+            return True
+        return False
+
+    for ing in entry.get("ingredients") or []:
+        if not isinstance(ing, dict):
+            continue
+        item = str(ing.get("item") or "").strip()
+        if not item:
+            continue
+        nm = _canonicalize_inventory_name_for_planning(item)
+        amt = _parse_amount_to_float(ing.get("amount"))
+        unit = str(ing.get("unit") or "").strip()
+        row = {"inventory_id": "", "canonical_name": nm, "amount": float(amt), "unit": unit or "pcs"}
+        if nm in pantry_set or _is_assumed(nm):
+            ingredients_used.append(row)
+        else:
+            new_optional.append(
+                {
+                    "canonical_name": nm,
+                    "amount": float(amt),
+                    "unit": unit or "pcs",
+                    "reason": "Required for an authentic version of this dish.",
+                }
+            )
+
+    # Steps from instructions.en
+    steps: list[dict[str, Any]] = []
+    instr = entry.get("instructions")
+    en_steps: list[str] = []
+    if isinstance(instr, dict) and isinstance(instr.get("en"), list):
+        en_steps = [str(x) for x in instr.get("en") if isinstance(x, str) and x.strip()]
+    elif isinstance(instr, list):
+        en_steps = [str(x) for x in instr if isinstance(x, str) and x.strip()]
+    for idx, txt in enumerate(en_steps, start=1):
+        steps.append({"step": idx, "instruction": {"en": txt.strip()}, "time_minutes": 0, "tips": []})
+    if len(steps) < 3:
+        # Ensure meaningful minimum.
+        steps = steps + [
+            {"step": len(steps) + 1, "instruction": {"en": "Taste and adjust seasoning."}, "time_minutes": 0, "tips": []},
+        ]
+
+    nutrition = entry.get("nutrition") if isinstance(entry.get("nutrition"), dict) else {}
+    calories = int(nutrition.get("calories_kcal") or 400)
+    protein = float(nutrition.get("protein_g") or 15)
+    carbs = float(nutrition.get("carbohydrates_g") or 50)
+    fat = float(nutrition.get("fat_g") or 12)
+    fiber = float(nutrition.get("fiber_g") or 4)
+
+    title_en = _recipe_name_text(recipe_name)
+    rid = f"catalog_{_normalize_catalog_key(cuisine).replace(' ', '_')}_{_normalize_title_key(title_en).replace(' ', '_')}"[:120]
+
+    return {
+        "recipe_id": rid,
+        "recipe_name": recipe_name,
+        "cuisine": cuisine or "Unknown",
+        "difficulty": difficulty,
+        "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},
+        "cooking_method": "stovetop",
+        "ingredients_used": ingredients_used,
+        "new_ingredients_optional": new_optional,
+        "steps": steps,
+        "nutrition_per_serving": {
+            "calories_kcal": calories,
+            "macros": {"protein_g": protein, "carbs_g": carbs, "fat_g": fat},
+            "micros": {"fiber_g": fiber},
+        },
+        "health_benefits": [],
+        "health_fit": {"flags": [], "adjustments": []},
+        "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+        "preservation_guidance": {
+            "storage": "refrigerate",
+            "safe_duration_hours": 24,
+            "reheat_methods": ["stovetop", "microwave"],
+            "quality_notes": "Cool promptly and store covered.",
+        },
+        "chef_tips": [],
+        "cultural_context": {"origin": cuisine or "", "occasions": "Traditional", "serving": "Family style"},
+        "dietary_information": {"vegetarian": False, "vegan": False, "gluten_free": False, "allergens": [], "religious_compatibility": []},
+        "youtube_references": [],
+        "agent_mode": "catalog",
+    }
+
+
+def _pick_catalog_recipes(
+    catalog: dict[str, Any], *, cuisine: str, pantry_set: set[str], limit: int
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    by_cuisine = catalog.get("by_cuisine")
+    if not isinstance(by_cuisine, dict) or not by_cuisine:
+        return []
+    cuisine_k = _normalize_catalog_key(cuisine)
+    if not cuisine_k:
+        # Try a reasonable fallback: if cuisine missing, use Indian as most-filled.
+        cuisine_k = "indian"
+    entries = by_cuisine.get(cuisine_k)
+    if not isinstance(entries, list) or not entries:
+        # Loose match on cuisine
+        for k, v in by_cuisine.items():
+            if not isinstance(k, str) or not isinstance(v, list):
+                continue
+            if cuisine_k and (cuisine_k in k or k in cuisine_k):
+                entries = v
+                break
+    if not isinstance(entries, list) or not entries:
+        return []
+
+    def _major_group(nm: str) -> str:
+        s = (nm or "").strip().lower()
+        if any(k in s for k in ["pasta", "rotini", "penne", "spaghetti", "noodle", "macaroni", "rigatoni", "fusilli", "farfalle", "orzo"]):
+            return "pasta"
+        if "rice" in s:
+            return "rice"
+        return s
+
+    pantry_groups = {g for g in [_major_group(x) for x in pantry_set] if g}
+
+    def _score(entry: dict[str, Any]) -> int:
+        score = 0
+        for ing in entry.get("ingredients") or []:
+            if not isinstance(ing, dict):
+                continue
+            item = str(ing.get("item") or "").strip()
+            if not item:
+                continue
+            nm = _canonicalize_inventory_name_for_planning(item)
+            if nm in pantry_set:
+                score += 3
+                continue
+            g = _major_group(nm)
+            if g and g in pantry_groups:
+                score += 1
+        return score
+
+    ranked = sorted([e for e in entries if isinstance(e, dict)], key=_score, reverse=True)
+    picked: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+    for e in ranked:
+        if len(picked) >= limit:
+            break
+        rn = e.get("recipe_name")
+        title = _normalize_title_key(str(rn.get("en") if isinstance(rn, dict) else rn or ""))
+        if title and title in seen_titles:
+            continue
+        seen_titles.add(title)
+        picked.append(_catalog_entry_to_recipe_option(e, pantry_set=pantry_set))
+    return picked
 
 
 def _sanitize_recipe_names_in_payload(payload: Any) -> Any:
@@ -377,6 +1090,12 @@ def _sanitize_recipe_names_in_payload(payload: Any) -> Any:
                     if not t:
                         t = f"{header} {idx + 1}" if header else f"Recipe {idx + 1}"
                     cleaned["en"] = t
+
+                # If we still have an overly generic title, improve it using pantry ingredients.
+                try:
+                    cleaned["en"] = _maybe_improve_generic_title(title=cleaned.get("en") or "", recipe=recipe)
+                except Exception:
+                    pass
 
                 recipe["recipe_name"] = cleaned
 
@@ -642,17 +1361,147 @@ def _generate_fallback_recipes(
 
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
     inv_items = inv_items[:8]
+    # Prefer curated, real recipes (ALL_RECIPES_COMPLETE.json) over generic templates.
+    try:
+        catalog = _get_recipe_catalog_index()
+        pantry_set = {
+            _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+            for i in inv_items
+            if getattr(i, "canonical_name", None)
+        }
+        picks = _pick_catalog_recipes(catalog, cuisine=cuisine, pantry_set=pantry_set, limit=2)
+        if picks and len(picks) >= 2:
+            return {
+                "status": "ok",
+                "selected_cuisine": cuisine,
+                "planning_window": None,
+                "menu_headers": [str((meal_type or "dinner")).title()],
+                "menus": [
+                    {
+                        "menu_type": "daily",
+                        "day_index": None,
+                        "date": None,
+                        "servings": {"adults": int(servings or 2)},
+                        "courses": [
+                            {
+                                "course_header": "Main",
+                                "recipe_options": picks,
+                            }
+                        ],
+                    }
+                ],
+                "needs_clarification_questions": [],
+                "variety_log": {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
+                "nutrition_summary": {"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
+                "waste_summary": {
+                    "expiring_items_used": [],
+                    "waste_reduction_score": 0,
+                    "waste_avoided_value_estimate": {"currency": "USD", "value": 0},
+                },
+                "shopping_suggestions": [],
+                "_fallback_mode": True,
+                "_fallback_source": "catalog",
+            }
+    except Exception:
+        pass
+    # NOTE: This fallback is used when the LLM fails. The output must still be
+    # readable and cookable. In practice, inventory items can carry branded/
+    # barcode-derived names; here we clean them for recipe output.
+    _BRAND_TOKENS = {
+        "kroger",
+        "barilla",
+        "walmart",
+        "target",
+        "costco",
+        "aldi",
+        "trader",
+        "joes",
+        "whole",
+        "foods",
+        "amazon",
+        "basics",
+        "great",
+        "value",
+    }
+    _STOP_TOKENS = {
+        "classic",
+        "signature",
+        "select",
+        "original",
+        "brand",
+        "private",
+        "label",
+        "pack",
+        "package",
+        "bag",
+        "box",
+        "jar",
+        "bottle",
+        "can",
+        "canned",
+        "frozen",
+        "fresh",
+        "organic",
+        "gluten",
+        "free",
+    }
+    _PASTA_SHAPES = {
+        "rotini",
+        "penne",
+        "spaghetti",
+        "linguine",
+        "fettuccine",
+        "fusilli",
+        "macaroni",
+        "rigatoni",
+        "farfalle",
+        "orzo",
+    }
 
-    def _display_name(raw: str) -> str:
-        s = (raw or "").replace("_", " ")
-        s = re.sub(r"\s+", " ", s).strip()
+    def _clean_inventory_name(raw: str) -> str:
+        s = (raw or "").strip().lower()
         if not s:
             return raw or ""
-        # Title-case each token without touching punctuation inside tokens (e.g., tri-color).
-        return " ".join([t[:1].upper() + t[1:] if t else t for t in s.split(" ")])
+        s = s.replace("_", " ").replace("-", " ")
+        s = re.sub(r"[^a-z0-9\s]", " ", s)
+        tokens = [t for t in re.split(r"\s+", s) if t]
+        tokens = [t for t in tokens if t not in _BRAND_TOKENS and t not in _STOP_TOKENS]
+        if not tokens:
+            return raw or ""
+
+        # Coalesce common packaged items into cook-friendly names.
+        is_pasta = ("pasta" in tokens) or any(t in _PASTA_SHAPES for t in tokens)
+        if is_pasta:
+            shape = next((t for t in tokens if t in _PASTA_SHAPES), None)
+            # Recognize common marketing descriptors.
+            tri = any(t in {"tri", "tricolor", "tri_color", "rainbow"} for t in tokens)
+            parts: list[str] = []
+            if tri:
+                parts.append("tri-color")
+            if shape:
+                parts.append(shape)
+            parts.append("pasta")
+            return " ".join(parts).strip()
+
+        return " ".join(tokens).strip()
+
+    def _canonicalize_for_ui(raw: str) -> str:
+        clean = _clean_inventory_name(raw)
+        s = (clean or "").strip().lower().replace(" ", "_").replace("-", "_")
+        s = re.sub(r"[^a-z0-9_]", "", s)
+        s = re.sub(r"_+", "_", s).strip("_")
+        return s or (raw or "")
+
+    def _display_name(raw: str) -> str:
+        # Accept either raw inventory canonical_name or our cleaned canonical.
+        clean = _clean_inventory_name(raw)
+        if not clean:
+            clean = (raw or "").replace("_", " ").strip()
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean.title() if clean else (raw or "")
 
     def _suggest_amount_and_unit(it: InventoryItem) -> tuple[float, str]:
-        name = str(getattr(it, "canonical_name", "") or "").strip().lower()
+        name = _clean_inventory_name(str(getattr(it, "canonical_name", "") or "")).strip().lower()
         qty_raw = getattr(it, "quantity", 0) or 0
         try:
             qty = float(qty_raw)
@@ -700,10 +1549,13 @@ def _generate_fallback_recipes(
         out: list[dict[str, Any]] = []
         for it in inv_items[:max_n]:
             amt, unit = _suggest_amount_and_unit(it)
+            raw_name = str(getattr(it, "canonical_name"))
+            cleaned_canonical = _canonicalize_for_ui(raw_name)
             out.append(
                 {
                     "inventory_id": str(getattr(it, "inventory_id")),
-                    "canonical_name": str(getattr(it, "canonical_name")),
+                    # Keep the schema stable, but make the field human-readable for UIs.
+                    "canonical_name": cleaned_canonical,
                     "amount": float(amt),
                     "unit": unit or str(getattr(it, "unit", "pcs")),
                 }
@@ -723,6 +1575,48 @@ def _generate_fallback_recipes(
     top_names = [str(x.get("canonical_name")) for x in _ingredients_used(3) if isinstance(x, dict) and x.get("canonical_name")]
     top_phrase = ", ".join([_display_name(n) for n in top_names[:3]]) if top_names else "pantry ingredients"
 
+    def _spice_phrase() -> str:
+        spice_items: list[str] = []
+        for it in inv_items:
+            nm = _clean_inventory_name(str(getattr(it, "canonical_name", "") or "")).lower()
+            if any(k in nm for k in ["cumin", "coriander", "pepper", "chili", "masala", "spice", "seed"]):
+                spice_items.append(_display_name(nm))
+        # De-dupe preserving order.
+        seen: set[str] = set()
+        spice_items = [x for x in spice_items if not (x.lower() in seen or seen.add(x.lower()))]
+        return ", ".join(spice_items[:3])
+
+    def _has_any_of(tokens: list[str]) -> bool:
+        joined = " ".join([_clean_inventory_name(str(getattr(it, "canonical_name", "") or "")) for it in inv_items]).lower()
+        return any(t in joined for t in tokens)
+
+    def _creamy_addins_phrase() -> str:
+        addins: list[str] = []
+        for it in inv_items:
+            nm = _clean_inventory_name(str(getattr(it, "canonical_name", "") or "")).lower()
+            if any(k in nm for k in ["cashew", "almond", "peanut", "sesame", "tahini", "avocado", "coconut_milk", "coconut"]):
+                addins.append(_display_name(nm))
+        seen: set[str] = set()
+        addins = [x for x in addins if not (x.lower() in seen or seen.add(x.lower()))]
+        return ", ".join(addins[:2])
+
+    def _main_dish_name() -> str:
+        # Pick a main ingredient for naming: prefer proteins/veg/grains over spices.
+        candidates: list[str] = []
+        for it in inv_items:
+            nm = _clean_inventory_name(str(getattr(it, "canonical_name", "") or "")).lower()
+            if not nm:
+                continue
+            if any(k in nm for k in ["salt", "pepper", "cumin", "coriander", "chili", "masala", "spice", "seed"]):
+                continue
+            candidates.append(_display_name(nm))
+        # De-dupe preserving order.
+        seen: set[str] = set()
+        candidates = [x for x in candidates if not (x.lower() in seen or seen.add(x.lower()))]
+        if not candidates:
+            return "Pantry"
+        return candidates[0]
+
     def _build_fallback_steps(*, cooking_method: str, total_minutes: int) -> list[dict[str, Any]]:
         base = max(12, int(total_minutes or 30))
         method = (cooking_method or "stovetop").strip().lower()
@@ -733,27 +1627,48 @@ def _generate_fallback_recipes(
 
         steps: list[tuple[str, int]] = []
         if is_pasta:
+            spices = _spice_phrase()
             steps = [
                 ("Bring a pot of well-salted water to a boil.", 5),
                 ("Cook the pasta until al dente; reserve 1/2 cup pasta water, then drain.", 10),
-                (f"Warm a pan on medium heat; toast spices from {top_phrase} for aroma (if present).", 2),
-                ("Add a little oil/butter (or any pantry fat) and gently bloom the spices.", 2),
-                ("Stir in any nuts/creaminess ingredients (e.g., cashews/avocado) to build a quick sauce.", 4),
-                ("Loosen with reserved pasta water until glossy and coating.", 2),
-                ("Toss pasta into the sauce; taste and adjust salt/heat/acidity.", 3),
-                ("Rest 2 minutes, then serve warm.", 2),
             ]
+            if spices:
+                steps.extend(
+                    [
+                        (f"Warm a pan on medium heat; toast any whole spices ({spices}) for 30–60 seconds.", 2),
+                        ("Add a little oil and bloom spices briefly.", 2),
+                    ]
+                )
+            else:
+                steps.append(("Warm a pan on medium heat with a little oil.", 2))
+
+            creamy = _creamy_addins_phrase()
+            if creamy:
+                steps.append((f"Stir in {creamy} to build a simple sauce.", 4))
+            steps.extend(
+                [
+                    ("Loosen with reserved pasta water until glossy and coating.", 2),
+                    ("Toss pasta into the sauce; taste and adjust salt/heat/acidity.", 3),
+                    ("Rest 2 minutes, then serve warm.", 2),
+                ]
+            )
         elif is_rice:
-            steps = [
-                ("Rinse rice (if needed) and prep any aromatics/spices.", 5),
-                ("Toast spices briefly in a pot with a little oil/butter.", 2),
-                ("Add rice and toast 1–2 minutes for nuttiness.", 2),
-                ("Add water/broth; bring to a boil, then cover and simmer on low.", 15),
-                ("Let rest off-heat 5 minutes.", 5),
-                ("Fluff rice; fold in any add-ins from the pantry.", 2),
-                ("Taste and adjust seasoning.", 2),
-                ("Serve warm with a simple side.", 1),
-            ]
+            spices = _spice_phrase()
+            steps = [("Rinse rice (if needed) and prep any aromatics/spices.", 5)]
+            if spices:
+                steps.append((f"Toast spices ({spices}) briefly in a pot with a little oil/butter.", 2))
+            else:
+                steps.append(("Warm a pot with a little oil/butter.", 2))
+            steps.extend(
+                [
+                    ("Add rice and toast 1–2 minutes for nuttiness.", 2),
+                    ("Add water/broth; bring to a boil, then cover and simmer on low.", 15),
+                    ("Let rest off-heat 5 minutes.", 5),
+                    ("Fluff rice; fold in any add-ins from the pantry.", 2),
+                    ("Taste and adjust seasoning.", 2),
+                    ("Serve warm with a simple side.", 1),
+                ]
+            )
         else:
             steps = [
                 (f"Prep {top_phrase} (wash/chop/measure).", 6),
@@ -796,6 +1711,19 @@ def _generate_fallback_recipes(
         cook = max(5, total - prep)
         difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
         ings = _ingredients_used()
+
+        # If the provided name is generic, build a specific one from pantry items.
+        try:
+            base = _main_dish_name()
+            spices = _spice_phrase()
+            if name_en.lower() in {"pantry comfort meal", "quick pantry stir-fry", "pantry stir-fry"}:
+                if "pasta" in " ".join([n.lower() for n in top_names]):
+                    name_en = f"{base} Pasta" + (f" with {spices}" if spices else "")
+                else:
+                    name_en = f"{base} Skillet" + (f" with {spices}" if spices else "")
+        except Exception:
+            pass
+
         return {
             "recipe_id": recipe_id,
             "recipe_name": {"en": name_en},
@@ -1986,11 +2914,16 @@ def _inventory_for_llm(*, storage_inventory, request_inventory) -> list[dict]:
     # Default: map storage inventory model -> prompt-pack keys
     mapped: list[dict] = []
     for item in storage_inventory:
+        raw_name = getattr(item, "canonical_name", None)
+        raw_name_s = str(raw_name) if raw_name is not None else ""
+        cleaned_canonical = _canonicalize_inventory_name_for_planning(raw_name_s)
+        cleaned_display = _display_inventory_name_for_planning(raw_name_s)
         mapped.append(
             {
                 "inventory_id": getattr(item, "inventory_id", None),
-                "canonical_name": getattr(item, "canonical_name", None),
-                "display_name": getattr(item, "display_name", None) or getattr(item, "canonical_name", None),
+                # Clean names before they reach the LLM so outputs stay cook-friendly.
+                "canonical_name": cleaned_canonical,
+                "display_name": cleaned_display,
                 "amount": getattr(item, "quantity", None),
                 "unit": getattr(item, "unit", None),
                 "state": getattr(item, "state", "raw"),
@@ -2774,7 +3707,22 @@ async def post_daily(
                         sel = existing_payload.get("selected_cuisine")
                         prefs = req.cuisine_preferences or []
                         if not prefs or (isinstance(sel, str) and sel.lower() in {p.lower() for p in prefs}):
+                            # Ensure cached plans still get the latest post-processing.
+                            existing_payload = _sanitize_recipe_names_in_payload(existing_payload)
                             existing_payload = _coerce_menu_headers(existing_payload)
+                            try:
+                                existing_payload = await _enrich_plan_payload_with_youtube_references(existing_payload)
+                            except Exception:
+                                pass
+
+                            # Best-effort: persist enriched payload so subsequent calls are fast.
+                            try:
+                                existing_id = existing.get("id")
+                                if isinstance(existing_id, str) and existing_id:
+                                    await update_meal_plan(existing_id, {"recipes": existing_payload})
+                            except Exception:
+                                pass
+
                             return MenuPlanResponse(**existing_payload)
     
     # GOLDEN RULE: Check profile completeness and safety constraints
@@ -2982,6 +3930,24 @@ async def post_daily(
     # Clean up recipe titles so UI never shows ingredient dumps in the name.
     result = _sanitize_recipe_names_in_payload(result)
 
+    # Enforce: recipes must be real cuisine dishes, and major ingredients must match pantry.
+    # When needed, fill missing options from the curated recipe catalog.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        try:
+            pantry_set = {
+                _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+                for i in inventory_models
+                if getattr(i, "canonical_name", None)
+            }
+            result = _vet_and_filter_menu_payload(
+                result,
+                profile_dict=profile_dict,
+                pantry_canonical_names=pantry_set,
+                min_options_per_course=1,
+            )
+        except Exception:
+            pass
+
     # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
@@ -3137,7 +4103,50 @@ async def get_latest_plan(
     if isinstance(saved_hash, str) and saved_hash and saved_hash != current_hash:
         raise HTTPException(status_code=404, detail="Saved meal plan is stale")
 
+    payload = _sanitize_recipe_names_in_payload(payload)
     payload = _coerce_menu_headers(payload)
+
+    # Best-effort: attach vetted YouTube references for saved plans too.
+    try:
+        payload = await _enrich_plan_payload_with_youtube_references(payload)
+    except Exception:
+        pass
+
+    # Best-effort: vet recipe options before returning.
+    try:
+        full_profile = await get_full_profile(user_id)
+        household = full_profile.get("household") or full_profile.get("profile") or {}
+        members = full_profile.get("members") or []
+        normalized_members: List[Dict[str, Any]] = []
+        if isinstance(members, list):
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                if "allergens" not in m or m.get("allergens") is None:
+                    m = {**m, "allergens": []}
+                normalized_members.append(m)
+        profile_dict = {"household": household if isinstance(household, dict) else {}, "members": normalized_members}
+        pantry_set = {
+            _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+            for i in _db_inventory_to_models(db_inventory)
+            if getattr(i, "canonical_name", None)
+        }
+        payload = _vet_and_filter_menu_payload(
+            payload,
+            profile_dict=profile_dict,
+            pantry_canonical_names=pantry_set,
+            min_options_per_course=1,
+        )
+    except Exception:
+        pass
+
+    # Persist enriched payload so subsequent fetches are fast.
+    try:
+        plan_id = plan.get("id") if isinstance(plan, dict) else None
+        if isinstance(plan_id, str) and plan_id:
+            await update_meal_plan(plan_id, {"recipes": payload})
+    except Exception:
+        pass
     return MenuPlanResponse(**payload)
 
 
@@ -3317,7 +4326,37 @@ async def post_party(
             ):
                 existing_req_hash = existing_payload.get("_request_hash")
                 if request_hash and isinstance(existing_req_hash, str) and existing_req_hash == request_hash:
+                    existing_payload = _sanitize_recipe_names_in_payload(existing_payload)
                     existing_payload = _coerce_menu_headers(existing_payload)
+                    try:
+                        existing_payload = await _enrich_plan_payload_with_youtube_references(existing_payload)
+                    except Exception:
+                        pass
+
+                    # Best-effort: vet recipe options before returning cached payload.
+                    try:
+                        pantry_set = {
+                            _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+                            for i in inventory_models
+                            if getattr(i, "canonical_name", None)
+                        }
+                        existing_payload = _vet_and_filter_menu_payload(
+                            existing_payload,
+                            profile_dict=profile_dict,
+                            pantry_canonical_names=pantry_set,
+                            min_options_per_course=1,
+                        )
+                    except Exception:
+                        pass
+
+                    # Persist enriched cached payload.
+                    try:
+                        existing_id = existing.get("id")
+                        if isinstance(existing_id, str) and existing_id:
+                            await update_meal_plan(existing_id, {"recipes": existing_payload})
+                    except Exception:
+                        pass
+
                     if _payload_has_recipes(existing_payload):
                         return MenuPlanResponse(**existing_payload)
 
@@ -3374,6 +4413,22 @@ async def post_party(
 
     # Clean up recipe titles so UI never shows ingredient dumps in the name.
     result = _sanitize_recipe_names_in_payload(result)
+
+    # Vet recipes (safety + minimum completeness) before showing to the user.
+    try:
+        pantry_set = {
+            _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+            for i in inventory_models
+            if getattr(i, "canonical_name", None)
+        }
+        result = _vet_and_filter_menu_payload(
+            result,
+            profile_dict=profile_dict,
+            pantry_canonical_names=pantry_set,
+            min_options_per_course=1,
+        )
+    except Exception:
+        pass
 
     # Normalize menu_headers so Pydantic response_model never 500s.
     result = _coerce_menu_headers(result)
@@ -3534,6 +4589,33 @@ async def post_weekly(
     # Avoid duplicated recipes in the returned menu.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
+
+    # Best-effort: vet recipe options for safety/completeness.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        try:
+            members = full_profile.get("members") if isinstance(full_profile, dict) else []
+            members = members if isinstance(members, list) else []
+            normalized_members: List[Dict[str, Any]] = []
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                if "allergens" not in m or m.get("allergens") is None:
+                    m = {**m, "allergens": []}
+                normalized_members.append(m)
+            profile_dict = {"household": household if isinstance(household, dict) else {}, "members": normalized_members}
+            pantry_set = {
+                _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+                for i in inventory_models
+                if getattr(i, "canonical_name", None)
+            }
+            result = _vet_and_filter_menu_payload(
+                result,
+                profile_dict=profile_dict,
+                pantry_canonical_names=pantry_set,
+                min_options_per_course=1,
+            )
+        except Exception:
+            pass
 
     # Persist successful plan (keyed by start_date)
     if isinstance(result, dict) and result.get("status") == "ok":

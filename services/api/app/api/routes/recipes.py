@@ -1,4 +1,4 @@
-"""Recipe endpoints - image generation, import, and sharing."""
+"""Recipe endpoints - image generation, import, sharing, and saved recipe library."""
 
 from datetime import datetime, timedelta, timezone
 import html as _html
@@ -24,6 +24,24 @@ from app.core.database import get_full_profile, get_inventory
 
 router = APIRouter()
 public_router = APIRouter()
+
+
+class SaveRecipeRequest(BaseModel):
+    recipe: dict[str, Any] = Field(..., description="Full recipe JSON payload")
+
+
+class SaveRecipeResponse(BaseModel):
+    success: bool
+    recipe_id: str
+
+
+class SavedRecipeExistsResponse(BaseModel):
+    saved: bool
+
+
+class ListSavedRecipesResponse(BaseModel):
+    success: bool
+    recipes: list[dict[str, Any]]
 
 
 def _fallback_recipe_collection_markdown(
@@ -116,6 +134,133 @@ def _fallback_recipe_collection_markdown(
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"
+
+
+@router.post("/saved", response_model=SaveRecipeResponse, status_code=status.HTTP_201_CREATED)
+async def save_recipe(
+    req: SaveRecipeRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Save a recipe to the user's personal library (idempotent upsert)."""
+    try:
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+        recipe = req.recipe if isinstance(req.recipe, dict) else {}
+        recipe_id = (recipe.get("recipe_id") or "").strip()
+        if not recipe_id:
+            raise HTTPException(status_code=400, detail="recipe.recipe_id is required")
+
+        db = get_db_client()
+        row = {
+            "id": str(uuid4()),
+            "user_id": user_id,
+            "recipe_id": recipe_id,
+            "recipe": recipe,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Upsert so tapping Save repeatedly is safe.
+        db.table("saved_recipes").upsert(row, on_conflict="user_id,recipe_id").execute()
+
+        return SaveRecipeResponse(success=True, recipe_id=recipe_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save recipe: {e}")
+
+
+@router.get("/saved/exists", response_model=SavedRecipeExistsResponse)
+async def saved_recipe_exists(
+    recipe_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Check if a recipe is saved for the current user."""
+    try:
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+        rid = (recipe_id or "").strip()
+        if not rid:
+            return SavedRecipeExistsResponse(saved=False)
+
+        db = get_db_client()
+        res = (
+            db.table("saved_recipes")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("recipe_id", rid)
+            .limit(1)
+            .execute()
+        )
+        return SavedRecipeExistsResponse(saved=bool(res.data))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to check saved status: {e}")
+
+
+@router.get("/saved", response_model=ListSavedRecipesResponse)
+async def list_saved_recipes(
+    limit: int = 50,
+    offset: int = 0,
+    user: dict = Depends(get_current_user),
+):
+    """List saved recipes in the user's personal library."""
+    try:
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+        limit = max(1, min(int(limit or 50), 200))
+        offset = max(0, int(offset or 0))
+
+        db = get_db_client()
+        res = (
+            db.table("saved_recipes")
+            .select("recipe,created_at,recipe_id")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        rows = res.data or []
+        recipes: list[dict[str, Any]] = []
+        for r in rows:
+            if isinstance(r, dict) and isinstance(r.get("recipe"), dict):
+                recipes.append(r["recipe"])
+        return ListSavedRecipesResponse(success=True, recipes=recipes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list saved recipes: {e}")
+
+
+@router.delete("/saved/{recipe_id}")
+async def delete_saved_recipe(
+    recipe_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Remove a recipe from the user's saved library."""
+    try:
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+        rid = (recipe_id or "").strip()
+        if not rid:
+            raise HTTPException(status_code=400, detail="recipe_id is required")
+
+        db = get_db_client()
+        db.table("saved_recipes").delete().eq("user_id", user_id).eq("recipe_id", rid).execute()
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete saved recipe: {e}")
 
 
 def _recipe_schema() -> dict[str, Any]:

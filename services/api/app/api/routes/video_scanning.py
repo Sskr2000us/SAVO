@@ -14,6 +14,11 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
+from app.middleware.auth import get_current_user
+from app.core.media_storage import upload_inventory_image
+from app.api.routes.profile import get_full_profile
+
+
 router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
 
 
@@ -185,7 +190,7 @@ async def analyze_video(
     scan_type: str = Form("pantry"),
     location_hint: Optional[str] = Form(None),
     max_frames: int = Form(10),
-    user_id: str = Depends(lambda: "test-user")  # Replace with actual auth
+    user: dict = Depends(get_current_user),
 ):
     """
     Analyze video for ingredient detection
@@ -211,6 +216,10 @@ async def analyze_video(
     try:
         from app.core.database import get_db_client
         from app.core.vision_api import get_vision_client
+
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         
         # Validate video file
         if not video.content_type.startswith('video/'):
@@ -246,6 +255,19 @@ async def analyze_video(
         # Create database entry for video scan
         db = get_db_client()
         scan_id = str(uuid4())
+
+        # Upload a representative frame image for auditability (best-effort)
+        representative_image_url = None
+        try:
+            representative_frame = frames[0] if frames else None
+            if representative_frame:
+                representative_image_url = upload_inventory_image(
+                    user_id=user_id,
+                    content=representative_frame,
+                    content_type="image/jpeg",
+                )
+        except Exception as e:
+            logger.warning(f"Failed to upload representative video frame: {e}")
         
         db.table("ingredient_scans").insert({
             "id": scan_id,
@@ -253,17 +275,25 @@ async def analyze_video(
             "scan_type": "video_" + scan_type,
             "location_hint": location_hint,
             "status": "processing",
+            "image_url": representative_image_url,
             "created_at": datetime.utcnow().isoformat(),
             "metadata": {
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
-                "frames_extracted": len(frames)
+                "frames_extracted": len(frames),
+                "representative_frame_image_url": representative_image_url,
             }
         }).execute()
         
         # Analyze each frame
         vision_client = get_vision_client()
         all_detections = []
+
+        profile = None
+        try:
+            profile = await get_full_profile(user_id)
+        except Exception:
+            profile = None
         
         for idx, frame_data in enumerate(frames):
             logger.info(f"Analyzing frame {idx + 1}/{len(frames)}")
@@ -273,7 +303,8 @@ async def analyze_video(
                 result = await vision_client.analyze_image(
                     image_data=frame_data,
                     scan_type=scan_type,
-                    location_hint=location_hint
+                    location_hint=location_hint,
+                    user_preferences=profile,
                 )
                 
                 if result.get("success") and result.get("ingredients"):
@@ -309,6 +340,8 @@ async def analyze_video(
                 "close_alternatives": detection.get("close_alternatives", []),
                 "visual_similarity_group": detection.get("visual_similarity_group"),
                 "confirmation_status": "pending",
+                "thumbnail_url": None,
+                "full_image_url": representative_image_url,
                 "metadata": {
                     "detection_count": detection.get("detection_count", 1),
                     "frames_detected_in": detection.get("detection_count", 1)
@@ -344,13 +377,17 @@ async def analyze_video(
 @router.get("/status/{scan_id}")
 async def get_video_scan_status(
     scan_id: str,
-    user_id: str = Depends(lambda: "test-user")
+    user: dict = Depends(get_current_user),
 ):
     """
     Get status of video scan (for progress tracking)
     """
     try:
         from app.core.database import get_db_client
+
+        user_id = (user or {}).get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         
         db = get_db_client()
         
