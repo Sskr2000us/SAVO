@@ -1,6 +1,7 @@
 """Planning endpoints - daily/party/weekly meal planning."""
 
 from datetime import date, datetime
+import asyncio
 import logging
 import hashlib
 import re
@@ -2021,7 +2022,6 @@ async def post_daily(
     logger.info(f"Starting LLM call for user_id={user_id}")
     result = None
     try:
-        import asyncio
         # Set aggressive 10-second timeout - if LLM takes longer, generate fallback
         result = await asyncio.wait_for(plan_daily(context), timeout=10.0)
         logger.info(f"LLM call completed: status={result.get('status')} time={int((perf_counter() - llm_t0) * 1000)}ms")
