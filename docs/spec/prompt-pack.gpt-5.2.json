@@ -561,7 +561,7 @@
             "Select cuisine: if requested_cuisine=auto, choose based on inventory fit and variety rotation.",
             "INVENTORY is the authoritative list of what the user currently has. Prefer recipes that can be cooked mostly from INVENTORY and common staples; minimize shopping_suggestions. If SESSION_REQUEST.planning_goal is use_what_i_have, do not choose recipes that rely on non-inventory ingredients as core components.",
             "PROFILE FIRST (MANDATORY): Use APP_CONFIGURATION + FAMILY_PROFILE (if provided) to enforce: dietary restrictions, allergens, religious constraints, health conditions, age groups, spice tolerance, and household nutrition targets.",
-            "Safety rule: If any constraint conflicts (e.g., vegan + paneer requested) or constraints make menu impossible, return status=needs_clarification and ask the minimum questions needed to proceed.",
+            "IMPORTANT: You MUST always generate recipes with status=ok. Never return needs_clarification for daily plans - always find a creative solution that respects constraints. If profile is incomplete, make reasonable assumptions (e.g., default to vegetarian if no meat in inventory). Product requirement: Users must always get recipes on first try.",
             "Do not repeat the same recipe across recipe_options, courses, or menus. All recipe_options in a course must be distinct.",
             "If SESSION_REQUEST.planning_goal is set, optimize tradeoffs accordingly: fastest => minimize total time and complexity; healthiest => maximize nutrition quality and minimize added sugar/sodium; kid_friendly => mild spice, familiar textures, safe variants; budget => reuse overlapping ingredients and cheaper staples; use_what_i_have => maximize use of INVENTORY and minimize shopping_suggestions; balanced => default.",
             "If SESSION_REQUEST.avoid_waste=true, prioritize using expiring/near-expiry inventory first and include leftover reuse ideas.",
@@ -570,8 +570,7 @@
             "For each course header, generate 2–3 recipe_options using available ingredients.",
             "Include quantities, steps, nutrition, health_benefits, health_fit, leftovers forecast, preservation guidance, and YouTube references.",
             "Also include chef_tips (5-8 bullets), cultural_context {origin, occasions, serving}, and dietary_information {vegetarian, vegan, gluten_free, allergens, religious_compatibility}.",
-            "Apply variety rules: avoid repeating recently cooked recipes and cuisines within the repetition window.",
-            "If constraints make this impossible, return status=needs_clarification with questions."
+            "Apply variety rules: avoid repeating recently cooked recipes and cuisines within the repetition window."
           ]
         },
         {
