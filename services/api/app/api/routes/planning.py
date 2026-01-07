@@ -225,6 +225,56 @@ def _normalize_cuisine_id(value: Any) -> Optional[str]:
     return v
 
 
+def _coerce_menu_headers(payload: Any) -> Any:
+    """Coerce payload.menu_headers into the MenuPlanResponse-required List[str].
+
+    Some older saved payloads (and our initial fallback generator) used dicts in
+    menu_headers. Pydantic v2 will raise a ValidationError, turning a recoverable
+    response into a 500.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    raw = payload.get("menu_headers")
+    if isinstance(raw, list) and all(isinstance(x, str) and x.strip() for x in raw):
+        return payload
+
+    headers: list[str] = []
+
+    def _add_header(s: Any) -> None:
+        if isinstance(s, str) and s.strip():
+            headers.append(s.strip())
+
+    if isinstance(raw, list):
+        for it in raw:
+            _add_header(it)
+            if isinstance(it, dict):
+                meal_type = it.get("meal_type") or it.get("mealType") or it.get("menu_type") or it.get("menuType")
+                servings = it.get("servings")
+                mt = str(meal_type).strip() if meal_type is not None else "Menu"
+                sfx = f" (serves {int(servings)})" if isinstance(servings, (int, float)) else ""
+                headers.append(f"{mt.title()}{sfx}")
+    elif isinstance(raw, dict):
+        meal_type = raw.get("meal_type") or raw.get("mealType") or raw.get("menu_type") or raw.get("menuType")
+        servings = raw.get("servings")
+        mt = str(meal_type).strip() if meal_type is not None else "Menu"
+        sfx = f" (serves {int(servings)})" if isinstance(servings, (int, float)) else ""
+        headers.append(f"{mt.title()}{sfx}")
+
+    if not headers:
+        menus = payload.get("menus")
+        if isinstance(menus, list):
+            for m in menus:
+                if not isinstance(m, dict):
+                    continue
+                mt = m.get("meal_type") or m.get("mealType") or m.get("menu_type") or m.get("menuType")
+                if isinstance(mt, str) and mt.strip():
+                    headers.append(mt.strip().title())
+
+    payload["menu_headers"] = headers or ["Menu"]
+    return payload
+
+
 def _generate_fallback_recipes(
     *,
     inventory: List[InventoryItem],
@@ -409,7 +459,7 @@ def _generate_fallback_recipes(
     return {
         "status": "ok",
         "selected_cuisine": cuisine,
-        "menu_headers": [{"menu_type": "daily", "meal_type": meal_type or "dinner", "servings": servings}],
+        "menu_headers": [f"{(meal_type or 'dinner').title()} (serves {servings})"],
         "menus": [{
             "menu_type": "daily",
             "meal_type": meal_type or "dinner",
@@ -1850,6 +1900,7 @@ async def post_daily(
                         sel = existing_payload.get("selected_cuisine")
                         prefs = req.cuisine_preferences or []
                         if not prefs or (isinstance(sel, str) and sel.lower() in {p.lower() for p in prefs}):
+                            existing_payload = _coerce_menu_headers(existing_payload)
                             return MenuPlanResponse(**existing_payload)
     
     # GOLDEN RULE: Check profile completeness and safety constraints
@@ -2062,6 +2113,9 @@ async def post_daily(
     if isinstance(result, dict) and result.get("status") == "ok":
         result["_inventory_hash"] = inventory_hash
 
+    # Normalize menu_headers so Pydantic response_model never 500s.
+    result = _coerce_menu_headers(result)
+
     # Persist successful plan
     if isinstance(result, dict) and result.get("status") == "ok":
         try:
@@ -2197,6 +2251,7 @@ async def get_latest_plan(
     if isinstance(saved_hash, str) and saved_hash and saved_hash != current_hash:
         raise HTTPException(status_code=404, detail="Saved meal plan is stale")
 
+    payload = _coerce_menu_headers(payload)
     return MenuPlanResponse(**payload)
 
 
