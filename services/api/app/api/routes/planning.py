@@ -326,15 +326,69 @@ def _generate_fallback_recipes(
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
     inv_items = inv_items[:8]
 
+    def _display_name(raw: str) -> str:
+        s = (raw or "").replace("_", " ")
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            return raw or ""
+        # Title-case each token without touching punctuation inside tokens (e.g., tri-color).
+        return " ".join([t[:1].upper() + t[1:] if t else t for t in s.split(" ")])
+
+    def _suggest_amount_and_unit(it: InventoryItem) -> tuple[float, str]:
+        name = str(getattr(it, "canonical_name", "") or "").strip().lower()
+        qty_raw = getattr(it, "quantity", 0) or 0
+        try:
+            qty = float(qty_raw)
+        except Exception:
+            qty = 0.0
+        unit = str(getattr(it, "unit", "") or "").strip()
+        unit_l = unit.lower()
+
+        # If quantity is missing/unhelpful, default to 1.
+        if qty <= 0:
+            qty = 1.0
+
+        # Heuristics: avoid "use the whole container" amounts.
+        spicey = any(k in name for k in ["cumin", "coriander", "pepper", "chili", "masala", "spice", "seed"]) 
+        starchy = any(k in name for k in ["pasta", "noodle", "rice", "rotini", "spaghetti", "penne"])
+
+        if unit_l in {"g", "gram", "grams"}:
+            if spicey:
+                return (min(qty, 6.0), unit)
+            if starchy:
+                return (min(qty, 300.0), unit)
+            return (min(qty, 200.0), unit)
+
+        if unit_l in {"kg", "kilogram", "kilograms"}:
+            if spicey:
+                return (min(qty, 0.01), unit)
+            if starchy:
+                return (min(qty, 0.3), unit)
+            return (min(qty, 0.2), unit)
+
+        if unit_l in {"ml", "milliliter", "milliliters"}:
+            return (min(qty, 250.0), unit)
+
+        if unit_l in {"l", "liter", "liters"}:
+            return (min(qty, 0.25), unit)
+
+        if unit_l in {"pcs", "pc", "piece", "pieces"}:
+            # Typically use 1–2 pieces.
+            return (min(qty, 2.0), unit)
+
+        # Unknown units: use a conservative fraction.
+        return (min(qty, max(1.0, qty * 0.4)), unit)
+
     def _ingredients_used(max_n: int = 6) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for it in inv_items[:max_n]:
+            amt, unit = _suggest_amount_and_unit(it)
             out.append(
                 {
                     "inventory_id": str(getattr(it, "inventory_id")),
                     "canonical_name": str(getattr(it, "canonical_name")),
-                    "amount": float(getattr(it, "quantity", 1) or 1),
-                    "unit": str(getattr(it, "unit", "pcs")),
+                    "amount": float(amt),
+                    "unit": unit or str(getattr(it, "unit", "pcs")),
                 }
             )
         return out
@@ -350,7 +404,67 @@ def _generate_fallback_recipes(
         return benefits
 
     top_names = [str(x.get("canonical_name")) for x in _ingredients_used(3) if isinstance(x, dict) and x.get("canonical_name")]
-    top_phrase = ", ".join([n.title() for n in top_names[:3]]) if top_names else "pantry ingredients"
+    top_phrase = ", ".join([_display_name(n) for n in top_names[:3]]) if top_names else "pantry ingredients"
+
+    def _build_fallback_steps(*, cooking_method: str, total_minutes: int) -> list[dict[str, Any]]:
+        base = max(12, int(total_minutes or 30))
+        method = (cooking_method or "stovetop").strip().lower()
+        # Pick a simple template based on pantry signals.
+        names_l = " ".join([n.lower() for n in top_names])
+        is_pasta = any(k in names_l for k in ["pasta", "rotini", "spaghetti", "penne", "noodle"])
+        is_rice = ("rice" in names_l) and not is_pasta
+
+        steps: list[tuple[str, int]] = []
+        if is_pasta:
+            steps = [
+                ("Bring a pot of well-salted water to a boil.", 5),
+                ("Cook the pasta until al dente; reserve 1/2 cup pasta water, then drain.", 10),
+                (f"Warm a pan on medium heat; toast spices from {top_phrase} for aroma (if present).", 2),
+                ("Add a little oil/butter (or any pantry fat) and gently bloom the spices.", 2),
+                ("Stir in any nuts/creaminess ingredients (e.g., cashews/avocado) to build a quick sauce.", 4),
+                ("Loosen with reserved pasta water until glossy and coating.", 2),
+                ("Toss pasta into the sauce; taste and adjust salt/heat/acidity.", 3),
+                ("Rest 2 minutes, then serve warm.", 2),
+            ]
+        elif is_rice:
+            steps = [
+                ("Rinse rice (if needed) and prep any aromatics/spices.", 5),
+                ("Toast spices briefly in a pot with a little oil/butter.", 2),
+                ("Add rice and toast 1–2 minutes for nuttiness.", 2),
+                ("Add water/broth; bring to a boil, then cover and simmer on low.", 15),
+                ("Let rest off-heat 5 minutes.", 5),
+                ("Fluff rice; fold in any add-ins from the pantry.", 2),
+                ("Taste and adjust seasoning.", 2),
+                ("Serve warm with a simple side.", 1),
+            ]
+        else:
+            steps = [
+                (f"Prep {top_phrase} (wash/chop/measure).", 6),
+                ("Warm a pan/pot on medium heat; add a little oil.", 2),
+                ("Cook the main ingredient(s) first to build flavor.", 8),
+                ("Add spices/seasoning gradually; stir to coat.", 3),
+                ("Add any vegetables or bulk ingredients; cook until tender.", 8),
+                ("Adjust texture with a splash of water/broth if needed.", 2),
+                ("Taste and balance: salt + heat + acidity (lemon/vinegar if available).", 2),
+                ("Serve hot; cool leftovers quickly for storage.", 1),
+            ]
+
+        # Scale time minutes roughly to fit the requested total.
+        raw_total = sum(t for _, t in steps)
+        if raw_total <= 0:
+            raw_total = 1
+        scale = max(0.5, min(2.0, base / raw_total))
+        out: list[dict[str, Any]] = []
+        for idx, (txt, mins) in enumerate(steps, start=1):
+            out.append(
+                {
+                    "step": idx,
+                    "instruction": {"en": txt},
+                    "time_minutes": max(1, int(round(mins * scale))),
+                    "tips": [],
+                }
+            )
+        return out
 
     def _recipe(
         recipe_id: str,
@@ -374,20 +488,7 @@ def _generate_fallback_recipes(
             "cooking_method": cooking_method,
             "ingredients_used": ings,
             "new_ingredients_optional": [],
-            "steps": [
-                {
-                    "step": 1,
-                    "instruction": {"en": f"Prep {top_phrase} (wash/chop as needed)."},
-                    "time_minutes": prep,
-                    "tips": [],
-                },
-                {
-                    "step": 2,
-                    "instruction": {"en": f"Cook {top_phrase} on medium heat, season to taste, and serve hot."},
-                    "time_minutes": cook,
-                    "tips": [],
-                },
-            ],
+            "steps": _build_fallback_steps(cooking_method=cooking_method, total_minutes=total),
             "nutrition_per_serving": {
                 "calories_kcal": 350,
                 "macros": {"protein_g": 15, "carbs_g": 45, "fat_g": 12},
@@ -475,15 +576,58 @@ def _generate_fallback_party_plan(
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
     inv_items = inv_items[:10]
 
+    def _display_name(raw: str) -> str:
+        s = (raw or "").replace("_", " ")
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            return raw or ""
+        return " ".join([t[:1].upper() + t[1:] if t else t for t in s.split(" ")])
+
+    def _suggest_amount_and_unit(it: InventoryItem) -> tuple[float, str]:
+        name = str(getattr(it, "canonical_name", "") or "").strip().lower()
+        qty_raw = getattr(it, "quantity", 0) or 0
+        try:
+            qty = float(qty_raw)
+        except Exception:
+            qty = 0.0
+        unit = str(getattr(it, "unit", "") or "").strip()
+        unit_l = unit.lower()
+
+        if qty <= 0:
+            qty = 1.0
+
+        spicey = any(k in name for k in ["cumin", "coriander", "pepper", "chili", "masala", "spice", "seed"])
+        starchy = any(k in name for k in ["pasta", "noodle", "rice", "rotini", "spaghetti", "penne"])
+
+        if unit_l in {"g", "gram", "grams"}:
+            if spicey:
+                return (min(qty, 6.0), unit)
+            if starchy:
+                return (min(qty, 350.0), unit)
+            return (min(qty, 250.0), unit)
+
+        if unit_l in {"kg", "kilogram", "kilograms"}:
+            if spicey:
+                return (min(qty, 0.02), unit)
+            if starchy:
+                return (min(qty, 0.35), unit)
+            return (min(qty, 0.25), unit)
+
+        if unit_l in {"pcs", "pc", "piece", "pieces"}:
+            return (min(qty, 3.0), unit)
+
+        return (min(qty, max(1.0, qty * 0.5)), unit)
+
     def _ingredients_used(max_n: int = 6) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for it in inv_items[:max_n]:
+            amt, unit = _suggest_amount_and_unit(it)
             out.append(
                 {
                     "inventory_id": str(getattr(it, "inventory_id")),
                     "canonical_name": str(getattr(it, "canonical_name")),
-                    "amount": float(getattr(it, "quantity", 1) or 1),
-                    "unit": str(getattr(it, "unit", "pcs")),
+                    "amount": float(amt),
+                    "unit": unit or str(getattr(it, "unit", "pcs")),
                 }
             )
         return out
@@ -502,7 +646,7 @@ def _generate_fallback_party_plan(
         difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
         ings = _ingredients_used()
         top_names = [str(x.get("canonical_name")) for x in ings[:3] if x.get("canonical_name")]
-        top_phrase = ", ".join([n.title() for n in top_names]) if top_names else "pantry ingredients"
+        top_phrase = ", ".join([_display_name(n) for n in top_names]) if top_names else "pantry ingredients"
         return {
             "recipe_id": recipe_id,
             "recipe_name": {"en": f"{name_en} ({top_phrase})"},

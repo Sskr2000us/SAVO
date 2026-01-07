@@ -21,6 +21,33 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   bool _checking = true;
   Map<String, dynamic>? _sufficiency;
 
+  String _prettyName(String raw) {
+    final s = raw
+        .replaceAll('_', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (s.isEmpty) return raw;
+    return s
+        .split(' ')
+        .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+  }
+
+  String _formatAmount(double amount) {
+    if (amount == 0) return '';
+    if (amount % 1 == 0) return amount.toInt().toString();
+    return amount.toStringAsFixed(1);
+  }
+
+  String? _secondaryLanguageKey(Map<String, String> localized) {
+    for (final e in localized.entries) {
+      final key = e.key.trim().toLowerCase();
+      final value = e.value.trim();
+      if (key.isNotEmpty && key != 'en' && value.isNotEmpty) return key;
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -91,7 +118,9 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     final cs = theme.colorScheme;
 
     final recipe = widget.recipe;
-    final title = recipe.getLocalizedName('en');
+    final title = _prettyName(recipe.getLocalizedName('en'));
+    final secondaryLang = _secondaryLanguageKey(recipe.recipeName);
+    final secondaryTitle = secondaryLang != null ? recipe.recipeName[secondaryLang] : null;
 
     final missingSet = _missingNameSet();
 
@@ -111,7 +140,20 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title),
+            if (secondaryTitle != null && secondaryTitle.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  secondaryTitle.trim(),
+                  style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+          ],
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -159,12 +201,12 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
             ],
           ] else ...[
             ...recipe.ingredientsUsed.map((i) {
-              final name = i.canonicalName.trim().isNotEmpty ? i.canonicalName.trim() : 'Ingredient';
+              final name = i.canonicalName.trim().isNotEmpty ? _prettyName(i.canonicalName.trim()) : 'Ingredient';
               final amount = i.amount;
               final unit = i.unit.trim();
               final suffix = (amount == 0 && unit.isEmpty)
                   ? ''
-                  : ' — ${amount.toString()}${unit.isNotEmpty ? ' $unit' : ''}';
+                  : ' — ${_formatAmount(amount)}${unit.isNotEmpty ? ' $unit' : ''}';
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Text('• $name$suffix', style: theme.textTheme.bodyMedium),
@@ -191,10 +233,14 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: recipe.steps.map((s) {
                   final instruction = s.getLocalizedInstruction('en').trim();
+                  final secondaryInstruction = secondaryLang != null
+                      ? (s.instruction[secondaryLang] ?? '').trim()
+                      : '';
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Text(
-                      '${s.step}. ${instruction.isNotEmpty ? instruction : 'Step'}',
+                      '${s.step}. ${instruction.isNotEmpty ? instruction : 'Step'}'
+                      '${secondaryInstruction.isNotEmpty ? '\n$secondaryInstruction' : ''}',
                       style: theme.textTheme.bodyMedium,
                     ),
                   );
@@ -209,6 +255,84 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
           _MetaRow(label: 'Difficulty', value: recipe.difficulty),
           _MetaRow(label: 'Time', value: '${recipe.estimatedTimes.totalMinutes} min'),
           _MetaRow(label: 'Method', value: recipe.cookingMethod),
+
+          if (recipe.nutritionPerServing.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionTitle(text: 'Nutrition (Per Serving)', color: cs.primary),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  recipe.nutritionPerServing.entries
+                      .map((e) => '${_prettyName(e.key)}: ${e.value}')
+                      .join('\n'),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          ],
+
+          if (recipe.healthBenefits != null && recipe.healthBenefits!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionTitle(text: 'Health Benefits', color: cs.primary),
+            const SizedBox(height: 8),
+            ...recipe.healthBenefits!.map((b) {
+              final ing = (b['ingredient'] ?? '').toString().trim();
+              final benefit = (b['benefit'] ?? '').toString().trim();
+              final label = ing.isNotEmpty ? '${_prettyName(ing)}: ' : '';
+              final text = (label + benefit).trim();
+              if (text.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Text('• $text', style: theme.textTheme.bodyMedium),
+              );
+            }),
+          ],
+
+          if (recipe.chefTips.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionTitle(text: "Chef's Tips", color: cs.primary),
+            const SizedBox(height: 8),
+            ...recipe.chefTips.map((t) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Text('• ${t.trim()}', style: theme.textTheme.bodyMedium),
+                )),
+          ],
+
+          if (recipe.culturalContext != null && recipe.culturalContext!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionTitle(text: 'Cultural Context', color: cs.primary),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  recipe.culturalContext!.entries
+                      .map((e) => '${_prettyName(e.key)}: ${e.value}')
+                      .join('\n'),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          ],
+
+          if (recipe.dietaryInformation != null && recipe.dietaryInformation!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionTitle(text: 'Dietary Information', color: cs.primary),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  recipe.dietaryInformation!.entries
+                      .map((e) => '${_prettyName(e.key)}: ${e.value}')
+                      .join('\n'),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
 
           SizedBox(
