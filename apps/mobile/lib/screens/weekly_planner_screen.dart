@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../models/planning.dart';
@@ -155,6 +156,17 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
         'start_date': DateFormat('yyyy-MM-dd').format(_startDate),
         'num_days': _numDays,
       };
+
+      // Reuse the inventory screen preference so weekly planning can consider older (inactive) pantry items.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
+        if (includeInactive) {
+          body['include_inactive_inventory'] = true;
+        }
+      } catch (_) {
+        // Best-effort only
+      }
 
       final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
           ? profileState.preferredLanguage!.trim()

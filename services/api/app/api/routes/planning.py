@@ -5,10 +5,13 @@ import asyncio
 import logging
 import hashlib
 import re
+import os
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+
+import httpx
 
 from app.models.planning import (
     DailyPlanRequest,
@@ -64,6 +67,238 @@ from app.models.inventory import InventoryItem
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _recipe_name_text(recipe_name: Any) -> str:
+    if isinstance(recipe_name, str):
+        return recipe_name.strip()
+    if isinstance(recipe_name, dict):
+        for k in ("en", "hi"):
+            v = recipe_name.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for v in recipe_name.values():
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return ""
+
+
+def _yt_tokenize(value: str) -> set[str]:
+    value = (value or "").lower()
+    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    tokens = {t for t in value.split() if t and len(t) > 1}
+    return tokens
+
+
+def _yt_match_score(recipe_name: str, title: str) -> float:
+    q = _yt_tokenize(recipe_name)
+    t = _yt_tokenize(title)
+    if not q or not t:
+        return 0.0
+    # Favor recall: coverage of recipe tokens in title.
+    return len(q & t) / max(1, len(q))
+
+
+def _yt_trust_score(channel: str, title: str) -> float:
+    text = f"{channel} {title}".lower()
+    score = 0.5
+    if any(k in text for k in ["official", "kitchen", "chef", "cooking", "recipes"]):
+        score += 0.15
+    if any(k in text for k in ["shorts", "mukbang", "asmr"]):
+        score -= 0.15
+    return max(0.0, min(1.0, score))
+
+
+def _yt_query_variants(recipe_name: str, cuisine: str) -> list[str]:
+    recipe = re.sub(r"^\s*\d+\s*[\).:-]\s*", "", (recipe_name or "").strip())
+    recipe = re.sub(r"\s+", " ", recipe).strip()
+    cuisine = (cuisine or "").strip()
+    variants: list[str] = []
+    if recipe and cuisine:
+        variants.append(f"{recipe} {cuisine} recipe")
+    if recipe:
+        variants.append(f"{recipe} recipe")
+        variants.append(f"how to make {recipe}")
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in variants:
+        key = v.strip().lower()
+        if key and key not in seen:
+            out.append(v)
+            seen.add(key)
+    return out
+
+
+async def _yt_search_candidates(*, recipe_name: str, cuisine: str, max_results: int = 6) -> list[dict[str, Any]]:
+    api_key = (os.getenv("YOUTUBE_API_KEY") or "").strip()
+    if not api_key:
+        return []
+
+    queries = _yt_query_variants(recipe_name, cuisine)
+    if not queries:
+        return []
+
+    def _to_candidate(item: dict) -> Optional[dict[str, Any]]:
+        try:
+            video_id = (((item or {}).get("id") or {}).get("videoId") or "").strip()
+            snippet = (item or {}).get("snippet") or {}
+            thumbs = snippet.get("thumbnails") or {}
+            thumb = (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {})
+            if not video_id:
+                return None
+            return {
+                "video_id": video_id,
+                "title": (snippet.get("title") or "").strip(),
+                "channel": (snippet.get("channelTitle") or "").strip(),
+                "language": "en",
+                "transcript": (snippet.get("description") or "")[:500],
+                "metadata": {
+                    "thumbnail": (thumb.get("url") or "").strip(),
+                    "published_at": (snippet.get("publishedAt") or "").strip(),
+                },
+            }
+        except Exception:
+            return None
+
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    passes: list[dict[str, Any]] = [
+        {"videoDuration": "medium"},
+        {"videoDuration": "any"},
+        {},
+    ]
+
+    timeout = httpx.Timeout(7.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for q in queries:
+            for extra in passes:
+                params = {
+                    "part": "snippet",
+                    "type": "video",
+                    "maxResults": min(10, max(1, int(max_results))),
+                    "q": q,
+                    "key": api_key,
+                    "safeSearch": "moderate",
+                    **extra,
+                }
+                try:
+                    resp = await client.get("https://www.googleapis.com/youtube/v3/search", params=params)
+                    if resp.status_code >= 400:
+                        continue
+                    data = resp.json() or {}
+                    items = data.get("items") or []
+                    if not isinstance(items, list):
+                        items = []
+                    for item in items:
+                        cand = _to_candidate(item)
+                        if not cand:
+                            continue
+                        candidates_by_id[cand["video_id"]] = cand
+                    if len(candidates_by_id) >= max_results:
+                        break
+                except Exception:
+                    continue
+            if len(candidates_by_id) >= max_results:
+                break
+
+    candidates = list(candidates_by_id.values())
+    primary_q = queries[0]
+    candidates.sort(key=lambda c: _yt_match_score(primary_q, c.get("title", "")), reverse=True)
+    return candidates[:max_results]
+
+
+def _rank_youtube_candidates(*, recipe_name: str, candidates: list[dict[str, Any]], top_n: int = 3) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for c in candidates or []:
+        title = str(c.get("title") or "")
+        channel = str(c.get("channel") or "")
+        ms = float(_yt_match_score(recipe_name, title))
+        ts = float(_yt_trust_score(channel, title))
+        ranked.append(
+            {
+                "video_id": c.get("video_id"),
+                "title": title,
+                "channel": channel,
+                "trust_score": max(0.0, min(1.0, ts)),
+                "match_score": max(0.0, min(1.0, ms)),
+                "reasons": [
+                    "Auto-attached from YouTube search",
+                    f"Match score: {ms:.2f}",
+                ],
+            }
+        )
+    ranked.sort(key=lambda v: (v.get("match_score", 0.0), v.get("trust_score", 0.0)), reverse=True)
+    return ranked[: max(0, int(top_n))]
+
+
+async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_recipe: int = 3) -> Any:
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    api_key = (os.getenv("YOUTUBE_API_KEY") or "").strip()
+    if not api_key:
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    cache: dict[str, list[dict[str, Any]]] = {}
+    semaphore = asyncio.Semaphore(4)
+
+    async def _enrich_recipe_opt(opt: dict[str, Any], *, cuisine_fallback: str) -> None:
+        try:
+            if not isinstance(opt, dict):
+                return
+            if isinstance(opt.get("youtube_references"), list) and opt.get("youtube_references"):
+                return
+
+            name = _recipe_name_text(opt.get("recipe_name"))
+            if not name:
+                return
+
+            cuisine = opt.get("cuisine") if isinstance(opt.get("cuisine"), str) else cuisine_fallback
+            cache_key = f"{name.strip().lower()}|{str(cuisine or '').strip().lower()}"
+            if cache_key in cache:
+                opt["youtube_references"] = cache[cache_key]
+                return
+
+            async with semaphore:
+                candidates = await _yt_search_candidates(recipe_name=name, cuisine=str(cuisine or ""), max_results=6)
+            ranked = _rank_youtube_candidates(recipe_name=name, candidates=candidates, top_n=max_per_recipe)
+            cache[cache_key] = ranked
+            opt["youtube_references"] = ranked
+        except Exception:
+            return
+
+    tasks: list[asyncio.Task] = []
+    selected_cuisine = payload.get("selected_cuisine") if isinstance(payload.get("selected_cuisine"), str) else ""
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list):
+                continue
+            for opt in opts:
+                if isinstance(opt, dict):
+                    tasks.append(asyncio.create_task(_enrich_recipe_opt(opt, cuisine_fallback=selected_cuisine)))
+
+    if not tasks:
+        return payload
+
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=8.0)
+    except Exception:
+        # Best-effort only.
+        pass
+    return payload
 
 
 def _sanitize_recipe_title(text: str) -> str:
@@ -1611,6 +1846,22 @@ def _freshness_days_remaining(expiry_date_value: Any) -> Optional[int]:
 
 
 def _db_inventory_to_models(db_items: List[Dict[str, Any]]) -> List[InventoryItem]:
+    def _parse_dt(value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            # Handle common ISO formats including trailing 'Z'
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return None
+        return None
+
     mapped: List[InventoryItem] = []
     for item in db_items or []:
         if not isinstance(item, dict):
@@ -1653,6 +1904,11 @@ def _db_inventory_to_models(db_items: List[Dict[str, Any]]) -> List[InventoryIte
                 state=state,  # type: ignore[arg-type]
                 storage=("freezer" if storage == "freezer" else ("fridge" if storage == "fridge" else "pantry")),
                 freshness_days_remaining=_freshness_days_remaining(item.get("expiry_date")),
+                added_date=(
+                    _parse_dt(item.get("added_date"))
+                    or _parse_dt(item.get("created_at"))
+                    or _parse_dt(item.get("updated_at"))
+                ),
                 notes=item.get("notes"),
             )
         )
@@ -1740,6 +1996,11 @@ def _inventory_for_llm(*, storage_inventory, request_inventory) -> list[dict]:
                 "state": getattr(item, "state", "raw"),
                 "storage": getattr(item, "storage", "pantry"),
                 "freshness_days_remaining": getattr(item, "freshness_days_remaining", None),
+                "added_date": (
+                    getattr(item, "added_date", None).isoformat()
+                    if getattr(item, "added_date", None) is not None
+                    else None
+                ),
                 "notes": getattr(item, "notes", None),
             }
         )
@@ -2020,7 +2281,12 @@ def _build_planning_context(
     inventory_items = _inventory_for_llm(storage_inventory=inventory, request_inventory=getattr(request, "inventory", None))
 
     # Keep prompts small to avoid TPM rate limits and long latencies.
-    def _compact_inventory(items: Any, *, max_items: int = 60) -> list[dict[str, Any]]:
+    def _compact_inventory(
+        items: Any,
+        *,
+        max_items: int = 60,
+        prefer_oldest: bool = False,
+    ) -> list[dict[str, Any]]:
         if not isinstance(items, list):
             return []
         kept: list[dict[str, Any]] = []
@@ -2028,17 +2294,28 @@ def _build_planning_context(
             if isinstance(it, dict):
                 kept.append(it)
 
-        def _score(d: dict[str, Any]) -> tuple[int, int, float]:
-            # Higher priority first: leftovers, expiring soon, higher confidence
+        def _age_days(d: dict[str, Any]) -> int:
+            raw = d.get("added_date")
+            if not isinstance(raw, str) or not raw.strip():
+                return 0
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return int((datetime.utcnow() - dt.replace(tzinfo=None)).days)
+            except Exception:
+                return 0
+
+        def _score(d: dict[str, Any]) -> tuple[int, int, int, float]:
+            # Higher priority first: leftovers, expiring soon, (optionally) older items, higher confidence
             state = str(d.get("state") or "").strip().lower()
             is_leftover = 1 if state == "leftover" else 0
             days = d.get("freshness_days_remaining")
             expiring = 0
             if isinstance(days, int) and days >= 0:
                 expiring = 1 if days <= 2 else 0
+            age = _age_days(d) if prefer_oldest else 0
             conf = d.get("confidence")
             conf_f = float(conf) if isinstance(conf, (int, float)) else 0.0
-            return (is_leftover, expiring, conf_f)
+            return (is_leftover, expiring, age, conf_f)
 
         kept.sort(key=_score, reverse=True)
         kept = kept[:max_items]
@@ -2050,6 +2327,7 @@ def _build_planning_context(
             "source",
             "created_at",
             "updated_at",
+            "added_date",
         }
         out: list[dict[str, Any]] = []
         for it in kept:
@@ -2057,7 +2335,13 @@ def _build_planning_context(
             out.append(slim)
         return out
 
-    inventory_items = _compact_inventory(inventory_items)
+    include_inactive = bool(getattr(request, "include_inactive_inventory", False))
+    # When the user opts into inactive inventory, include more items and reduce recency bias.
+    inventory_items = _compact_inventory(
+        inventory_items,
+        max_items=(160 if include_inactive else 60),
+        prefer_oldest=include_inactive,
+    )
 
     leftovers_inventory: list[dict] = []
     try:
@@ -2422,8 +2706,9 @@ async def post_daily(
     profile_dict = {"household": household, "members": normalized_members}
 
     # Load DB inventory/history early so we can avoid reusing stale plans when inventory changes.
+    include_inactive_inv = bool(getattr(req, "include_inactive_inventory", False))
     try:
-        db_inventory = await get_inventory(user_id)
+        db_inventory = await get_inventory(user_id, include_inactive=include_inactive_inv)
     except Exception:
         db_inventory = []
     try:
@@ -2703,6 +2988,13 @@ async def post_daily(
     # Normalize menu_headers so Pydantic response_model never 500s.
     result = _coerce_menu_headers(result)
 
+    # Best-effort: attach YouTube references so clients can show videos immediately.
+    # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
+    try:
+        result = await _enrich_plan_payload_with_youtube_references(result)
+    except Exception:
+        pass
+
     # Persist successful plan
     if isinstance(result, dict) and result.get("status") == "ok":
         try:
@@ -2898,8 +3190,9 @@ async def post_party(
         )
     
     # Pull DB-backed inventory/history so party planning gets variety + inventory-first behavior.
+    include_inactive_inv = bool(getattr(req, "include_inactive_inventory", False))
     try:
-        db_inventory = await get_inventory(user_id)
+        db_inventory = await get_inventory(user_id, include_inactive=include_inactive_inv)
     except Exception:
         db_inventory = []
     try:
@@ -3073,6 +3366,13 @@ async def post_party(
     # Normalize menu_headers so Pydantic response_model never 500s.
     result = _coerce_menu_headers(result)
 
+    # Best-effort: attach YouTube references so clients can show videos immediately.
+    # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
+    try:
+        result = await _enrich_plan_payload_with_youtube_references(result)
+    except Exception:
+        pass
+
     # Keep shopping_suggestions consistent with the selected dishes' missing ingredients.
     # (The LLM may omit shopping_suggestions; the client shopping cart/list depends on it.)
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -3167,8 +3467,9 @@ async def post_weekly(
     req.cuisine_preferences = _normalize_cuisine_preferences(getattr(req, "cuisine_preferences", None))
 
     # Product default: if the user didn't specify a goal, prioritize using what they have.
+    include_inactive_inv = bool(getattr(req, "include_inactive_inventory", False))
     try:
-        db_inventory = await get_inventory(user_id)
+        db_inventory = await get_inventory(user_id, include_inactive=include_inactive_inv)
     except Exception:
         db_inventory = []
     try:
@@ -3232,6 +3533,13 @@ async def post_weekly(
             allowed_cuisines = _allowed_cuisines_from_regional_profile(household)
         if isinstance(result, dict) and result.get("status") == "ok":
             result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
+        # Best-effort: attach YouTube references so clients can show videos immediately.
+        # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
+        try:
+            result = await _enrich_plan_payload_with_youtube_references(result)
+        except Exception:
+            pass
         try:
             await create_meal_plan(
                 user_id,

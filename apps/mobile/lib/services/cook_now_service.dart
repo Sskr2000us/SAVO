@@ -3,6 +3,7 @@ import '../models/profile_state.dart';
 import 'api_client.dart';
 import 'metrics_service.dart';
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CookNowService {
   String _inferMealType() {
@@ -25,6 +26,17 @@ class CookNowService {
       'time_available_minutes': 45,
       'servings': 4,
     };
+
+    // Reuse the inventory screen preference so Cook Now can consider older (inactive) pantry items.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
+      if (includeInactive) {
+        body['include_inactive_inventory'] = true;
+      }
+    } catch (_) {
+      // Best-effort only
+    }
 
     final preferred = profileState.favoriteCuisines;
     if (preferred.isNotEmpty) {

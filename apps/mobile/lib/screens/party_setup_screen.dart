@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/cuisine.dart';
 import '../models/planning.dart';
@@ -244,6 +245,17 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
       'avoid_waste': true,
       'use_leftovers': true,
     };
+
+    // Reuse the inventory screen preference so party planning can consider older (inactive) pantry items.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
+      if (includeInactive) {
+        body['include_inactive_inventory'] = true;
+      }
+    } catch (_) {
+      // Best-effort only
+    }
 
     final familyOverride = _familyProfileOverride();
     if (familyOverride.isNotEmpty) {

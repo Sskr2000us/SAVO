@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
 import '../models/profile_state.dart';
@@ -216,6 +217,17 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
         'servings': 4,
         'date': _todayIsoDate(),
       };
+
+      // Reuse the inventory screen preference so planning can consider older (inactive) pantry items.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final includeInactive = prefs.getBool('savo.inventory.show_inactive_items') ?? false;
+        if (includeInactive) {
+          body['include_inactive_inventory'] = true;
+        }
+      } catch (_) {
+        // Best-effort only
+      }
 
       final preferred = profileState.favoriteCuisines;
       if (preferred.isNotEmpty) {

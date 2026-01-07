@@ -97,6 +97,14 @@ class SessionRequest(BaseModel):
         description="If false, do not schedule leftover reuse even when available",
     )
 
+    include_inactive_inventory: Optional[bool] = Field(
+        None,
+        description=(
+            "If true, include inactive (older scan) inventory items in planning. "
+            "This is useful when the user re-enables older pantry items and wants plans to consider them."
+        ),
+    )
+
     @field_validator("output_languages")
     @classmethod
     def validate_output_languages(cls, value: Optional[List[str]]) -> Optional[List[str]]:
