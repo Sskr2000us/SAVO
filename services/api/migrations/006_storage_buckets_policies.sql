@@ -4,12 +4,33 @@
 -- Created: 2026-01-06
 -- Purpose: Set up RLS policies for Supabase Storage buckets
 -- =====================================================
+-- PREREQUISITE: Create these 3 buckets via Supabase Dashboard first:
+--   1. savo-ingredients (public: YES, size: 10MB)
+--   2. savo-ingredients-thumbnails (public: YES, size: 1MB)  
+--   3. savo-user-scans (public: NO, size: 10MB)
+-- =====================================================
+-- NOTE: RLS is already enabled on storage.objects by default in Supabase
+-- No need to manually enable it
+-- =====================================================
 
--- Enable RLS on storage.buckets table (if not already enabled)
-ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
+-- =====================================================
+-- CLEANUP: Drop existing policies if they exist (idempotent)
+-- =====================================================
 
--- Enable RLS on storage.objects table (if not already enabled)
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read access for ingredient images" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can upload ingredient images" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can update ingredient images" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can delete ingredient images" ON storage.objects;
+
+DROP POLICY IF EXISTS "Public read access for thumbnails" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can upload thumbnails" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can update thumbnails" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can delete thumbnails" ON storage.objects;
+
+DROP POLICY IF EXISTS "Users can read their own scans" ON storage.objects;
+DROP POLICY IF EXISTS "Users can upload to their own folder" ON storage.objects;
+DROP POLICY IF EXISTS "Users can update their own scans" ON storage.objects;
+DROP POLICY IF EXISTS "Users can delete their own scans" ON storage.objects;
 
 -- =====================================================
 -- BUCKET 1: savo-ingredients (Public Read, Admin Write)
@@ -198,19 +219,37 @@ $$ LANGUAGE plpgsql STABLE;
 -- VERIFICATION QUERIES
 -- =====================================================
 
--- Check bucket configurations
-COMMENT ON SCHEMA storage IS 'Storage bucket policies configured for SAVO Ingredient Intelligence';
+-- Verify buckets exist
+SELECT id, name, public, file_size_limit
+FROM storage.buckets
+WHERE name IN ('savo-ingredients', 'savo-ingredients-thumbnails', 'savo-user-scans')
+ORDER BY name;
 
--- Verify policies exist
-DO $$
-DECLARE
-    policy_count INTEGER;
-BEGIN
-    SELECT COUNT(*) INTO policy_count
-    FROM pg_policies
-    WHERE schemaname = 'storage'
+-- Verify policies were created
+SELECT 
+    policyname,
+    cmd as operation,
+    CASE 
+        WHEN policyname LIKE '%ingredient image%' THEN 'savo-ingredients'
+        WHEN policyname LIKE '%thumbnail%' THEN 'savo-ingredients-thumbnails'
+        WHEN policyname LIKE '%scan%' THEN 'savo-user-scans'
+        ELSE 'unknown'
+    END as bucket
+FROM pg_policies 
+WHERE schemaname = 'storage'
     AND tablename = 'objects'
-    AND policyname LIKE '%ingredient%' OR policyname LIKE '%thumbnail%' OR policyname LIKE '%scan%';
-    
-    RAISE NOTICE 'Total storage policies created: %', policy_count;
-END $$;
+    AND policyname IN (
+        'Public read access for ingredient images',
+        'Authenticated users can upload ingredient images',
+        'Authenticated users can update ingredient images',
+        'Authenticated users can delete ingredient images',
+        'Public read access for thumbnails',
+        'Authenticated users can upload thumbnails',
+        'Authenticated users can update thumbnails',
+        'Authenticated users can delete thumbnails',
+        'Users can read their own scans',
+        'Users can upload to their own folder',
+        'Users can update their own scans',
+        'Users can delete their own scans'
+    )
+ORDER BY bucket, cmd;

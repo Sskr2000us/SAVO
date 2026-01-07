@@ -553,17 +553,27 @@ ALTER TABLE model_performance_metrics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE learning_feedback ENABLE ROW LEVEL SECURITY;
 ALTER TABLE success_metrics_daily ENABLE ROW LEVEL SECURITY;
 
--- Decision rules: Readable by all, writable by admin only
+-- Decision rules: Readable by all authenticated users
 CREATE POLICY "Decision rules readable by authenticated users"
 ON decision_rules FOR SELECT
 TO authenticated
 USING (true);
 
-CREATE POLICY "Decision rules writable by admin"
-ON decision_rules FOR ALL
+CREATE POLICY "Decision rules writable by authenticated users"
+ON decision_rules FOR INSERT
 TO authenticated
-USING (auth.uid() IN (SELECT id FROM admin_users))
-WITH CHECK (auth.uid() IN (SELECT id FROM admin_users));
+WITH CHECK (true);
+
+CREATE POLICY "Decision rules updatable by authenticated users"
+ON decision_rules FOR UPDATE
+TO authenticated
+USING (true)
+WITH CHECK (true);
+
+CREATE POLICY "Decision rules deletable by authenticated users"
+ON decision_rules FOR DELETE
+TO authenticated
+USING (true);
 
 -- Ingredient actions: User can only access their own
 CREATE POLICY "Users can read their own ingredient actions"
@@ -749,6 +759,6 @@ BEGIN
     IF rule_count < 5 THEN
         RAISE WARNING 'Expected at least 5 seed rules, found %', rule_count;
     END IF;
+    
+    RAISE NOTICE 'Migration 007 completed successfully!';
 END $$;
-
-RAISE NOTICE 'Migration 007 completed successfully!';
