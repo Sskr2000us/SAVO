@@ -75,47 +75,7 @@ class ServingCalculator:
         recipe_servings: int,
         needed_servings: int
     ) -> Dict:
-        """
-
-        def _key(raw_name: str) -> str:
-            name = (raw_name or "").lower().strip()
-            if not name:
-                return ""
-            # Remove common descriptors (align with IngredientNormalizer behavior).
-            descriptors = [
-                "fresh", "frozen", "canned", "dried", "raw", "cooked",
-                "sliced", "diced", "chopped", "minced", "whole",
-                "large", "small", "medium",
-            ]
-            for d in descriptors:
-                name = re.sub(rf"\b{re.escape(d)}\b", "", name).strip()
-            name = name.replace(" ", "_").replace("-", "_")
-            name = re.sub(r"[^a-z0-9_]", "", name)
-            return name
-
-        # Normalize pantry keys once to make matching robust.
-        pantry_norm: Dict[str, Dict] = {}
-        if isinstance(pantry_items, dict):
-            for k, v in pantry_items.items():
-                nk = _key(str(k))
-                if not nk or not isinstance(v, dict):
-                    continue
-                # If duplicates collide, keep the larger available quantity (best-effort).
-                try:
-                    qty = float(v.get("quantity") or 0)
-                except Exception:
-                    qty = 0.0
-                unit = v.get("unit")
-                existing = pantry_norm.get(nk)
-                if not isinstance(existing, dict):
-                    pantry_norm[nk] = {"quantity": qty, "unit": unit}
-                else:
-                    try:
-                        existing_qty = float(existing.get("quantity") or 0)
-                    except Exception:
-                        existing_qty = 0.0
-                    pantry_norm[nk] = {"quantity": max(existing_qty, qty), "unit": existing.get("unit") or unit}
-        Check if pantry has enough ingredients for recipe
+        """Check if pantry has enough ingredients for recipe.
         
         Args:
             pantry_items: Dictionary of available pantry items with quantities
@@ -142,6 +102,43 @@ class ServingCalculator:
             >>> result["missing"][0]["needed"]
             200
         """
+
+        def _key(raw_name: str) -> str:
+            name = (raw_name or "").lower().strip()
+            if not name:
+                return ""
+            descriptors = [
+                "fresh", "frozen", "canned", "dried", "raw", "cooked",
+                "sliced", "diced", "chopped", "minced", "whole",
+                "large", "small", "medium",
+            ]
+            for d in descriptors:
+                name = re.sub(rf"\b{re.escape(d)}\b", "", name).strip()
+            name = name.replace(" ", "_").replace("-", "_")
+            name = re.sub(r"[^a-z0-9_]", "", name)
+            return name
+
+        # Normalize pantry keys once to make matching robust.
+        pantry_norm: Dict[str, Dict] = {}
+        if isinstance(pantry_items, dict):
+            for k, v in pantry_items.items():
+                nk = _key(str(k))
+                if not nk or not isinstance(v, dict):
+                    continue
+                try:
+                    qty = float(v.get("quantity") or 0)
+                except Exception:
+                    qty = 0.0
+                unit = v.get("unit")
+                existing = pantry_norm.get(nk)
+                if not isinstance(existing, dict):
+                    pantry_norm[nk] = {"quantity": qty, "unit": unit}
+                else:
+                    try:
+                        existing_qty = float(existing.get("quantity") or 0)
+                    except Exception:
+                        existing_qty = 0.0
+                    pantry_norm[nk] = {"quantity": max(existing_qty, qty), "unit": existing.get("unit") or unit}
         scaling_factor = needed_servings / recipe_servings
         missing = []
         surplus = []
@@ -214,6 +211,21 @@ class ServingCalculator:
         recipe_ingredients: List[Dict],
         recipe_servings: int
     ) -> int:
+        """Estimate maximum servings possible with current pantry.
+        
+        Args:
+            pantry_items: Available pantry items
+            recipe_ingredients: Recipe ingredients list
+            recipe_servings: Recipe's default servings
+            
+        Returns:
+            Maximum number of servings possible (0 if missing ingredients)
+            
+        Examples:
+            >>> pantry = {"chicken": {"quantity": 600, "unit": "grams"}}
+            >>> recipe = [{"name": "chicken", "quantity": 500, "unit": "grams"}]
+            >>> ServingCalculator.estimate_servings_possible(pantry, recipe, 4)
+            4  # Can make 4 servings (have 600g, need 500g for 4)
         """
 
         def _key(raw_name: str) -> str:
@@ -238,22 +250,6 @@ class ServingCalculator:
                 if not nk or not isinstance(v, dict):
                     continue
                 pantry_norm[nk] = v
-        Estimate maximum servings possible with current pantry
-        
-        Args:
-            pantry_items: Available pantry items
-            recipe_ingredients: Recipe ingredients list
-            recipe_servings: Recipe's default servings
-            
-        Returns:
-            Maximum number of servings possible (0 if missing ingredients)
-            
-        Examples:
-            >>> pantry = {"chicken": {"quantity": 600, "unit": "grams"}}
-            >>> recipe = [{"name": "chicken", "quantity": 500, "unit": "grams"}]
-            >>> ServingCalculator.estimate_servings_possible(pantry, recipe, 4)
-            4  # Can make 4 servings (have 600g, need 500g for 4)
-        """
         max_servings = float('inf')
         
         for ingredient in recipe_ingredients:

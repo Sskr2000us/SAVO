@@ -21,6 +21,36 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   bool _checking = true;
   Map<String, dynamic>? _sufficiency;
 
+  String _stripIngredientDumpSuffix(String input) {
+    var s = (input).trim();
+    if (s.isEmpty) return input;
+
+    // Strip suffix patterns like:
+    //   "Pantry Comfort Meal (Barilla..., Kroger..., ...)"
+    final m = RegExp(r'^(.*)\(([^()]*)\)\s*$').firstMatch(s);
+    if (m == null) return input;
+
+    final base = (m.group(1) ?? '').trim();
+    final inside = (m.group(2) ?? '').trim();
+    if (base.isEmpty || inside.isEmpty) return input;
+
+    final insideLower = inside.toLowerCase();
+    final hasDigits = RegExp(r'\d').hasMatch(inside);
+    final looksLikeMetadata = RegExp(
+      r'\b(min|mins|minute|minutes|serves|serving|servings|prep|cook|kcal|calories)\b',
+      caseSensitive: false,
+    ).hasMatch(insideLower);
+
+    final parts = inside.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    final looksLikeList = inside.contains('_') || parts.length >= 2;
+
+    if (looksLikeList && !hasDigits && !looksLikeMetadata) {
+      return base;
+    }
+
+    return input;
+  }
+
   String _prettyName(String raw) {
     final s = raw
         .replaceAll('_', ' ')
@@ -118,7 +148,7 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     final cs = theme.colorScheme;
 
     final recipe = widget.recipe;
-    final title = _prettyName(recipe.getLocalizedName('en'));
+    final title = _prettyName(_stripIngredientDumpSuffix(recipe.getLocalizedName('en')));
     final secondaryLang = _secondaryLanguageKey(recipe.recipeName);
     final secondaryTitle = secondaryLang != null ? recipe.recipeName[secondaryLang] : null;
 

@@ -66,6 +66,88 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_recipe_title(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    s = s.replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # Strip ingredient-dump suffix patterns like "Dish (A, B, C)".
+    m = re.match(r"^(.*)\(([^()]*)\)\s*$", s)
+    if m:
+        base = (m.group(1) or "").strip()
+        inside = (m.group(2) or "").strip()
+        if base and inside:
+            has_digits = bool(re.search(r"\d", inside))
+            looks_like_metadata = bool(
+                re.search(
+                    r"\b(min|mins|minute|minutes|serves|serving|servings|prep|cook|kcal|calories)\b",
+                    inside,
+                    flags=re.IGNORECASE,
+                )
+            )
+            parts = [p.strip() for p in inside.split(",") if p.strip()]
+            looks_like_list = ("_" in inside) or (len(parts) >= 2)
+            if looks_like_list and (not has_digits) and (not looks_like_metadata):
+                s = base
+
+    return s.strip()
+
+
+def _sanitize_recipe_names_in_payload(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    menus = payload.get("menus")
+    if not isinstance(menus, list):
+        return payload
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            header = str(course.get("course_header") or "Recipe").strip() or "Recipe"
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list):
+                continue
+            for idx, recipe in enumerate(opts):
+                if not isinstance(recipe, dict):
+                    continue
+
+                rn = recipe.get("recipe_name")
+                if isinstance(rn, str):
+                    rn = {"en": rn}
+                if not isinstance(rn, dict):
+                    rn = {}
+
+                cleaned: dict[str, str] = {}
+                for k, v in rn.items():
+                    if not isinstance(k, str):
+                        continue
+                    if not isinstance(v, str):
+                        continue
+                    t = _sanitize_recipe_title(v)
+                    if t:
+                        cleaned[k.strip().lower() or "en"] = t
+
+                # Guarantee an English title.
+                if not cleaned.get("en"):
+                    name_fallback = recipe.get("name") if isinstance(recipe.get("name"), str) else ""
+                    t = _sanitize_recipe_title(name_fallback)
+                    if not t:
+                        t = f"{header} {idx + 1}" if header else f"Recipe {idx + 1}"
+                    cleaned["en"] = t
+
+                recipe["recipe_name"] = cleaned
+
+    return payload
+
+
 def _derive_shopping_suggestions_from_plan_payload(
     payload: Dict[str, Any], *, primary_only: bool = True
 ) -> List[Dict[str, Any]]:
@@ -576,6 +658,14 @@ def _generate_fallback_party_plan(
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
     inv_items = inv_items[:10]
 
+    def _singular(label: str) -> str:
+        s = (label or "").strip()
+        if s.lower().endswith("ies") and len(s) > 3:
+            return s[:-3] + "y"
+        if s.lower().endswith("s") and len(s) > 1:
+            return s[:-1]
+        return s or "Course"
+
     def _display_name(raw: str) -> str:
         s = (raw or "").replace("_", " ")
         s = re.sub(r"\s+", " ", s).strip()
@@ -618,9 +708,21 @@ def _generate_fallback_party_plan(
 
         return (min(qty, max(1.0, qty * 0.5)), unit)
 
-    def _ingredients_used(max_n: int = 6) -> list[dict[str, Any]]:
+    def _ingredients_used(seed: str, max_n: int = 6) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for it in inv_items[:max_n]:
+        if not inv_items:
+            return out
+
+        try:
+            start = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % len(inv_items)
+        except Exception:
+            start = 0
+
+        chosen: list[InventoryItem] = []
+        for i in range(min(max_n, len(inv_items))):
+            chosen.append(inv_items[(start + i) % len(inv_items)])
+
+        for it in chosen:
             amt, unit = _suggest_amount_and_unit(it)
             out.append(
                 {
@@ -639,26 +741,51 @@ def _generate_fallback_party_plan(
             benefits.append({"ingredient": ing, "benefit": "Adds nutrition and balance to the menu."})
         return benefits or [{"ingredient": "pantry staples", "benefit": "Convenient home cooking."}]
 
-    def _recipe(recipe_id: str, name_en: str, total_minutes: int) -> dict[str, Any]:
+    def _recipe(recipe_id: str, course_label: str, option_idx: int, total_minutes: int) -> dict[str, Any]:
         total = max(10, int(total_minutes or 30))
         prep = max(3, int(total * 0.35))
         cook = max(5, total - prep)
         difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
-        ings = _ingredients_used()
+        seed = f"{course_label}:{option_idx}:{recipe_id}"
+        ings = _ingredients_used(seed, max_n=6)
         top_names = [str(x.get("canonical_name")) for x in ings[:3] if x.get("canonical_name")]
         top_phrase = ", ".join([_display_name(n) for n in top_names]) if top_names else "pantry ingredients"
+        primary = _display_name(top_names[0]) if top_names else ""
+
+        course_singular = _singular(course_label)
+        base_name = f"{cuisine}-Style {course_singular}" if cuisine else f"{course_singular}"
+        name_en = f"{base_name} with {primary}" if primary else base_name
+
+        cooking_method = "stovetop"
+        if course_label.lower().startswith("appet"):
+            cooking_method = "no_cook"
+        elif course_label.lower().startswith("dess"):
+            cooking_method = "no_cook"
+        elif course_label.lower().startswith("side"):
+            cooking_method = "stovetop"
+        elif course_label.lower().startswith("main"):
+            cooking_method = "stovetop"
+
+        step2 = "Cook on medium heat; serve warm."
+        if cooking_method == "no_cook":
+            step2 = "Mix, taste, and serve; chill briefly if desired."
+        if course_label.lower().startswith("dess"):
+            step2 = "Assemble and chill; serve cold."
+        if course_label.lower().startswith("side"):
+            step2 = "Season, cook briefly, and serve alongside the main."
+
         return {
             "recipe_id": recipe_id,
             "recipe_name": {"en": f"{name_en}"},
             "cuisine": cuisine,
             "difficulty": difficulty,
             "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},
-            "cooking_method": "stovetop",
+            "cooking_method": cooking_method,
             "ingredients_used": ings,
             "new_ingredients_optional": [],
             "steps": [
                 {"step": 1, "instruction": {"en": f"Prep {top_phrase}."}, "time_minutes": prep, "tips": []},
-                {"step": 2, "instruction": {"en": "Cook on medium heat; serve warm."}, "time_minutes": cook, "tips": []},
+                {"step": 2, "instruction": {"en": step2}, "time_minutes": cook, "tips": []},
             ],
             "nutrition_per_serving": {
                 "calories_kcal": 320,
@@ -693,8 +820,8 @@ def _generate_fallback_party_plan(
             {
                 "course_header": label,
                 "recipe_options": [
-                    _recipe(f"fallback_party_{label.lower()}_1", f"{label} Option 1", 35),
-                    _recipe(f"fallback_party_{label.lower()}_2", f"{label} Option 2", 40),
+                    _recipe(f"fallback_party_{label.lower()}_1", label, 1, 35),
+                    _recipe(f"fallback_party_{label.lower()}_2", label, 2, 40),
                 ],
             }
         )
@@ -2349,6 +2476,9 @@ async def post_daily(
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
 
+    # Clean up recipe titles so UI never shows ingredient dumps in the name.
+    result = _sanitize_recipe_names_in_payload(result)
+
     # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
@@ -2719,6 +2849,13 @@ async def post_party(
         result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
+
+    # Avoid duplicates inside a party menu (e.g., same recipe across courses/options).
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _dedupe_menu_plan_payload(result)
+
+    # Clean up recipe titles so UI never shows ingredient dumps in the name.
+    result = _sanitize_recipe_names_in_payload(result)
 
     # Normalize menu_headers so Pydantic response_model never 500s.
     result = _coerce_menu_headers(result)

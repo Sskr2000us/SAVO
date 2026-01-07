@@ -72,7 +72,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
       final origin = Uri.base.origin;
       final link = origin.isNotEmpty ? '$origin/r/$shareId' : '/r/$shareId';
-      final title = widget.recipe.getLocalizedName('en');
+      final title = _sanitizeRecipeTitle(widget.recipe.getLocalizedName('en'));
       await Share.share('$title\n$link');
     } catch (e) {
       if (mounted) {
@@ -192,6 +192,43 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         .join(' ');
   }
 
+  String _stripIngredientDumpSuffix(String input) {
+    var s = (input).trim();
+    if (s.isEmpty) return input;
+
+    final m = RegExp(r'^(.*)\(([^()]*)\)\s*$').firstMatch(s);
+    if (m == null) return input;
+
+    final base = (m.group(1) ?? '').trim();
+    final inside = (m.group(2) ?? '').trim();
+    if (base.isEmpty || inside.isEmpty) return input;
+
+    final insideLower = inside.toLowerCase();
+    final hasDigits = RegExp(r'\d').hasMatch(inside);
+    final looksLikeMetadata = RegExp(
+      r'\b(min|mins|minute|minutes|serves|serving|servings|prep|cook|kcal|calories)\b',
+      caseSensitive: false,
+    ).hasMatch(insideLower);
+
+    final parts = inside.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    final looksLikeList = inside.contains('_') || parts.length >= 2;
+
+    if (looksLikeList && !hasDigits && !looksLikeMetadata) {
+      return base;
+    }
+    return input;
+  }
+
+  String _sanitizeRecipeTitle(String input) {
+    final cleaned = input
+        .replaceAll('_', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned.isEmpty) return 'Recipe';
+    final stripped = _stripIngredientDumpSuffix(cleaned).trim();
+    return stripped.isEmpty ? 'Recipe' : stripped;
+  }
+
   String _formatAmount(double amount) {
     final rounded = amount.roundToDouble();
     if ((amount - rounded).abs() < 1e-9) {
@@ -213,7 +250,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     final secondaryCode = _secondaryLanguageCode(recipe);
     final showSecondary = _showBilingual && secondaryCode != null && secondaryCode != 'en';
 
-    final nameEn = recipe.getLocalizedName('en').trim();
+    final nameEn = _sanitizeRecipeTitle(recipe.getLocalizedName('en')).trim();
     final nameSecondary = showSecondary ? recipe.getLocalizedName(secondaryCode!).trim() : '';
 
     final buffer = StringBuffer();
@@ -723,7 +760,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.recipe.getLocalizedName('en')),
+        title: Text(_sanitizeRecipeTitle(widget.recipe.getLocalizedName('en'))),
         actions: [
           if (canShare)
             IconButton(
