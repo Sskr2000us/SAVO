@@ -9,8 +9,7 @@ import '../widgets/quantity_picker.dart';
 import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
 import 'barcode_scan_screen.dart';
-import 'realtime_scan_screen_stub.dart'
-    if (dart.library.io) 'realtime_scan_screen.dart';
+import 'scanning/continuous_camera_screen.dart';  // Use new continuous scanning
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -815,15 +814,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
             onSelected: (value) async {
               dynamic result;
               if (value == 'realtime' && !kIsWeb) {
-                result = await Navigator.push<List<String>>(
+                // Use new continuous camera scanning
+                result = await Navigator.push<List<Map<String, dynamic>>>(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const RealtimeScanScreen(),
+                    builder: (_) => const ContinuousCameraScanScreen(),
                   ),
                 );
-                if (result != null && result is List<String>) {
+                if (result != null && result is List) {
+                  // Items are already saved to backend by continuous scanner
+                  // Just reload inventory
                   if (!context.mounted) return;
-                  await _saveRealtimeScanResults(result);
+                  await _loadInventory();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Added ${result.length} items to inventory')),
+                  );
                 }
               } else if (value == 'barcode' && !kIsWeb) {
                 final added = await Navigator.push<bool>(

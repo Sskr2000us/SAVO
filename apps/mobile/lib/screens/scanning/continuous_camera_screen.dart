@@ -22,6 +22,10 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   Timer? _focusCheckTimer;
   List<Map<String, dynamic>> _scannedItems = [];
   String _scanType = 'pantry';
+  bool _showOnboarding = true;  // Show tutorial banner
+  String _currentStep = 'centering';  // centering, analyzing, confirming
+  String _detectedItem = '';
+  String _estimatedQuantity = '';
   
   final ScanningService _scanningService = ScanningService();
 
@@ -99,6 +103,9 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
 
     setState(() {
       _isProcessing = true;
+      _currentStep = 'analyzing';
+      _detectedItem = '';
+      _estimatedQuantity = '';
     });
 
     try {
@@ -117,20 +124,53 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           final ingredient = result['ingredient'];
           final autoSaved = result['auto_saved'] ?? false;
 
+          // Update UI with detected item and quantity
+          setState(() {
+            _detectedItem = ingredient['detected_name'] ?? '';
+            final qty = ingredient['quantity'];
+            final unit = ingredient['unit'] ?? '';
+            _estimatedQuantity = qty != null ? '$qty $unit' : '';
+            _currentStep = 'confirming';
+          });
+
           if (autoSaved) {
             // High confidence - just show success and continue
             _onIngredientConfirmed(ingredient);
-            _showSuccessSnackbar('${ingredient['detected_name']} added!');
+            _showSuccessSnackbar('${ingredient['detected_name']} ($estimatedQuantity) added!');
+            
+            // Dismiss onboarding after first success
+            if (_showOnboarding) {
+              setState(() {
+                _showOnboarding = false;
+              });
+            }
+            
+            // Reset to centering state
+            Future.delayed(const Duration(seconds: 1), () {
+              if (mounted) {
+                setState(() {
+                  _currentStep = 'centering';
+                  _detectedItem = '';
+                  _estimatedQuantity = '';
+                });
+              }
+            });
           } else {
             // Show confirmation modal
             _showQuickConfirmation(ingredient);
           }
         } else {
+          setState(() {
+            _currentStep = 'centering';
+          });
           _showError(result['error'] ?? 'Analysis failed');
         }
       }
     } catch (e) {
       debugPrint('Capture error: $e');
+      setState(() {
+        _currentStep = 'centering';
+      });
       _showError('Failed to scan item: $e');
     } finally {
       if (mounted) {
@@ -158,7 +198,25 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
         onConfirm: (confirmedData) {
           Navigator.pop(context);
           _onIngredientConfirmed(confirmedData);
-          _showSuccessSnackbar('${confirmedData['name']} added!');
+          
+          final qty = confirmedData['quantity'];
+          final unit = confirmedData['unit'] ?? '';
+          final qtyStr = qty != null ? ' ($qty $unit)' : '';
+          _showSuccessSnackbar('${confirmedData['name']}$qtyStr added!');
+          
+          // Dismiss onboarding after first success
+          if (_showOnboarding) {
+            setState(() {
+              _showOnboarding = false;
+            });
+          }
+          
+          // Reset to centering state
+          setState(() {
+            _currentStep = 'centering';
+            _detectedItem = '';
+            _estimatedQuantity = '';
+          });
           
           // Resume auto-capture
           if (_autoCapture && mounted) {
@@ -168,6 +226,13 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
         onReject: () {
           Navigator.pop(context);
           _showError('Item rejected');
+          
+          // Reset to centering state
+          setState(() {
+            _currentStep = 'centering';
+            _detectedItem = '';
+            _estimatedQuantity = '';
+          });
           
           // Resume auto-capture
           if (_autoCapture && mounted) {
@@ -208,6 +273,49 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     );
   }
 
+  Color _getStatusColor() {
+    switch (_currentStep) {
+      case 'centering':
+        return const Color(0xFF4CAF50);  // Green
+      case 'analyzing':
+        return const Color(0xFFFF9800);  // Orange
+      case 'confirming':
+        return const Color(0xFF2196F3);  // Blue
+      default:
+        return Colors.grey;
+    }
+  }
+
+  IconData _getStatusIcon() {
+    switch (_currentStep) {
+      case 'centering':
+        return Icons.center_focus_strong;
+      case 'analyzing':
+        return Icons.search;
+      case 'confirming':
+        return Icons.check_circle_outline;
+      default:
+        return Icons.camera_alt;
+    }
+  }
+
+  String _getStatusText() {
+    switch (_currentStep) {
+      case 'centering':
+        return _autoCapture 
+            ? 'Center item in frame (auto-capture in 3s)'
+            : 'Center item & tap Capture';
+      case 'analyzing':
+        return 'Analyzing item...';
+      case 'confirming':
+        return _detectedItem.isNotEmpty
+            ? '$_detectedItem${_estimatedQuantity.isNotEmpty ? " • $_estimatedQuantity" : ""}'
+            : 'Processing...';
+      default:
+        return 'Ready to scan';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -228,6 +336,71 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                // Onboarding banner
+                if (_showOnboarding)
+                  Container(
+                    color: const Color(0xFF2196F3),
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: Colors.white, size: 24),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'How to scan:',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                '1. Center item in frame\n2. Wait 3 sec (auto) or tap Capture\n3. Confirm quantity & save',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _showOnboarding = false;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                
+                // Status bar showing current step
+                Container(
+                  color: _getStatusColor(),
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(_getStatusIcon(), color: Colors.white, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        _getStatusText(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
                 // Camera preview
                 Expanded(
                   child: Stack(
@@ -240,35 +413,68 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                         child: CameraPreview(_cameraController!),
                       ),
                       
-                      // Crosshair guide
+                      // Crosshair guide with dynamic feedback
                       Center(
                         child: Container(
-                          width: 200,
-                          height: 200,
+                          width: 220,
+                          height: 220,
                           decoration: BoxDecoration(
                             border: Border.all(
-                              color: _isProcessing ? Colors.orange : Colors.white,
-                              width: 2,
+                              color: _getStatusColor(),
+                              width: 3,
                             ),
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
-                                _isProcessing ? Icons.hourglass_empty : Icons.center_focus_strong,
-                                color: Colors.white,
-                                size: 48,
+                                _getStatusIcon(),
+                                color: _getStatusColor(),
+                                size: 56,
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _isProcessing ? 'Analyzing...' : 'Center item here',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  backgroundColor: Colors.black54,
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black87,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  _currentStep == 'centering' 
+                                      ? 'Center item here'
+                                      : _currentStep == 'analyzing'
+                                          ? 'Analyzing...'
+                                          : _detectedItem.isNotEmpty
+                                              ? _detectedItem
+                                              : 'Processing',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  textAlign: TextAlign.center,
                                 ),
                               ),
+                              if (_estimatedQuantity.isNotEmpty && _currentStep == 'confirming')
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green[700],
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      _estimatedQuantity,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
