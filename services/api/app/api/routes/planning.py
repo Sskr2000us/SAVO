@@ -519,13 +519,13 @@ def _generate_fallback_recipes(
     # Always return at least 2 recipe_options (schema minItems=2).
     r1 = _recipe(
         "fallback_pantry_meal_1",
-        f"Pantry Comfort Meal ({top_phrase})",
+        "Pantry Comfort Meal",
         total_minutes=min(int(time_available or 30), 45),
         cooking_method="stovetop",
     )
     r2 = _recipe(
         "fallback_pantry_meal_2",
-        f"Quick Pantry Stir-Fry ({top_phrase})",
+        "Quick Pantry Stir-Fry",
         total_minutes=min(int(time_available or 25), 35),
         cooking_method="stovetop",
     )
@@ -649,7 +649,7 @@ def _generate_fallback_party_plan(
         top_phrase = ", ".join([_display_name(n) for n in top_names]) if top_names else "pantry ingredients"
         return {
             "recipe_id": recipe_id,
-            "recipe_name": {"en": f"{name_en} ({top_phrase})"},
+            "recipe_name": {"en": f"{name_en}"},
             "cuisine": cuisine,
             "difficulty": difficulty,
             "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},

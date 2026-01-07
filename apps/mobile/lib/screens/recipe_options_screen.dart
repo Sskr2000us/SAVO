@@ -16,6 +16,27 @@ class RecipeOptionsScreen extends StatefulWidget {
 class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   bool _timerStarted = false;
 
+  String _prettyName(String raw) {
+    final s = raw
+        .replaceAll('_', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (s.isEmpty) return raw;
+
+    // If the title has a long ingredient list in parentheses, drop it.
+    final m = RegExp(r'^(.*)\(([^)]*)\)\s*$').firstMatch(s);
+    if (m != null) {
+      final head = (m.group(1) ?? '').trim();
+      final inside = (m.group(2) ?? '').trim();
+      final looksLikeIngredientList = inside.contains(',') && (inside.contains('_') || inside.length > 24);
+      if (head.isNotEmpty && looksLikeIngredientList) {
+        return head;
+      }
+    }
+
+    return s;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -59,7 +80,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
               separatorBuilder: (_, __) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 final recipe = options[index];
-                final title = recipe.getLocalizedName('en');
+                final title = _prettyName(recipe.getLocalizedName('en'));
                 final why = _whyItWorks(recipe);
                 final imageUrl = _imageUrl(recipe);
 
@@ -163,7 +184,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
 
   String _whyItWorks(Recipe recipe) {
     final ingredients = recipe.ingredientsUsed
-        .map((i) => i.canonicalName.trim())
+        .map((i) => i.canonicalName.replaceAll('_', ' ').trim())
         .where((s) => s.isNotEmpty)
         .toList();
 
