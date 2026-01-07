@@ -68,30 +68,57 @@ CREATE TABLE IF NOT EXISTS public.product_barcodes (
     upc_ean TEXT PRIMARY KEY
 );
 
--- Add columns one by one to handle existing tables
-ALTER TABLE public.product_barcodes 
-ADD COLUMN IF NOT EXISTS ingredient_id UUID REFERENCES public.master_ingredients(id) ON DELETE SET NULL,
-ADD COLUMN IF NOT EXISTS product_name TEXT,
-ADD COLUMN IF NOT EXISTS brand TEXT,
-ADD COLUMN IF NOT EXISTS manufacturer TEXT,
-ADD COLUMN IF NOT EXISTS country_code TEXT,
-ADD COLUMN IF NOT EXISTS quantity_value NUMERIC,
-ADD COLUMN IF NOT EXISTS quantity_unit TEXT,
-ADD COLUMN IF NOT EXISTS package_type TEXT,
-ADD COLUMN IF NOT EXISTS expiry_date_format TEXT,
-ADD COLUMN IF NOT EXISTS nutrition_facts JSONB,
-ADD COLUMN IF NOT EXISTS data_source TEXT DEFAULT 'openfoodfacts',
-ADD COLUMN IF NOT EXISTS external_id TEXT,
-ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2) DEFAULT 0.95,
-ADD COLUMN IF NOT EXISTS image_url TEXT,
-ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ,
-ADD COLUMN IF NOT EXISTS scan_count INTEGER DEFAULT 0,
-ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
-ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+-- Add columns WITHOUT foreign keys first
+DO $$ 
+BEGIN
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS ingredient_id UUID;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS product_name TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS brand TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS manufacturer TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS country_code TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS quantity_value NUMERIC;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS quantity_unit TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS package_type TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS expiry_date_format TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS nutrition_facts JSONB;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS data_source TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2);
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS image_url TEXT;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS scan_count INTEGER;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+    ALTER TABLE public.product_barcodes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+END $$;
+
+-- Set defaults
+ALTER TABLE public.product_barcodes ALTER COLUMN data_source SET DEFAULT 'openfoodfacts';
+ALTER TABLE public.product_barcodes ALTER COLUMN confidence SET DEFAULT 0.95;
+ALTER TABLE public.product_barcodes ALTER COLUMN scan_count SET DEFAULT 0;
+ALTER TABLE public.product_barcodes ALTER COLUMN created_at SET DEFAULT NOW();
+ALTER TABLE public.product_barcodes ALTER COLUMN updated_at SET DEFAULT NOW();
+
+-- Add foreign key constraint if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'product_barcodes_ingredient_id_fkey'
+    ) THEN
+        ALTER TABLE public.product_barcodes 
+        ADD CONSTRAINT product_barcodes_ingredient_id_fkey 
+        FOREIGN KEY (ingredient_id) REFERENCES public.master_ingredients(id) ON DELETE SET NULL;
+    END IF;
+END $$;
 
 -- Update product_name to NOT NULL only if it's NULL
 UPDATE public.product_barcodes SET product_name = 'Unknown' WHERE product_name IS NULL;
-ALTER TABLE public.product_barcodes ALTER COLUMN product_name SET NOT NULL;
+DO $$
+BEGIN
+    ALTER TABLE public.product_barcodes ALTER COLUMN product_name SET NOT NULL;
+EXCEPTION
+    WHEN others THEN NULL; -- Ignore if already NOT NULL
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_product_barcodes_ingredient ON public.product_barcodes(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_product_barcodes_country ON public.product_barcodes(country_code);
@@ -255,28 +282,59 @@ CREATE TABLE IF NOT EXISTS public.barcode_scans (
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE
 );
 
--- Add columns incrementally
-ALTER TABLE public.barcode_scans
-ADD COLUMN IF NOT EXISTS barcode TEXT,
-ADD COLUMN IF NOT EXISTS barcode_type TEXT,
-ADD COLUMN IF NOT EXISTS product_barcode TEXT REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL,
-ADD COLUMN IF NOT EXISTS product_name TEXT,
-ADD COLUMN IF NOT EXISTS brand TEXT,
-ADD COLUMN IF NOT EXISTS quantity_value NUMERIC,
-ADD COLUMN IF NOT EXISTS quantity_unit TEXT,
-ADD COLUMN IF NOT EXISTS expiry_date DATE,
-ADD COLUMN IF NOT EXISTS expiry_date_raw TEXT,
-ADD COLUMN IF NOT EXISTS image_url TEXT,
-ADD COLUMN IF NOT EXISTS package_image_url TEXT,
-ADD COLUMN IF NOT EXISTS added_to_inventory BOOLEAN DEFAULT false,
-ADD COLUMN IF NOT EXISTS inventory_item_id UUID REFERENCES public.inventory_items(id) ON DELETE SET NULL,
-ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2),
-ADD COLUMN IF NOT EXISTS data_source TEXT,
-ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+-- Add columns without foreign keys
+DO $$
+BEGIN
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS barcode TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS barcode_type TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS product_barcode TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS product_name TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS brand TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS quantity_value NUMERIC;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS quantity_unit TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS expiry_date DATE;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS expiry_date_raw TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS image_url TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS package_image_url TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS added_to_inventory BOOLEAN;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS inventory_item_id UUID;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2);
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS data_source TEXT;
+    ALTER TABLE public.barcode_scans ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+END $$;
+
+-- Set defaults
+ALTER TABLE public.barcode_scans ALTER COLUMN added_to_inventory SET DEFAULT false;
+ALTER TABLE public.barcode_scans ALTER COLUMN created_at SET DEFAULT NOW();
+
+-- Add foreign key constraints
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'barcode_scans_product_barcode_fkey'
+    ) THEN
+        ALTER TABLE public.barcode_scans 
+        ADD CONSTRAINT barcode_scans_product_barcode_fkey 
+        FOREIGN KEY (product_barcode) REFERENCES public.product_barcodes(upc_ean) ON DELETE SET NULL;
+    END IF;
+    
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'barcode_scans_inventory_item_id_fkey'
+    ) THEN
+        ALTER TABLE public.barcode_scans 
+        ADD CONSTRAINT barcode_scans_inventory_item_id_fkey 
+        FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE SET NULL;
+    END IF;
+END $$;
 
 -- Set barcode NOT NULL if possible
 UPDATE public.barcode_scans SET barcode = 'unknown' WHERE barcode IS NULL;
-ALTER TABLE public.barcode_scans ALTER COLUMN barcode SET NOT NULL;
+DO $$
+BEGIN
+    ALTER TABLE public.barcode_scans ALTER COLUMN barcode SET NOT NULL;
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_barcode_scans_user ON public.barcode_scans(user_id);
 CREATE INDEX IF NOT EXISTS idx_barcode_scans_barcode ON public.barcode_scans(barcode);
