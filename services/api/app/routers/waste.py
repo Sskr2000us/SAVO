@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import asyncpg
 
-from ..database import get_db_connection
+from ..core.database import get_db_connection
 from ..services.waste_prevention_service import WastePreventionService
 
 router = APIRouter(prefix="/api/waste", tags=["waste"])

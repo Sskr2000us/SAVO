@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import asyncpg
 
-from ..database import get_db_connection
+from ..core.database import get_db_connection
 from ..services.regional_intelligence_service import RegionalIntelligenceService
 
 router = APIRouter(prefix="/api/regional", tags=["regional"])
