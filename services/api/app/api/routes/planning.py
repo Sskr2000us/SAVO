@@ -288,203 +288,147 @@ def _generate_fallback_recipes(
     EMERGENCY FALLBACK: Generate simple, safe recipes when LLM fails.
     Uses inventory to suggest practical recipes that users can actually cook.
     """
-    import random
     from datetime import datetime
-    
-    # Detect cuisine from household preferences or default to Indian
+
+    # Pick a display cuisine (best-effort) but keep schema fields correct.
     cuisine = "Indian"
     favs = household.get("favorite_cuisines") or household.get("favoriteCuisines") or []
-    if isinstance(favs, list) and favs:
-        cuisine = favs[0] if isinstance(favs[0], str) else "Indian"
-    
-    # Analyze inventory for common ingredients
-    has_rice = any("rice" in (item.canonical_name or "").lower() for item in inventory)
-    has_dal = any(any(x in (item.canonical_name or "").lower() for x in ["lentil", "dal", "toor", "moong"]) for item in inventory)
-    has_veggies = any(any(x in (item.canonical_name or "").lower() for x in ["tomato", "onion", "potato", "carrot"]) for item in inventory)
-    has_paneer = any("paneer" in (item.canonical_name or "").lower() for item in inventory)
-    has_chicken = any("chicken" in (item.canonical_name or "").lower() for item in inventory)
-    
-    # Check dietary restrictions
+    if isinstance(favs, list) and favs and isinstance(favs[0], str) and favs[0].strip():
+        cuisine = favs[0].strip()
+
+    # Dietary flags (very conservative defaults).
     is_vegetarian = any("vegetarian" in str(m.get("dietary_restrictions", [])).lower() for m in members)
     is_vegan = any("vegan" in str(m.get("dietary_restrictions", [])).lower() for m in members)
-    
-    # Generate simple fallback recipes based on what's available
-    recipes = []
-    
-    # Recipe 1: Dal Rice (if ingredients available)
-    if has_dal and has_rice:
-        recipes.append({
-            "recipe_id": "fallback_dal_rice",
-            "recipe_name": {"en": "Dal Rice", "hi": "दाल चावल"},
+    if is_vegan:
+        is_vegetarian = True
+
+    inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
+    inv_items = inv_items[:8]
+
+    def _ingredients_used(max_n: int = 6) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for it in inv_items[:max_n]:
+            out.append(
+                {
+                    "inventory_id": str(getattr(it, "inventory_id")),
+                    "canonical_name": str(getattr(it, "canonical_name")),
+                    "amount": float(getattr(it, "quantity", 1) or 1),
+                    "unit": str(getattr(it, "unit", "pcs")),
+                }
+            )
+        return out
+
+    def _health_benefits(ings: list[dict[str, Any]]) -> list[dict[str, str]]:
+        # Schema requires objects: {ingredient, benefit}
+        benefits: list[dict[str, str]] = []
+        for it in ings[:3]:
+            ing = str(it.get("canonical_name") or "ingredient")
+            benefits.append({"ingredient": ing, "benefit": "Supports a balanced meal."})
+        if not benefits:
+            benefits.append({"ingredient": "pantry staples", "benefit": "Convenient home cooking."})
+        return benefits
+
+    def _recipe(
+        recipe_id: str,
+        name_en: str,
+        *,
+        total_minutes: int,
+        cooking_method: str,
+        agent_mode: str = "beginner_coach",
+    ) -> dict[str, Any]:
+        total = max(10, int(total_minutes or 30))
+        prep = max(3, int(total * 0.35))
+        cook = max(5, total - prep)
+        difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
+        ings = _ingredients_used()
+        return {
+            "recipe_id": recipe_id,
+            "recipe_name": {"en": name_en},
             "cuisine": cuisine,
-            "cooking_method": "stovetop",
-            "difficulty_level": 1,
-            "estimated_time_minutes": 30,
-            "servings": servings,
-            "ingredients": [
-                {"name": "Lentils (Dal)", "amount": servings * 0.5, "unit": "cup", "in_inventory": True},
-                {"name": "Rice", "amount": servings * 0.75, "unit": "cup", "in_inventory": True},
-                {"name": "Salt", "amount": 1, "unit": "tsp", "in_inventory": False},
-                {"name": "Oil", "amount": 2, "unit": "tbsp", "in_inventory": False},
-            ],
+            "difficulty": difficulty,
+            "estimated_times": {"prep_minutes": prep, "cook_minutes": cook, "total_minutes": total},
+            "cooking_method": cooking_method,
+            "ingredients_used": ings,
+            "new_ingredients_optional": [],
             "steps": [
-                {"step_number": 1, "instruction": {"en": "Pressure cook lentils with water and salt for 15 minutes"}, "tips": []},
-                {"step_number": 2, "instruction": {"en": "Cook rice separately in rice cooker or pot"}, "tips": []},
-                {"step_number": 3, "instruction": {"en": "Serve dal over rice with a drizzle of oil"}, "tips": []},
+                {
+                    "step": 1,
+                    "instruction": {"en": "Prep ingredients from your pantry (wash/chop as needed)."},
+                    "time_minutes": prep,
+                    "tips": [],
+                },
+                {
+                    "step": 2,
+                    "instruction": {"en": "Cook on medium heat, season to taste, and serve hot."},
+                    "time_minutes": cook,
+                    "tips": [],
+                },
             ],
-            "nutrition_estimate": {"calories_per_serving": 350, "protein_g": 15, "carbs_g": 65, "fat_g": 5},
-            "health_benefits": ["High in protein", "Complete meal", "Easy to digest"],
-            "chef_tips": ["Add turmeric for color", "Tempering with cumin enhances flavor"],
-            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
-            "dietary_information": {
-                "vegetarian": True,
-                "vegan": True,
-                "gluten_free": True,
-                "allergens": [],
-                "religious_compatibility": ["Hindu", "Jain", "Buddhist"]
+            "nutrition_per_serving": {
+                "calories_kcal": 350,
+                "macros": {"protein_g": 15, "carbs_g": 45, "fat_g": 12},
+                "micros": {"fiber_g": 6, "sodium_mg": 600, "sugar_g": 6},
             },
-            "youtube_references": [],
-            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
-            "leftover_forecast": {"reuse_ideas": []},
-        })
-    
-    # Recipe 2: Veggie Stir Fry (if veggies available)
-    if has_veggies:
-        recipes.append({
-            "recipe_id": "fallback_veggie_stirfry",
-            "recipe_name": {"en": "Mixed Vegetable Stir Fry", "hi": "सब्जी"},
-            "cuisine": cuisine,
-            "cooking_method": "stovetop",
-            "difficulty_level": 1,
-            "estimated_time_minutes": 20,
-            "servings": servings,
-            "ingredients": [
-                {"name": "Mixed Vegetables", "amount": servings * 1.5, "unit": "cup", "in_inventory": True},
-                {"name": "Oil", "amount": 2, "unit": "tbsp", "in_inventory": False},
-                {"name": "Salt", "amount": 1, "unit": "tsp", "in_inventory": False},
-                {"name": "Spices", "amount": 1, "unit": "tsp", "in_inventory": False},
-            ],
-            "steps": [
-                {"step_number": 1, "instruction": {"en": "Chop all vegetables into bite-sized pieces"}, "tips": []},
-                {"step_number": 2, "instruction": {"en": "Heat oil in pan and add vegetables"}, "tips": []},
-                {"step_number": 3, "instruction": {"en": "Stir fry for 10-15 minutes until tender"}, "tips": []},
-            ],
-            "nutrition_estimate": {"calories_per_serving": 180, "protein_g": 5, "carbs_g": 25, "fat_g": 8},
-            "health_benefits": ["Rich in vitamins", "Low calorie", "High fiber"],
-            "chef_tips": ["Don't overcook vegetables", "Add garlic for extra flavor"],
-            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
-            "dietary_information": {
-                "vegetarian": True,
-                "vegan": True,
-                "gluten_free": True,
-                "allergens": [],
-                "religious_compatibility": ["Hindu", "Jain", "Buddhist"]
+            "health_benefits": _health_benefits(ings),
+            "health_fit": {"flags": [], "adjustments": []},
+            "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+            "preservation_guidance": {
+                "storage": "refrigerate",
+                "safe_duration_hours": 24,
+                "reheat_methods": ["stovetop", "microwave"],
+                "quality_notes": "Best enjoyed fresh; refrigerate leftovers promptly.",
             },
-            "youtube_references": [],
-            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
-            "leftover_forecast": {"reuse_ideas": []},
-        })
-    
-    # Recipe 3: Paneer dish (if available and not vegan)
-    if has_paneer and not is_vegan:
-        recipes.append({
-            "recipe_id": "fallback_paneer",
-            "recipe_name": {"en": "Simple Paneer Curry", "hi": "पनीर करी"},
-            "cuisine": cuisine,
-            "cooking_method": "stovetop",
-            "difficulty_level": 2,
-            "estimated_time_minutes": 25,
-            "servings": servings,
-            "ingredients": [
-                {"name": "Paneer", "amount": servings * 100, "unit": "g", "in_inventory": True},
-                {"name": "Tomato", "amount": servings * 2, "unit": "pcs", "in_inventory": has_veggies},
-                {"name": "Onion", "amount": servings, "unit": "pcs", "in_inventory": has_veggies},
-                {"name": "Spices", "amount": 2, "unit": "tsp", "in_inventory": False},
-            ],
-            "steps": [
-                {"step_number": 1, "instruction": {"en": "Cube paneer and sauté until golden"}, "tips": []},
-                {"step_number": 2, "instruction": {"en": "Make gravy with tomatoes and onions"}, "tips": []},
-                {"step_number": 3, "instruction": {"en": "Add paneer to gravy and simmer"}, "tips": []},
-            ],
-            "nutrition_estimate": {"calories_per_serving": 280, "protein_g": 18, "carbs_g": 15, "fat_g": 18},
-            "health_benefits": ["High protein", "Good calcium source"],
-            "chef_tips": ["Don't overcook paneer", "Add cream for richness"],
-            "cultural_context": {"origin": "India", "occasions": ["Daily meals"], "serving_style": "Family style"},
+            "chef_tips": ["Taste and adjust salt/spice at the end.", "Use medium heat to avoid burning."],
+            "cultural_context": {"origin": cuisine, "occasions": "Everyday meal", "serving": "Family style"},
             "dietary_information": {
-                "vegetarian": True,
-                "vegan": False,
-                "gluten_free": True,
-                "allergens": ["dairy"],
-                "religious_compatibility": ["Hindu"]
-            },
-            "youtube_references": [],
-            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
-            "leftover_forecast": {"reuse_ideas": []},
-        })
-    
-    # If no recipes generated, create a generic one
-    if not recipes:
-        recipes.append({
-            "recipe_id": "fallback_generic",
-            "recipe_name": {"en": "Simple Home Meal"},
-            "cuisine": cuisine,
-            "cooking_method": "stovetop",
-            "difficulty_level": 1,
-            "estimated_time_minutes": 30,
-            "servings": servings,
-            "ingredients": [
-                {"name": "Available Ingredients", "amount": 1, "unit": "serving", "in_inventory": True},
-            ],
-            "steps": [
-                {"step_number": 1, "instruction": {"en": "Use your available ingredients creatively"}, "tips": []},
-                {"step_number": 2, "instruction": {"en": "Cook with basic seasonings"}, "tips": []},
-            ],
-            "nutrition_estimate": {"calories_per_serving": 300, "protein_g": 10, "carbs_g": 40, "fat_g": 10},
-            "health_benefits": ["Home cooked", "Fresh ingredients"],
-            "chef_tips": ["Cook with love", "Adjust to taste"],
-            "cultural_context": {"origin": cuisine, "occasions": ["Daily"], "serving_style": "Family"},
-            "dietary_information": {
-                "vegetarian": True,
-                "vegan": False,
+                "vegetarian": bool(is_vegetarian or is_vegan),
+                "vegan": bool(is_vegan),
                 "gluten_free": False,
                 "allergens": [],
-                "religious_compatibility": []
+                "religious_compatibility": [],
             },
             "youtube_references": [],
-            "health_fit": {"eligibility": "recommended", "flags": [], "adjustments": []},
-            "leftover_forecast": {"reuse_ideas": []},
-        })
-    
-    # Build the response in MenuPlanResponse format
+            "agent_mode": agent_mode,
+        }
+
+    # Always return at least 2 recipe_options (schema minItems=2).
+    r1 = _recipe(
+        "fallback_pantry_meal_1",
+        "Pantry Comfort Meal",
+        total_minutes=min(int(time_available or 30), 45),
+        cooking_method="stovetop",
+    )
+    r2 = _recipe(
+        "fallback_pantry_meal_2",
+        "Quick Pantry Stir-Fry",
+        total_minutes=min(int(time_available or 25), 35),
+        cooking_method="stovetop",
+    )
+
     return {
         "status": "ok",
         "selected_cuisine": cuisine,
-        "menu_headers": [f"{(meal_type or 'dinner').title()} (serves {servings})"],
-        "menus": [{
-            "menu_type": "daily",
-            "meal_type": meal_type or "dinner",
-            "courses": [{
-                "course_header": "Main Course",
-                "course_type": "main",
-                "recipe_options": recipes[:3]  # Max 3 options
-            }]
-        }],
-        "variety_log": {
-            "rules_applied": ["fallback_mode"],
-            "excluded_recent": [],
-            "diversity_scores": {}
-        },
-        "nutrition_summary": {
-            "total_calories_kcal": sum(r.get("nutrition_estimate", {}).get("calories_per_serving", 0) for r in recipes) / len(recipes) if recipes else 300,
-            "per_member_estimates": [],
-            "warnings": ["Generated using fallback mode - LLM unavailable"]
-        },
+        "planning_window": None,
+        "menu_headers": [str((meal_type or "dinner")).title()],
+        "menus": [
+            {
+                "menu_type": "daily",
+                "day_index": None,
+                "date": None,
+                "servings": {"count": servings, "scaling_factor": 1},
+                "courses": [{"course_header": "Main", "recipe_options": [r1, r2]}],
+            }
+        ],
+        "variety_log": {"rules_applied": ["fallback_mode"]},
+        "nutrition_summary": {"total_calories_kcal": 700, "warnings": ["Fallback mode: simplified recipes."]},
         "waste_summary": {
             "expiring_items_used": [],
-            "waste_reduction_score": 0.5,
-            "waste_avoided_value_estimate": {"currency": "USD", "value": 0}
+            "waste_reduction_score": 0.0,
+            "waste_avoided_value_estimate": {"currency": "USD", "value": 0.0},
         },
         "shopping_suggestions": [],
+        "needs_clarification_questions": [],
+        "error_message": None,
         "_generated_at": datetime.utcnow().isoformat(),
         "_fallback_mode": True,
     }
@@ -1887,6 +1831,11 @@ async def post_daily(
         if isinstance(existing, dict):
             existing_payload = existing.get("recipes")
             if isinstance(existing_payload, dict) and existing_payload.get("status") == "ok":
+                # Do not reuse previously-saved fallback payloads; they may be a degraded
+                # structure from an earlier build and can break strict clients.
+                if existing_payload.get("_fallback_mode") is True:
+                    existing_payload = None
+
                 existing_hash = existing_payload.get("_inventory_hash")
                 if isinstance(existing_hash, str) and existing_hash and existing_hash != inventory_hash:
                     existing_payload = None
