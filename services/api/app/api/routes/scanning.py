@@ -806,6 +806,207 @@ async def confirm_ingredients(
         raise HTTPException(status_code=500, detail=f"Confirmation failed: {str(e)}")
 
 
+@router.post("/single-item")
+async def scan_single_item(
+    image: UploadFile = File(..., description="Image file (JPEG/PNG)"),
+    scan_type: str = Form(default="pantry"),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Optimized endpoint for continuous single-item scanning
+    
+    - Faster analysis (targets ONE ingredient)
+    - Returns single best match
+    - Auto-saves if confidence > 85%
+    - Perfect for continuous scanning workflow
+    """
+    try:
+        # Validate image
+        if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG or PNG.")
+        
+        image_data = await image.read()
+        if len(image_data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
+        
+        # Get user profile for context
+        try:
+            profile = await get_full_profile(user_id)
+        except Exception:
+            profile = None
+        
+        # Analyze with optimized single-item method
+        vision_client = get_vision_client()
+        result = await vision_client.analyze_single_item(
+            image_data=image_data,
+            scan_type=scan_type,
+            user_preferences=profile
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=f"Analysis failed: {result.get('error')}")
+        
+        ingredient = result["ingredient"]
+        confidence = ingredient["confidence"]
+        
+        # Auto-save high-confidence items
+        auto_saved = False
+        if confidence >= 0.85:
+            try:
+                db = get_db_client()
+                normalizer = get_normalizer()
+                
+                canonical_name = normalizer.normalize_name(ingredient["detected_name"])
+                storage_location = _scan_type_to_storage_location(scan_type)
+                now_iso = datetime.utcnow().isoformat()
+                
+                # Upsert to inventory
+                existing = (
+                    db.table("inventory_items")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .eq("canonical_name", canonical_name)
+                    .eq("storage_location", storage_location)
+                    .eq("item_state", "raw")
+                    .eq("is_current", True)
+                    .limit(1)
+                    .execute()
+                )
+                
+                quantity = ingredient.get("quantity") or 1.0
+                unit = _normalize_unit(ingredient.get("unit") or "pieces")
+                
+                if existing.data:
+                    # Update existing
+                    item = existing.data[0]
+                    new_qty = float(item.get("quantity", 0)) + float(quantity)
+                    db.table("inventory_items").update({
+                        "quantity": new_qty,
+                        "unit": unit,
+                        "scan_confidence": float(confidence),
+                        "last_seen_at": now_iso
+                    }).eq("id", item["id"]).execute()
+                else:
+                    # Insert new
+                    db.table("inventory_items").insert({
+                        "user_id": user_id,
+                        "canonical_name": canonical_name,
+                        "display_name": _titleize(ingredient["detected_name"]),
+                        "quantity": quantity,
+                        "unit": unit,
+                        "storage_location": storage_location,
+                        "item_state": "raw",
+                        "source": "scan",
+                        "scan_confidence": float(confidence),
+                        "is_current": True,
+                        "last_seen_at": now_iso
+                    }).execute()
+                
+                auto_saved = True
+            except Exception as e:
+                logger.warning(f"Auto-save failed: {e}")
+        
+        return {
+            "success": True,
+            "ingredient": ingredient,
+            "metadata": result["metadata"],
+            "auto_saved": auto_saved,
+            "requires_confirmation": confidence < 0.85,
+            "message": f"{'Auto-added' if auto_saved else 'Detected'}: {ingredient['detected_name']}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Single-item scan failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
+
+
+@router.post("/confirm-single")
+async def confirm_single_ingredient(
+    ingredient_name: str = Form(...),
+    quantity: float = Form(...),
+    unit: str = Form(...),
+    scan_type: str = Form(default="pantry"),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Confirm single ingredient immediately (fire-and-forget)
+    
+    - No scan_id needed
+    - Instant confirmation
+    - Returns immediately for next scan
+    """
+    try:
+        db = get_db_client()
+        normalizer = get_normalizer()
+        
+        canonical_name = normalizer.normalize_name(ingredient_name)
+        storage_location = _scan_type_to_storage_location(scan_type)
+        normalized_unit = _normalize_unit(unit)
+        now_iso = datetime.utcnow().isoformat()
+        
+        # Upsert to inventory
+        existing = (
+            db.table("inventory_items")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("canonical_name", canonical_name)
+            .eq("storage_location", storage_location)
+            .eq("item_state", "raw")
+            .eq("is_current", True)
+            .limit(1)
+            .execute()
+        )
+        
+        if existing.data:
+            # Update existing
+            item = existing.data[0]
+            
+            from app.core.unit_converter import UnitConverter
+            existing_qty = float(item.get("quantity", 0))
+            existing_unit = _normalize_unit(item.get("unit", "pieces"))
+            
+            if normalized_unit == existing_unit:
+                new_qty = existing_qty + quantity
+            elif UnitConverter.can_convert(normalized_unit, existing_unit):
+                converted = UnitConverter.convert(quantity, normalized_unit, existing_unit)
+                new_qty = existing_qty + float(converted)
+                normalized_unit = existing_unit
+            else:
+                new_qty = quantity
+            
+            db.table("inventory_items").update({
+                "quantity": new_qty,
+                "unit": normalized_unit,
+                "last_seen_at": now_iso
+            }).eq("id", item["id"]).execute()
+        else:
+            # Insert new
+            db.table("inventory_items").insert({
+                "user_id": user_id,
+                "canonical_name": canonical_name,
+                "display_name": _titleize(ingredient_name),
+                "quantity": quantity,
+                "unit": normalized_unit,
+                "storage_location": storage_location,
+                "item_state": "raw",
+                "source": "scan",
+                "scan_confidence": 1.0,  # User confirmed
+                "is_current": True,
+                "last_seen_at": now_iso
+            }).execute()
+        
+        return {
+            "success": True,
+            "message": f"{ingredient_name} added to {storage_location}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Single ingredient confirmation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Confirmation failed: {str(e)}")
+
+
 @router.post("/scan-receipt", response_model=ScanReceiptResponse)
 async def scan_receipt(
     image: UploadFile = File(..., description="Receipt image file (JPEG/PNG)"),

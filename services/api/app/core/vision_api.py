@@ -568,6 +568,123 @@ RESPONSE FORMAT (JSON):
             return "medium"
         else:
             return "low"
+    
+    async def analyze_single_item(
+        self,
+        image_data: bytes,
+        scan_type: str = "pantry",
+        user_preferences: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Analyze image containing a SINGLE ingredient (optimized for continuous scanning)
+        
+        Args:
+            image_data: Raw image bytes
+            scan_type: "pantry", "fridge", etc.
+            user_preferences: Optional user profile for context
+            
+        Returns:
+            {
+                "success": bool,
+                "ingredient": {...},
+                "metadata": {...}
+            }
+        """
+        try:
+            import time
+            start_time = time.time()
+            
+            # Calculate image hash for deduplication
+            image_hash = hashlib.sha256(image_data).hexdigest()
+            
+            # Get image dimensions
+            image = Image.open(BytesIO(image_data))
+            image_size = image.size
+            
+            # Encode image
+            base64_image = base64.b64encode(image_data).decode('utf-8')
+            
+            # Build optimized prompt for SINGLE item
+            prompt = f"""Analyze this image containing a SINGLE food ingredient or grocery item.
+
+Focus ONLY on the main centered item in the image.
+
+Return a JSON object with:
+{{
+  "name": "ingredient name (simple, canonical)",
+  "confidence": 0.0-1.0,
+  "category": "vegetable|fruit|grain|protein|dairy|spice|condiment|beverage|other",
+  "quantity": number or null,
+  "unit": "grams|ml|pieces|kg|lbs|oz|cups|tbsp|tsp" or null
+}}
+
+Extract quantity ONLY if clearly visible on a label. Otherwise return null.
+Use confidence 0.9+ if very clear, 0.7-0.9 if somewhat clear, below 0.7 if uncertain.
+
+Example response:
+{{"name": "milk", "confidence": 0.95, "category": "dairy", "quantity": 1000, "unit": "ml"}}
+
+Return ONLY the JSON object, no other text."""
+            
+            # Call Vision API with optimized settings for speed
+            response = await self.client.chat.completions.create(
+                model="gpt-4o-mini",  # Faster, cheaper model for single items
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                    "detail": "low"  # Low detail for speed
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300,  # Much smaller for single item
+                temperature=0.2
+            )
+            
+            # Parse response
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON (handle potential markdown formatting)
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            
+            detected = json.loads(content)
+            
+            # Enrich with additional data
+            ingredient = self._enrich_detection(detected, user_preferences)
+            
+            processing_time = int((time.time() - start_time) * 1000)
+            
+            return {
+                "success": True,
+                "ingredient": ingredient,
+                "metadata": {
+                    "image_hash": image_hash,
+                    "image_size": image_size,
+                    "processing_time_ms": processing_time,
+                    "model": "gpt-4o-mini"
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Single-item vision analysis failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "ingredient": None
+            }
 
 
 # Singleton instance

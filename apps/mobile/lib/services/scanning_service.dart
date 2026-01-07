@@ -576,4 +576,142 @@ class ScanningService {
       };
     }
   }
+
+  /// Scan single item (optimized for continuous scanning)
+  Future<Map<String, dynamic>> scanSingleItem({
+    required File imageFile,
+    required String scanType,
+  }) async {
+    try {
+      // Validate image
+      if (!await imageFile.exists()) {
+        return {
+          'success': false,
+          'error': 'Image file not found.',
+        };
+      }
+
+      final fileSize = await imageFile.length();
+      if (fileSize == 0 || fileSize > 10 * 1024 * 1024) {
+        return {
+          'success': false,
+          'error': 'Invalid image size.',
+        };
+      }
+
+      // Get auth token
+      final token = await _getAccessToken();
+      if (token == null) {
+        return {
+          'success': false,
+          'error': 'Not authenticated.',
+        };
+      }
+
+      // Create multipart request
+      final uri = Uri.parse('$baseUrl/api/scanning/single-item');
+      final request = http.MultipartRequest('POST', uri);
+      request.headers['Authorization'] = 'Bearer $token';
+
+      // Add image
+      final imageBytes = await imageFile.readAsBytes();
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          imageBytes,
+          filename: 'item.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ),
+      );
+
+      // Add scan type
+      request.fields['scan_type'] = scanType;
+
+      // Send request
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return {
+          'success': true,
+          'ingredient': data['ingredient'],
+          'metadata': data['metadata'],
+          'auto_saved': data['auto_saved'] ?? false,
+          'requires_confirmation': data['requires_confirmation'] ?? false,
+          'message': data['message'],
+        };
+      } else {
+        final error = json.decode(response.body);
+        return {
+          'success': false,
+          'error': error['detail'] ?? 'Scan failed',
+        };
+      }
+    } on SocketException {
+      return {
+        'success': false,
+        'error': 'No internet connection. Check network and try again.',
+      };
+    } on TimeoutException {
+      return {
+        'success': false,
+        'error': 'Request timed out. Please try again.',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'Scan error: $e',
+      };
+    }
+  }
+
+  /// Confirm single ingredient (fire-and-forget)
+  Future<Map<String, dynamic>> confirmSingleIngredient({
+    required String ingredientName,
+    required double quantity,
+    required String unit,
+    String scanType = 'pantry',
+  }) async {
+    try {
+      final token = await _getAccessToken();
+      if (token == null) {
+        return {
+          'success': false,
+          'error': 'Not authenticated.',
+        };
+      }
+
+      final uri = Uri.parse('$baseUrl/api/scanning/confirm-single');
+      final request = http.MultipartRequest('POST', uri);
+      request.headers['Authorization'] = 'Bearer $token';
+
+      request.fields['ingredient_name'] = ingredientName;
+      request.fields['quantity'] = quantity.toString();
+      request.fields['unit'] = unit;
+      request.fields['scan_type'] = scanType;
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return {
+          'success': true,
+          'message': data['message'],
+        };
+      } else {
+        final error = json.decode(response.body);
+        return {
+          'success': false,
+          'error': error['detail'] ?? 'Confirmation failed',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'Error: $e',
+      };
+    }
+  }
 }

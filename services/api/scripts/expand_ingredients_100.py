@@ -1,11 +1,13 @@
 """
 Expand Ingredient Database to 100+
-Adds 63 more ingredients to reach 100+ total coverage
+Adds 53 more ingredients to reach 90+ total coverage
+(37 existing + 53 new = 90 total)
 """
 
 import os
 import sys
 import asyncio
+import json
 from datetime import datetime
 import asyncpg
 
@@ -13,7 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# New ingredients to add (37 existing + 63 new = 100 total)
+# New ingredients to add (37 existing + 53 new = 90 total)
 NEW_INGREDIENTS = [
     # ==================== VEGETABLES (15 more) ====================
     {
@@ -466,7 +468,444 @@ NEW_INGREDIENTS = [
         "cv_labels": ["ham", "cured_meat", "pink", "sliced"]
     },
     
-    # Continue in next message...
+    # ==================== FRUITS (10 more) ====================
+    {
+        "canonical_name": "Apple",
+        "scientific_name": "Malus domestica",
+        "category": "Fruit",
+        "subcategory": "Pome",
+        "names": {"en": "Apple", "hi": "सेब", "ta": "ஆப்பிள்", "es": "Manzana", "zh": "苹果", "ar": "تفاحة"},
+        "visual_states": ["raw_whole", "raw_cut", "cooked"],
+        "dominant_colors": ["#FF0000", "#00FF00", "#FFFF00"],
+        "taste_profile": ["sweet", "tart", "crisp", "juicy"],
+        "common_uses": ["snack", "pie", "juice", "salad"],
+        "cooking_methods": ["raw", "baked", "stewed", "juiced"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 30, "cooked": 5},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["soft_spots", "bruising", "wrinkled_skin"],
+        "cv_labels": ["apple", "fruit", "red", "round"]
+    },
+    {
+        "canonical_name": "Banana",
+        "scientific_name": "Musa",
+        "category": "Fruit",
+        "subcategory": "Berry",
+        "names": {"en": "Banana", "hi": "केला", "ta": "வாழைப்பழம்", "es": "Plátano", "zh": "香蕉", "ar": "موز"},
+        "visual_states": ["raw_whole", "peeled"],
+        "dominant_colors": ["#FFFF00", "#8B4513"],
+        "taste_profile": ["sweet", "creamy", "mild"],
+        "common_uses": ["snack", "smoothie", "dessert", "bread"],
+        "cooking_methods": ["raw", "baked", "fried", "blended"],
+        "storage_conditions": {"temperature": "room_temp", "humidity": "medium", "light": "indirect"},
+        "shelf_life_days": {"fresh": 7},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["brown_spots", "mushy_texture", "odor"],
+        "cv_labels": ["banana", "yellow", "curved", "fruit"]
+    },
+    {
+        "canonical_name": "Orange",
+        "scientific_name": "Citrus sinensis",
+        "category": "Fruit",
+        "subcategory": "Citrus",
+        "names": {"en": "Orange", "hi": "संतरा", "ta": "ஆரஞ்சு", "es": "Naranja", "zh": "橙子", "ar": "برتقال"},
+        "visual_states": ["raw_whole", "peeled", "juiced"],
+        "dominant_colors": ["#FFA500", "#FF8C00"],
+        "taste_profile": ["sweet", "tangy", "citrusy", "juicy"],
+        "common_uses": ["snack", "juice", "salad", "dessert"],
+        "cooking_methods": ["raw", "juiced", "zested"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 14},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["soft_spots", "mold", "dried_out"],
+        "cv_labels": ["orange", "citrus", "round", "bright"]
+    },
+    {
+        "canonical_name": "Strawberry",
+        "scientific_name": "Fragaria × ananassa",
+        "category": "Fruit",
+        "subcategory": "Berry",
+        "names": {"en": "Strawberry", "hi": "स्ट्रॉबेरी", "ta": "ஸ்ட்ராபெரி", "es": "Fresa", "zh": "草莓", "ar": "فراولة"},
+        "visual_states": ["raw_whole", "sliced"],
+        "dominant_colors": ["#FF0000", "#FFC0CB"],
+        "taste_profile": ["sweet", "tart", "juicy"],
+        "common_uses": ["snack", "dessert", "smoothie", "salad"],
+        "cooking_methods": ["raw", "baked", "blended", "preserved"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "high", "light": "dark"},
+        "shelf_life_days": {"fresh": 5},
+        "waste_risk_level": "very_high",
+        "spoilage_signs": ["mold", "mushy_texture", "odor"],
+        "cv_labels": ["strawberry", "red", "berry", "seeds"]
+    },
+    {
+        "canonical_name": "Grapes",
+        "scientific_name": "Vitis vinifera",
+        "category": "Fruit",
+        "subcategory": "Berry",
+        "names": {"en": "Grapes", "hi": "अंगूर", "ta": "திராட்சை", "es": "Uvas", "zh": "葡萄", "ar": "عنب"},
+        "visual_states": ["raw_whole"],
+        "dominant_colors": ["#800080", "#00FF00", "#8B0000"],
+        "taste_profile": ["sweet", "tart", "juicy"],
+        "common_uses": ["snack", "wine", "juice", "raisins"],
+        "cooking_methods": ["raw", "dried", "juiced"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "high", "light": "dark"},
+        "shelf_life_days": {"fresh": 7},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["shriveling", "mold", "sour_taste"],
+        "cv_labels": ["grapes", "cluster", "round", "small"]
+    },
+    {
+        "canonical_name": "Watermelon",
+        "scientific_name": "Citrullus lanatus",
+        "category": "Fruit",
+        "subcategory": "Melon",
+        "names": {"en": "Watermelon", "hi": "तरबूज", "ta": "தர்பூசணி", "es": "Sandía", "zh": "西瓜", "ar": "بطيخ"},
+        "visual_states": ["raw_whole", "raw_cut"],
+        "dominant_colors": ["#008000", "#FF0000", "#FFC0CB"],
+        "taste_profile": ["sweet", "refreshing", "watery"],
+        "common_uses": ["snack", "juice", "salad", "dessert"],
+        "cooking_methods": ["raw", "juiced", "grilled"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 14, "cut": 3},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["soft_spots", "fermented_smell", "slimy_texture"],
+        "cv_labels": ["watermelon", "green", "large", "striped"]
+    },
+    {
+        "canonical_name": "Pineapple",
+        "scientific_name": "Ananas comosus",
+        "category": "Fruit",
+        "subcategory": "Tropical",
+        "names": {"en": "Pineapple", "hi": "अनानास", "ta": "அன்னாசி", "es": "Piña", "zh": "菠萝", "ar": "أناناس"},
+        "visual_states": ["raw_whole", "peeled", "cut"],
+        "dominant_colors": ["#FFD700", "#8B4513", "#00FF00"],
+        "taste_profile": ["sweet", "tangy", "tropical"],
+        "common_uses": ["snack", "juice", "dessert", "pizza"],
+        "cooking_methods": ["raw", "grilled", "juiced", "baked"],
+        "storage_conditions": {"temperature": "room_temp", "humidity": "medium", "light": "indirect"},
+        "shelf_life_days": {"fresh": 5, "cut": 3},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["brown_spots", "fermented_smell", "soft_texture"],
+        "cv_labels": ["pineapple", "yellow", "spiky", "tropical"]
+    },
+    {
+        "canonical_name": "Mango",
+        "scientific_name": "Mangifera indica",
+        "category": "Fruit",
+        "subcategory": "Drupe",
+        "names": {"en": "Mango", "hi": "आम", "ta": "மாம்பழம்", "es": "Mango", "zh": "芒果", "ar": "مانجو"},
+        "visual_states": ["raw_whole", "peeled", "sliced"],
+        "dominant_colors": ["#FFA500", "#FFD700", "#FF0000"],
+        "taste_profile": ["sweet", "tropical", "juicy"],
+        "common_uses": ["snack", "smoothie", "dessert", "salad"],
+        "cooking_methods": ["raw", "blended", "dried", "grilled"],
+        "storage_conditions": {"temperature": "room_temp", "humidity": "medium", "light": "indirect"},
+        "shelf_life_days": {"fresh": 5},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["soft_spots", "fermented_smell", "dark_spots"],
+        "cv_labels": ["mango", "orange", "oval", "tropical"]
+    },
+    {
+        "canonical_name": "Blueberry",
+        "scientific_name": "Vaccinium corymbosum",
+        "category": "Fruit",
+        "subcategory": "Berry",
+        "names": {"en": "Blueberry", "hi": "ब्लूबेरी", "ta": "நீலப்பெர்ரி", "es": "Arándano", "zh": "蓝莓", "ar": "توت أزرق"},
+        "visual_states": ["raw_whole"],
+        "dominant_colors": ["#0000FF", "#4B0082"],
+        "taste_profile": ["sweet", "tart", "juicy"],
+        "common_uses": ["snack", "dessert", "smoothie", "pancakes"],
+        "cooking_methods": ["raw", "baked", "blended", "preserved"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "high", "light": "dark"},
+        "shelf_life_days": {"fresh": 10},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["mold", "shriveling", "mushy_texture"],
+        "cv_labels": ["blueberry", "blue", "small", "round"]
+    },
+    {
+        "canonical_name": "Avocado",
+        "scientific_name": "Persea americana",
+        "category": "Fruit",
+        "subcategory": "Drupe",
+        "names": {"en": "Avocado", "hi": "एवोकाडो", "ta": "வெண்ணெய் பழம்", "es": "Aguacate", "zh": "鳄梨", "ar": "أفوكادو"},
+        "visual_states": ["raw_whole", "raw_cut"],
+        "dominant_colors": ["#006400", "#90EE90", "#FFFF00"],
+        "taste_profile": ["creamy", "mild", "buttery"],
+        "common_uses": ["guacamole", "toast", "salad", "smoothie"],
+        "cooking_methods": ["raw", "mashed", "blended"],
+        "storage_conditions": {"temperature": "room_temp", "humidity": "medium", "light": "indirect"},
+        "shelf_life_days": {"fresh": 5, "cut": 1},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["brown_flesh", "rancid_smell", "overly_soft"],
+        "cv_labels": ["avocado", "green", "oval", "creamy"]
+    },
+    
+    # ==================== GRAINS & STAPLES (8 more) ====================
+    {
+        "canonical_name": "Quinoa",
+        "scientific_name": "Chenopodium quinoa",
+        "category": "Grain",
+        "subcategory": "Pseudocereal",
+        "names": {"en": "Quinoa", "hi": "क्विनोआ", "ta": "கினோவா", "es": "Quinua", "zh": "藜麦", "ar": "كينوا"},
+        "visual_states": ["raw_grains", "cooked"],
+        "dominant_colors": ["#F5DEB3", "#FFFFFF"],
+        "taste_profile": ["nutty", "mild", "slightly_earthy"],
+        "common_uses": ["salad", "bowl", "side_dish", "breakfast"],
+        "cooking_methods": ["boiled", "steamed"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 730, "cooked": 5},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "mold", "insects"],
+        "cv_labels": ["quinoa", "grains", "tiny", "beige"]
+    },
+    {
+        "canonical_name": "Oats",
+        "scientific_name": "Avena sativa",
+        "category": "Grain",
+        "subcategory": "Cereal",
+        "names": {"en": "Oats", "hi": "जई", "ta": "ஓட்ஸ்", "es": "Avena", "zh": "燕麦", "ar": "شوفان"},
+        "visual_states": ["raw_grains", "cooked"],
+        "dominant_colors": ["#F5DEB3", "#D2B48C"],
+        "taste_profile": ["mild", "nutty", "slightly_sweet"],
+        "common_uses": ["porridge", "granola", "cookies", "smoothie"],
+        "cooking_methods": ["boiled", "baked", "soaked"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 365, "cooked": 5},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "insects", "mold"],
+        "cv_labels": ["oats", "grains", "flakes", "beige"]
+    },
+    {
+        "canonical_name": "Pasta",
+        "category": "Grain",
+        "subcategory": "Processed",
+        "names": {"en": "Pasta", "hi": "पास्ता", "ta": "பாஸ்தா", "es": "Pasta", "zh": "意大利面", "ar": "معكرونة"},
+        "visual_states": ["raw_dry", "cooked"],
+        "dominant_colors": ["#F5DEB3", "#FFD700"],
+        "taste_profile": ["mild", "starchy"],
+        "common_uses": ["main_dish", "side_dish", "salad"],
+        "cooking_methods": ["boiled", "baked"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 730, "cooked": 3},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["mold", "insects", "moisture"],
+        "cv_labels": ["pasta", "noodles", "dried", "yellow"]
+    },
+    {
+        "canonical_name": "Bread",
+        "category": "Grain",
+        "subcategory": "Baked",
+        "names": {"en": "Bread", "hi": "रोटी", "ta": "ரொட்டி", "es": "Pan", "zh": "面包", "ar": "خبز"},
+        "visual_states": ["whole_loaf", "sliced"],
+        "dominant_colors": ["#8B4513", "#F5DEB3"],
+        "taste_profile": ["mild", "yeasty", "starchy"],
+        "common_uses": ["sandwich", "toast", "side", "crumbs"],
+        "cooking_methods": ["toasted", "grilled", "raw"],
+        "storage_conditions": {"temperature": "room_temp", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 7, "frozen": 90},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["mold", "stale", "hard_texture"],
+        "cv_labels": ["bread", "loaf", "sliced", "brown"]
+    },
+    {
+        "canonical_name": "Noodles",
+        "category": "Grain",
+        "subcategory": "Processed",
+        "names": {"en": "Noodles", "hi": "नूडल्स", "ta": "நூடுல்ஸ்", "es": "Fideos", "zh": "面条", "ar": "نودلز"},
+        "visual_states": ["raw_dry", "cooked"],
+        "dominant_colors": ["#F5DEB3", "#FFFFFF"],
+        "taste_profile": ["mild", "starchy"],
+        "common_uses": ["soup", "stir_fry", "main_dish"],
+        "cooking_methods": ["boiled", "fried", "steamed"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 365, "cooked": 3},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["mold", "rancid_smell", "insects"],
+        "cv_labels": ["noodles", "thin", "long", "dried"]
+    },
+    {
+        "canonical_name": "Couscous",
+        "scientific_name": "Triticum durum",
+        "category": "Grain",
+        "subcategory": "Semolina",
+        "names": {"en": "Couscous", "hi": "कूसकूस", "ta": "கூஸ்கூஸ்", "es": "Cuscús", "zh": "库斯库斯", "ar": "كسكس"},
+        "visual_states": ["raw_grains", "cooked"],
+        "dominant_colors": ["#F5DEB3", "#FFE4B5"],
+        "taste_profile": ["mild", "nutty", "fluffy"],
+        "common_uses": ["side_dish", "salad", "main_dish"],
+        "cooking_methods": ["steamed", "boiled"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 730, "cooked": 5},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "insects", "mold"],
+        "cv_labels": ["couscous", "grains", "tiny", "beige"]
+    },
+    {
+        "canonical_name": "Barley",
+        "scientific_name": "Hordeum vulgare",
+        "category": "Grain",
+        "subcategory": "Cereal",
+        "names": {"en": "Barley", "hi": "जौ", "ta": "வாற்கோதுமை", "es": "Cebada", "zh": "大麦", "ar": "شعير"},
+        "visual_states": ["raw_grains", "cooked"],
+        "dominant_colors": ["#D2B48C", "#8B7355"],
+        "taste_profile": ["nutty", "chewy", "earthy"],
+        "common_uses": ["soup", "stew", "salad", "side_dish"],
+        "cooking_methods": ["boiled", "steamed"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 730, "cooked": 5},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "insects", "mold"],
+        "cv_labels": ["barley", "grains", "oval", "tan"]
+    },
+    {
+        "canonical_name": "Cornmeal",
+        "scientific_name": "Zea mays",
+        "category": "Grain",
+        "subcategory": "Flour",
+        "names": {"en": "Cornmeal", "hi": "मक्के का आटा", "ta": "சோள மாவு", "es": "Harina de maíz", "zh": "玉米粉", "ar": "دقيق الذرة"},
+        "visual_states": ["powder"],
+        "dominant_colors": ["#FFD700", "#FFA500"],
+        "taste_profile": ["sweet", "corny", "grainy"],
+        "common_uses": ["cornbread", "polenta", "coating", "porridge"],
+        "cooking_methods": ["baked", "boiled", "fried"],
+        "storage_conditions": {"temperature": "cool_dry", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 365},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "insects", "clumping"],
+        "cv_labels": ["cornmeal", "yellow", "powder", "grainy"]
+    },
+    
+    # ==================== DAIRY & ALTERNATIVES (8 more) ====================
+    {
+        "canonical_name": "Cheese",
+        "category": "Dairy",
+        "subcategory": "Fermented",
+        "names": {"en": "Cheese", "hi": "पनीर", "ta": "சீஸ்", "es": "Queso", "zh": "奶酪", "ar": "جبن"},
+        "visual_states": ["whole", "sliced", "shredded"],
+        "dominant_colors": ["#FFFF00", "#FFFFFF", "#FFA500"],
+        "taste_profile": ["savory", "tangy", "creamy", "sharp"],
+        "common_uses": ["sandwich", "pizza", "pasta", "snack"],
+        "cooking_methods": ["melted", "grilled", "raw"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 30, "opened": 14},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["mold", "slimy_texture", "sour_smell"],
+        "cv_labels": ["cheese", "yellow", "block", "dairy"]
+    },
+    {
+        "canonical_name": "Yogurt",
+        "category": "Dairy",
+        "subcategory": "Fermented",
+        "names": {"en": "Yogurt", "hi": "दही", "ta": "தயிர்", "es": "Yogur", "zh": "酸奶", "ar": "زبادي"},
+        "visual_states": ["liquid"],
+        "dominant_colors": ["#FFFFFF", "#FFFAF0"],
+        "taste_profile": ["tangy", "creamy", "slightly_sour"],
+        "common_uses": ["breakfast", "smoothie", "marinade", "sauce"],
+        "cooking_methods": ["raw", "mixed"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 14, "opened": 7},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["mold", "separation", "sour_smell"],
+        "cv_labels": ["yogurt", "white", "creamy", "dairy"]
+    },
+    {
+        "canonical_name": "Butter",
+        "category": "Dairy",
+        "subcategory": "Fat",
+        "names": {"en": "Butter", "hi": "मक्खन", "ta": "வெண்ணெய்", "es": "Mantequilla", "zh": "黄油", "ar": "زبدة"},
+        "visual_states": ["solid", "melted"],
+        "dominant_colors": ["#FFD700", "#FFF8DC"],
+        "taste_profile": ["rich", "creamy", "mild"],
+        "common_uses": ["cooking", "baking", "spread", "sauce"],
+        "cooking_methods": ["melted", "raw", "clarified"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "low", "light": "dark"},
+        "shelf_life_days": {"fresh": 30, "frozen": 180},
+        "waste_risk_level": "low",
+        "spoilage_signs": ["rancid_smell", "discoloration", "mold"],
+        "cv_labels": ["butter", "yellow", "block", "dairy"]
+    },
+    {
+        "canonical_name": "Cream",
+        "category": "Dairy",
+        "subcategory": "Liquid",
+        "names": {"en": "Cream", "hi": "क्रीम", "ta": "கிரீம்", "es": "Crema", "zh": "奶油", "ar": "كريمة"},
+        "visual_states": ["liquid", "whipped"],
+        "dominant_colors": ["#FFFAF0", "#FFFFFF"],
+        "taste_profile": ["rich", "creamy", "mild"],
+        "common_uses": ["coffee", "dessert", "sauce", "soup"],
+        "cooking_methods": ["whipped", "heated", "raw"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 7, "opened": 3},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["curdling", "sour_smell", "separation"],
+        "cv_labels": ["cream", "white", "liquid", "dairy"]
+    },
+    {
+        "canonical_name": "Sour Cream",
+        "category": "Dairy",
+        "subcategory": "Fermented",
+        "names": {"en": "Sour Cream", "hi": "खट्टी क्रीम", "ta": "புளிப்பு கிரீம்", "es": "Crema agria", "zh": "酸奶油", "ar": "كريمة حامضة"},
+        "visual_states": ["thick_liquid"],
+        "dominant_colors": ["#FFFAF0", "#FFFFFF"],
+        "taste_profile": ["tangy", "creamy", "rich"],
+        "common_uses": ["topping", "dip", "sauce", "baking"],
+        "cooking_methods": ["raw", "mixed"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 14, "opened": 7},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["mold", "separation", "very_sour_smell"],
+        "cv_labels": ["sour_cream", "white", "thick", "dairy"]
+    },
+    {
+        "canonical_name": "Almond Milk",
+        "category": "Dairy_Alternative",
+        "subcategory": "Plant_Based",
+        "names": {"en": "Almond Milk", "hi": "बादाम का दूध", "ta": "பாதாம் பால்", "es": "Leche de almendra", "zh": "杏仁奶", "ar": "حليب اللوز"},
+        "visual_states": ["liquid"],
+        "dominant_colors": ["#F5F5DC", "#FFFFFF"],
+        "taste_profile": ["nutty", "mild", "slightly_sweet"],
+        "common_uses": ["drinking", "cereal", "smoothie", "baking"],
+        "cooking_methods": ["raw", "heated"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 7, "unopened": 30},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["separation", "sour_smell", "clumping"],
+        "cv_labels": ["almond_milk", "beige", "liquid", "plant_based"]
+    },
+    {
+        "canonical_name": "Coconut Milk",
+        "scientific_name": "Cocos nucifera",
+        "category": "Dairy_Alternative",
+        "subcategory": "Plant_Based",
+        "names": {"en": "Coconut Milk", "hi": "नारियल का दूध", "ta": "தேங்காய் பால்", "es": "Leche de coco", "zh": "椰奶", "ar": "حليب جوز الهند"},
+        "visual_states": ["liquid", "thick"],
+        "dominant_colors": ["#FFFFFF", "#FFFAF0"],
+        "taste_profile": ["coconutty", "creamy", "rich"],
+        "common_uses": ["curry", "smoothie", "dessert", "soup"],
+        "cooking_methods": ["heated", "raw"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "medium", "light": "dark"},
+        "shelf_life_days": {"fresh": 5, "unopened": 365},
+        "waste_risk_level": "medium",
+        "spoilage_signs": ["separation", "sour_smell", "mold"],
+        "cv_labels": ["coconut_milk", "white", "liquid", "plant_based"]
+    },
+    {
+        "canonical_name": "Tofu",
+        "scientific_name": "Glycine max",
+        "category": "Protein",
+        "subcategory": "Plant_Based",
+        "names": {"en": "Tofu", "hi": "टोफू", "ta": "டோஃபு", "es": "Tofu", "zh": "豆腐", "ar": "توفو"},
+        "visual_states": ["block", "cubed", "crumbled"],
+        "dominant_colors": ["#FFFAF0", "#FFFFFF"],
+        "taste_profile": ["mild", "neutral", "slightly_nutty"],
+        "common_uses": ["stir_fry", "soup", "grilled", "scramble"],
+        "cooking_methods": ["fried", "grilled", "baked", "raw"],
+        "storage_conditions": {"temperature": "refrigerated", "humidity": "high", "light": "dark"},
+        "shelf_life_days": {"fresh": 7, "opened": 3},
+        "waste_risk_level": "high",
+        "spoilage_signs": ["sour_smell", "slimy_texture", "discoloration"],
+        "cv_labels": ["tofu", "white", "block", "soy"]
+    }
 ]
 
 # I'll create a function to insert these ingredients
@@ -477,52 +916,83 @@ async def expand_ingredient_database():
     
     try:
         count = 0
+        skipped = 0
         for ing_data in NEW_INGREDIENTS:
-            # Insert ingredient
-            ing_id = await conn.fetchval("""
-                INSERT INTO master_ingredients (
-                    name, scientific_name, category, subcategory,
-                    ingredient_type, status, visual_states, dominant_colors,
-                    taste_profile, common_uses, cooking_methods,
-                    storage_conditions, shelf_life_days, waste_risk_level,
-                    spoilage_signs, cv_labels
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
-                ) RETURNING id
-            """, 
-                ing_data["canonical_name"],
-                ing_data.get("scientific_name"),
-                ing_data["category"],
-                ing_data.get("subcategory"),
-                ing_data.get("ingredient_type", "single_ingredient"),
-                ing_data.get("status", "active"),
-                ing_data.get("visual_states", []),
-                ing_data.get("dominant_colors", []),
-                ing_data.get("taste_profile", []),
-                ing_data.get("common_uses", []),
-                ing_data.get("cooking_methods", []),
-                json.dumps(ing_data.get("storage_conditions", {})),
-                json.dumps(ing_data.get("shelf_life_days", {})),
-                ing_data.get("waste_risk_level", "medium"),
-                ing_data.get("spoilage_signs", []),
-                ing_data.get("cv_labels", [])
-            )
+            try:
+                # Check if ingredient already exists
+                existing = await conn.fetchval("""
+                    SELECT id FROM master_ingredients WHERE name = $1
+                """, ing_data["canonical_name"])
+                
+                if existing:
+                    print(f"⏭️  Skipped (exists): {ing_data['canonical_name']}")
+                    skipped += 1
+                    continue
+                
+                # Insert ingredient
+                ing_id = await conn.fetchval("""
+                    INSERT INTO master_ingredients (
+                        name, scientific_name, category, subcategory,
+                        ingredient_type, status, visual_states, dominant_colors,
+                        taste_profile, common_uses, cooking_methods,
+                        storage_conditions, shelf_life_days, waste_risk_level,
+                        spoilage_signs, cv_labels
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+                    ) RETURNING id
+                """, 
+                    ing_data["canonical_name"],
+                    ing_data.get("scientific_name"),
+                    ing_data["category"],
+                    ing_data.get("subcategory"),
+                    ing_data.get("ingredient_type", "single_ingredient"),
+                    ing_data.get("status", "active"),
+                    ing_data.get("visual_states", []),
+                    ing_data.get("dominant_colors", []),
+                    ing_data.get("taste_profile", []),
+                    ing_data.get("common_uses", []),
+                    ing_data.get("cooking_methods", []),
+                    json.dumps(ing_data.get("storage_conditions", {})),
+                    json.dumps(ing_data.get("shelf_life_days", {})),
+                    ing_data.get("waste_risk_level", "medium"),
+                    ing_data.get("spoilage_signs", []),
+                    ing_data.get("cv_labels", [])
+                )
+                
+                # Insert aliases
+                for lang, name in ing_data.get("names", {}).items():
+                    await conn.execute("""
+                        INSERT INTO ingredient_aliases (
+                            ingredient_id, alias_name, language_code, is_primary
+                        ) VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (ingredient_id, alias_name, language_code) DO NOTHING
+                    """, ing_id, name, lang, lang == "en")
+                
+                count += 1
+                print(f"✅ Added: {ing_data['canonical_name']} ({count}/{len(NEW_INGREDIENTS) - skipped})")
             
-            # Insert aliases
-            for lang, name in ing_data.get("names", {}).items():
-                await conn.execute("""
-                    INSERT INTO ingredient_aliases (
-                        ingredient_id, alias_name, language_code, is_primary
-                    ) VALUES ($1, $2, $3, $4)
-                """, ing_id, name, lang, lang == "en")
-            
-            count += 1
-            print(f"✅ Added: {ing_data['canonical_name']} ({count}/{len(NEW_INGREDIENTS)})")
+            except Exception as e:
+                print(f"❌ Error adding {ing_data.get('canonical_name', 'unknown')}: {e}")
+                continue
         
-        print(f"\n🎉 Successfully added {count} new ingredients!")
+        # Get total count
+        total = await conn.fetchval("SELECT COUNT(*) FROM master_ingredients")
+        
+        print(f"\n{'='*60}")
+        print(f"🎉 Successfully added {count} new ingredients!")
+        print(f"⏭️  Skipped {skipped} existing ingredients")
+        print(f"📊 Total ingredients in database: {total}")
+        print(f"{'='*60}")
         
     finally:
         await conn.close()
 
+
 if __name__ == "__main__":
+    print("="*60)
+    print("EXPANDING INGREDIENT DATABASE")
+    print("="*60)
+    print(f"Adding {len(NEW_INGREDIENTS)} ingredients...")
+    print()
+    
     asyncio.run(expand_ingredient_database())

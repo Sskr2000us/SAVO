@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-01-07T08:46:08.058623",
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "success_rate": 0.0
+  },
+  "tests": [
+    {
+      "test": "Health Check",
+      "status": "\u274c FAIL",
+      "response_time_ms": 403.48,
+      "details": "Status code: 404",
+      "timestamp": "2026-01-07T08:46:08.056622"
+    }
+  ]
+}
