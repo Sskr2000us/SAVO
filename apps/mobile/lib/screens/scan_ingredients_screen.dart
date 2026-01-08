@@ -81,7 +81,18 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       final success = response['success'] == true;
       if (!success) {
-        final msg = response['detail']?.toString() ?? response['error']?.toString() ?? 'Scan failed';
+        String msg = 'Scan failed';
+        final detail = response['detail'];
+        if (detail is Map) {
+          final m = detail['message']?.toString();
+          if (m != null && m.trim().isNotEmpty) {
+            msg = m.trim();
+          } else {
+            msg = detail.toString();
+          }
+        } else {
+          msg = response['detail']?.toString() ?? response['error']?.toString() ?? 'Scan failed';
+        }
 
         final lower = msg.toLowerCase();
         if (lower.contains('too dark') || lower.contains('too blurry') || lower.contains('glare')) {

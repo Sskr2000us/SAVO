@@ -242,6 +242,7 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
           title: 'Upgrade to SAVO Pro',
           ctaLabel: 'Upgrade for unlimited regenerates',
           reason: 'You\'ve used today\'s free regenerate. Pro unlocks unlimited regenerates plus weekly planning and shopping lists.',
+          trigger: 'regenerate_limit',
         );
         return;
       }

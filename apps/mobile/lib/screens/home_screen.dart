@@ -4,9 +4,12 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
+import '../services/cook_now_service.dart';
 import '../services/profile_service.dart';
 import '../services/entitlements_service.dart';
+import '../services/tonight_suggestion_service.dart';
 import '../models/profile_state.dart';
+import '../models/planning.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import '../widgets/pro_paywall_sheet.dart';
@@ -15,6 +18,8 @@ import 'cook_now_entry_screen.dart';
 import 'pantry_update_entry_screen.dart';
 import 'account_settings_screen.dart';
 import 'onboarding/onboarding_coordinator.dart';
+import 'recipe_detail_screen.dart';
+import '../models/inventory.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,12 +32,130 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingOnboarding = true;
   Map<String, dynamic>? _onboardingStatus;
 
+  bool _loadingTonight = true;
+  String? _tonightError;
+  List<Recipe> _tonightOptions = const [];
+  int _tonightIndex = 0;
+
+  bool _loadingInventory = true;
+  List<InventoryItem> _inventory = const [];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshOnboardingStatus();
+      _loadTonight();
     });
+  }
+
+  Future<void> _loadTonight() async {
+    if (mounted) {
+      setState(() {
+        _loadingTonight = true;
+        _tonightError = null;
+      });
+    }
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+
+      final inventory = await _fetchInventory(apiClient);
+      final cookNowService = CookNowService();
+      final options = await cookNowService.generateRecipeOptions(
+        apiClient: apiClient,
+        profileState: profileState,
+        maxOptions: 5,
+        avoidRecentRecipes: 3,
+      );
+
+      final tonight = TonightSuggestionService().rankRecipes(
+        recipes: options,
+        inventory: inventory,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _inventory = inventory;
+        _loadingInventory = false;
+        _tonightOptions = tonight.rankedRecipes;
+        _tonightIndex = 0;
+        _loadingTonight = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+      setState(() {
+        _loadingTonight = false;
+        _loadingInventory = false;
+        _tonightError = msg;
+      });
+    }
+  }
+
+  Future<List<InventoryItem>> _fetchInventory(ApiClient apiClient) async {
+    final res = await apiClient.get('/inventory-db/items?include_inactive=true');
+
+    if (res is Map && res['items'] is List) {
+      return (res['items'] as List)
+          .whereType<Map>()
+          .map((j) => InventoryItem.fromJson(j.cast<String, dynamic>()))
+          .toList();
+    }
+
+    if (res is List) {
+      return res
+          .whereType<Map>()
+          .map((j) => InventoryItem.fromJson(j.cast<String, dynamic>()))
+          .toList();
+    }
+
+    return const [];
+  }
+
+  Recipe? get _tonightRecipe {
+    if (_tonightOptions.isEmpty) return null;
+    if (_tonightIndex < 0 || _tonightIndex >= _tonightOptions.length) return _tonightOptions.first;
+    return _tonightOptions[_tonightIndex];
+  }
+
+  void _swapTonight() {
+    if (_tonightOptions.length < 2) return;
+    setState(() {
+      _tonightIndex = (_tonightIndex + 1) % _tonightOptions.length;
+    });
+  }
+
+  String _whyItWorks(Recipe recipe) {
+    final ingredients = recipe.ingredientsUsed
+        .map((i) => i.canonicalName.replaceAll('_', ' ').trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    if (ingredients.isEmpty) {
+      return 'Based on what\'s in your pantry';
+    }
+
+    final top = ingredients.take(3).toList();
+    final suffix = ingredients.length > 3 ? '…' : '';
+    return 'Uses: ${top.join(', ')}$suffix';
+  }
+
+  List<InventoryItem> get _expiringSoon {
+    final list = _inventory
+        .where((i) => i.isCurrent)
+        .where((i) => i.freshnessDaysRemaining != null)
+        .where((i) => i.freshnessDaysRemaining! <= 3)
+        .toList();
+
+    list.sort((a, b) {
+      final ad = a.freshnessDaysRemaining ?? 9999;
+      final bd = b.freshnessDaysRemaining ?? 9999;
+      return ad.compareTo(bd);
+    });
+
+    return list;
   }
 
   Future<void> _refreshOnboardingStatus() async {
@@ -125,26 +248,67 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'You can cook something right now',
-                    style: Theme.of(context).textTheme.headlineSmall,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Tonight',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Swap suggestion',
+                        onPressed: (_loadingTonight || (_tonightOptions.length < 2)) ? null : _swapTonight,
+                        icon: const Icon(Icons.swap_horiz),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Based on what’s in your pantry',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
+                  if (_loadingTonight) ...[
+                    Text(
+                      'Finding a dinner idea…',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ] else if (_tonightRecipe != null) ...[
+                    Text(
+                      _tonightRecipe!.getLocalizedName('en'),
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      _whyItWorks(_tonightRecipe!),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    if (_expiringSoon.isNotEmpty) ...[
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Use soon: ${_expiringSoon.take(2).map((i) => i.displayLabel).join(', ')}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
+                  ] else ...[
+                    Text(
+                      _tonightError ?? 'No suggestions right now. Try updating your pantry.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
                   const SizedBox(height: AppSpacing.md),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
-                      onPressed: () {
-                          Navigator.push(
-                          context,
-                            AppMotion.createRoute(const CookNowEntryScreen()),
-                        );
-                      },
-                      child: const Text('See options'),
+                      onPressed: (_loadingTonight || _tonightRecipe == null)
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                AppMotion.createRoute(
+                                  RecipeDetailScreen(recipe: _tonightRecipe!),
+                                ),
+                              );
+                            },
+                      child: const Text('Cook tonight'),
                     ),
                   ),
                 ],
@@ -175,6 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           title: 'Upgrade to SAVO Pro',
                           ctaLabel: 'Upgrade for unlimited scans',
                           reason: 'You\'ve hit today\'s free scan limit. Upgrade to keep scanning and get unlimited suggestions.',
+                          trigger: 'scan_limit',
                         );
                         return;
                       }

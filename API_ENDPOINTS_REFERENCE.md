@@ -11,6 +11,77 @@ All endpoints require JWT Bearer token:
 Authorization: Bearer YOUR_SUPABASE_JWT_TOKEN
 ```
 
+Tip: In Supabase, you can get a JWT by signing in and reading the `access_token`.
+
+---
+
+## Analytics Reports (US-16/17/18)
+
+These endpoints are authenticated and read from `public.product_events`.
+
+### GET /analytics/activation
+Activation funnel + time-to-first-value (TTFV) + activation within 2 minutes.
+
+**Windows PowerShell:**
+```powershell
+$env:API_BASE_URL="http://localhost:8000"
+$env:JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$env:API_BASE_URL/analytics/activation?days=30" `
+  -H "Authorization: Bearer $env:JWT"
+```
+
+**bash:**
+```bash
+API_BASE_URL="http://localhost:8000"
+JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$API_BASE_URL/analytics/activation?days=30" \
+  -H "Authorization: Bearer $JWT"
+```
+
+### GET /analytics/core-loop
+Core loop drop-off: scan → recipe shown → recipe opened → recipe saved/cooked.
+
+**Windows PowerShell:**
+```powershell
+$env:API_BASE_URL="http://localhost:8000"
+$env:JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$env:API_BASE_URL/analytics/core-loop?days=30" `
+  -H "Authorization: Bearer $env:JWT"
+```
+
+**bash:**
+```bash
+API_BASE_URL="http://localhost:8000"
+JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$API_BASE_URL/analytics/core-loop?days=30" \
+  -H "Authorization: Bearer $JWT"
+```
+
+### GET /analytics/monetization
+Paywall triggers + upgrade started/completed + churn reason breakdown.
+
+**Windows PowerShell:**
+```powershell
+$env:API_BASE_URL="http://localhost:8000"
+$env:JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$env:API_BASE_URL/analytics/monetization?days=30" `
+  -H "Authorization: Bearer $env:JWT"
+```
+
+**bash:**
+```bash
+API_BASE_URL="http://localhost:8000"
+JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$API_BASE_URL/analytics/monetization?days=30" \
+  -H "Authorization: Bearer $JWT"
+```
+
 ---
 
 ## Existing Endpoints (Refactored to JWT)

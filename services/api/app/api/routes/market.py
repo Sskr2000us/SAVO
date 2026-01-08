@@ -53,6 +53,7 @@ class RetailerUpsert(BaseModel):
 class MarketConfigResponse(BaseModel):
     region: str
     flags: Dict[str, bool]
+    payloads: Dict[str, Any] = Field(default_factory=dict)
     is_super_admin: bool = False
     retailers: List[RetailerConfig] = Field(default_factory=list)
 
@@ -126,10 +127,11 @@ async def get_market_config(user_id: str = Depends(get_current_user)):
     supabase = get_db_client()
 
     flags: Dict[str, bool] = {}
+    payloads: Dict[str, Any] = {}
     try:
         rows = (
             supabase.table("app_feature_flags")
-            .select("feature_key,enabled")
+            .select("feature_key,enabled,payload")
             .eq("region", region)
             .execute()
         )
@@ -138,9 +140,12 @@ async def get_market_config(user_id: str = Depends(get_current_user)):
             if not key:
                 continue
             flags[key] = row.get("enabled") is True
+            if row.get("payload") is not None:
+                payloads[key] = row.get("payload")
     except Exception:
         # If table doesn't exist yet, fall back to defaults.
         flags = {}
+        payloads = {}
 
     defaults = _flags_defaults_for_region(region)
     for k, v in defaults.items():
@@ -172,6 +177,7 @@ async def get_market_config(user_id: str = Depends(get_current_user)):
     return MarketConfigResponse(
         region=region,
         flags=flags,
+        payloads=payloads,
         retailers=retailers,
         is_super_admin=_is_super_admin(user_id),
     )

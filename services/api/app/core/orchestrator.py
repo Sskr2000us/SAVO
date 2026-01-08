@@ -387,6 +387,72 @@ def _repair_menu_plan_result(result: Dict[str, Any], schema: Dict[str, Any]) -> 
                 if not isinstance(result.get("error_message"), str) or not result.get("error_message", "").strip():
                     result["error_message"] = single
 
+    # MENU_PLAN_SCHEMA requires planning_window, but for daily/party it can be null.
+    # For weekly plans, MenuPlanResponse enforces planning_window presence.
+    if "planning_window" not in result:
+        result["planning_window"] = None
+
+    # If weekly_day menus exist, ensure planning_window is a valid object.
+    try:
+        menus_any = result.get("menus")
+        weekly_menus: list[dict[str, Any]] = []
+        if isinstance(menus_any, list):
+            for m in menus_any:
+                if not isinstance(m, dict):
+                    continue
+                if m.get("menu_type") == "weekly_day":
+                    weekly_menus.append(m)
+
+        has_weekly = bool(weekly_menus)
+        pw = result.get("planning_window")
+
+        def _date_only(raw: Any) -> str | None:
+            if not isinstance(raw, str) or not raw.strip():
+                return None
+            s = raw.strip()
+            # Accept YYYY-MM-DD or full ISO datetime.
+            try:
+                if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                    return s[:10]
+            except Exception:
+                pass
+            return None
+
+        if has_weekly:
+            valid_obj = False
+            if isinstance(pw, dict):
+                sd = _date_only(pw.get("start_date"))
+                nd = pw.get("num_days")
+                tz = pw.get("timezone")
+                valid_obj = bool(sd) and isinstance(nd, (int, float)) and nd > 0 and isinstance(tz, str) and tz.strip()
+
+            if not valid_obj:
+                dates: list[str] = []
+                for m in weekly_menus:
+                    d = _date_only(m.get("date"))
+                    if d:
+                        dates.append(d)
+                start_date = min(dates) if dates else date.today().isoformat()
+                num_days = len(weekly_menus) if weekly_menus else 1
+                # Prompt-pack limits weekly to 1-4 days.
+                if num_days < 1:
+                    num_days = 1
+                if num_days > 4:
+                    num_days = 4
+                result["planning_window"] = {
+                    "start_date": start_date,
+                    "num_days": num_days,
+                    "timezone": "UTC",
+                }
+        else:
+            # Daily/party: if LLM returned an object that doesn't satisfy schema, collapse to null.
+            if isinstance(pw, dict):
+                result["planning_window"] = None
+    except Exception:
+        # Best-effort only.
+        if "planning_window" not in result:
+            result["planning_window"] = None
+
     min_items = _get_menu_plan_recipe_options_min_items(schema)
     if min_items <= 0:
         return result
@@ -790,6 +856,32 @@ async def run_task(
     messages = _build_messages(task_name=task_name, context=context)
     trace_id = uuid.uuid4().hex[:8]
     total_t0 = perf_counter()
+
+    # Optional debug logging: do NOT dump full CONTEXT_JSON by default.
+    if os.getenv("SAVO_LLM_DEBUG", "false").lower() == "true":
+        try:
+            sizes = [len(str(m.get("content") or "")) for m in messages]
+            logger.info(
+                "orchestrator_prompt_debug task=%s schema=%s trace=%s provider=%s messages=%s total_chars=%s",
+                task_name,
+                output_schema_name,
+                trace_id,
+                settings.reasoning_provider,
+                len(messages),
+                sum(sizes),
+            )
+            if os.getenv("SAVO_LLM_DEBUG_DUMP_PROMPT", "false").lower() == "true":
+                # Still avoid dumping raw context; show only the system + task instruction.
+                sys_preview = (messages[0].get("content") or "")[:800]
+                task_preview = (messages[1].get("content") or "")[:800] if len(messages) > 1 else ""
+                logger.info(
+                    "orchestrator_prompt_dump trace=%s system_preview=%s task_preview=%s",
+                    trace_id,
+                    sys_preview.replace("\n", " "),
+                    task_preview.replace("\n", " "),
+                )
+        except Exception:
+            pass
     
     # Use reasoning provider for planning tasks (meal plans, recipes, etc.)
     # OpenAI GPT excels at structured JSON outputs and complex reasoning
@@ -857,6 +949,49 @@ async def _try_provider(
                 repair_t0 = perf_counter()
                 result = _repair_menu_plan_result(result, schema)
                 result = _prune_additional_properties(result, schema)
+
+                # If the model leaves selected_cuisine as "auto"/"unknown", infer a concrete one from context.
+                # This enables CUISINE_METADATA-based course structure validation (multi-course menus).
+                try:
+                    sc = str(result.get("selected_cuisine") or "").strip().lower()
+                except Exception:
+                    sc = ""
+                if sc in {"", "auto", "unknown"} and isinstance(context, dict):
+                    picked: Optional[str] = None
+                    try:
+                        sr = context.get("session_request")
+                        if not isinstance(sr, dict):
+                            sr = context.get("SESSION_REQUEST")
+
+                        if isinstance(sr, dict):
+                            prefs = sr.get("cuisine_preferences")
+                            if isinstance(prefs, list):
+                                for p in prefs:
+                                    if isinstance(p, str) and p.strip():
+                                        picked = p.strip()
+                                        break
+                            sel = sr.get("selected_cuisine")
+                            if (not picked) and isinstance(sel, str) and sel.strip() and sel.strip().lower() != "auto":
+                                picked = sel.strip()
+                    except Exception:
+                        picked = None
+
+                    if not picked:
+                        try:
+                            candidates = context.get("regional_cuisine_candidates") or context.get("REGIONAL_CUISINE_CANDIDATES")
+                            if isinstance(candidates, list):
+                                for c in candidates:
+                                    if isinstance(c, dict):
+                                        cid = c.get("cuisine_id") or c.get("cuisineId")
+                                        if isinstance(cid, str) and cid.strip():
+                                            picked = cid.strip()
+                                            break
+                        except Exception:
+                            picked = None
+
+                    if isinstance(picked, str) and picked.strip():
+                        result["selected_cuisine"] = picked.strip()
+
                 repair_ms = int((perf_counter() - repair_t0) * 1000)
             
             # Validate against schema
@@ -915,7 +1050,55 @@ async def _try_provider(
             if isinstance(result, dict):
                 status = result.get("status")
                 if status in ["needs_clarification", "error"]:
-                    # LLM is reporting it cannot fulfill request - this is valid
+                    # Sometimes models emit low-effort refusals ("too complex") instead of doing the task.
+                    # Treat these as retryable failures, otherwise the UX feels broken.
+                    msg_parts: list[str] = []
+                    try:
+                        em = result.get("error_message")
+                        if isinstance(em, str) and em.strip():
+                            msg_parts.append(em.strip())
+                    except Exception:
+                        pass
+                    try:
+                        qs = result.get("needs_clarification_questions")
+                        if isinstance(qs, list):
+                            for q in qs[:3]:
+                                if isinstance(q, str) and q.strip():
+                                    msg_parts.append(q.strip())
+                    except Exception:
+                        pass
+
+                    joined = " | ".join(msg_parts).lower()
+                    refusal_like = any(
+                        k in joined
+                        for k in (
+                            "too complex",
+                            "too complicated",
+                            "i can't",
+                            "i cannot",
+                            "unable to",
+                            "can't help",
+                            "cannot help",
+                            "refuse",
+                            "won't",
+                            "policy",
+                        )
+                    )
+
+                    # If it's a refusal-like message, retry with explicit instruction.
+                    if refusal_like and attempt < max_retries:
+                        correction = (
+                            "CORRECTION REQUIRED: Do NOT refuse or claim the task is too complex. "
+                            "Generate a complete plan that matches the JSON schema. "
+                            "If any inputs are missing, ask specific needs_clarification_questions (max 2). "
+                            "Otherwise proceed and output status=ok with distinct recipe options and measurable ingredient amounts." 
+                            " Keep output concise (minified JSON; short text fields)."
+                        )
+                        messages.append({"role": "assistant", "content": "I will comply and generate a valid plan."})
+                        messages.append({"role": "user", "content": correction})
+                        continue
+
+                    # Otherwise: LLM is reporting it cannot fulfill request - this is valid.
                     logger.info(f"Task {task_name} (provider={provider}) returned status={status}")
                     return result
             
@@ -1165,6 +1348,7 @@ def _build_error_response(output_schema_name: str, error_message: str, max_retri
     if output_schema_name == "MENU_PLAN_SCHEMA":
         error_response.update({
             "selected_cuisine": "unknown",
+            "planning_window": None,
             "menu_headers": [],
             "menus": [],
             "variety_log": {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},

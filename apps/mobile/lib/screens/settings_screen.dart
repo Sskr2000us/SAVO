@@ -464,6 +464,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade to family profiles',
         reason: 'Family profiles are a Pro feature. Add preferences and allergens for each person to get safer, better plans.',
+        trigger: 'family_profiles_gate',
       );
       return;
     }

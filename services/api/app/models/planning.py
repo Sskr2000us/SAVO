@@ -139,6 +139,16 @@ class DailyPlanRequest(SessionRequest):
     """Request for daily meal planning with meal type and time context"""
     time_available_minutes: int = Field(..., ge=5, le=480, description="Total time available for cooking")
     servings: int = Field(..., ge=1, le=20, description="Number of servings needed")
+
+    # Optional: allow clients to request a plan anchored to a specific recipe.
+    # This is used by the mobile app "Add to plan" action.
+    seed_recipe: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Optional recipe payload to include as the primary option in today's plan. "
+            "Expected to follow the recipe shape used in MENU_PLAN_SCHEMA recipe_options."
+        ),
+    )
     
     # Meal context for better recommendations
     meal_type: Optional[Literal["breakfast", "lunch", "dinner", "snack", "any"]] = Field(
@@ -164,6 +174,15 @@ class PartyPlanRequest(SessionRequest):
         description="Optional counts for how many distinct dishes to generate per course category",
     )
 
+    # Optional: allow clients to request a plan anchored to a specific recipe.
+    seed_recipe: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Optional recipe payload to include in the generated party menu. "
+            "Expected to follow the recipe shape used in MENU_PLAN_SCHEMA recipe_options."
+        ),
+    )
+
 
 class WeeklyPlanRequest(SessionRequest):
     """Request for weekly meal planning with configurable horizon"""
@@ -172,6 +191,15 @@ class WeeklyPlanRequest(SessionRequest):
     timezone: Optional[str] = Field(None, description="Timezone for day boundaries, fallback to app config")
     time_available_minutes: Optional[int] = Field(None, ge=5, le=480, description="Typical time available per day")
     servings: Optional[int] = Field(None, ge=1, le=20, description="Typical servings per day")
+
+    # Optional: allow clients to request a plan anchored to a specific recipe.
+    seed_recipe: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Optional recipe payload to include as a primary option in the weekly plan. "
+            "Expected to follow the recipe shape used in MENU_PLAN_SCHEMA recipe_options."
+        ),
+    )
 
 
 class MenuPlanResponse(BaseModel):

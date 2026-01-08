@@ -13,6 +13,9 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from uuid import uuid4
+from datetime import timezone, timedelta
 
 import httpx
 
@@ -50,6 +53,7 @@ from app.core.database import (
     upsert_household_shopping_items,
 )
 from app.middleware.auth import get_current_user
+from app.core.database import get_db_client
 from app.core.safety_constraints import (
     build_complete_safety_context,
     validate_recipe_safety,
@@ -71,6 +75,143 @@ from app.models.inventory import InventoryItem
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+def _get_llm_timeout_seconds(*, env_var: str, default_seconds: float) -> float:
+    """Return an endpoint-level LLM timeout.
+
+    This caps how long the API waits for the orchestrator (including retries).
+    Defaults are intentionally higher than typical single-call latency to avoid
+    premature fallbacks.
+    """
+
+    raw = (os.getenv(env_var) or "").strip()
+    if not raw:
+        return float(default_seconds)
+    try:
+        val = float(raw)
+        # Guardrails against accidental misconfig.
+        if val < 5:
+            return 5.0
+        if val > 600:
+            return 600.0
+        return val
+    except Exception:
+        return float(default_seconds)
+
+
+class PlanShareRequest(BaseModel):
+    plan: Dict[str, Any]
+    expires_hours: int = Field(168, ge=1, le=720)
+
+
+@router.post("/share")
+async def share_plan(
+    req: PlanShareRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Create a shareable meal plan link.
+
+    Stores the plan payload server-side and returns a share id.
+    """
+
+    supabase = get_db_client()
+    share_id = str(uuid4())
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=req.expires_hours)
+
+    payload = {
+        "id": share_id,
+        "owner_user_id": user_id,
+        "plan": req.plan,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+    try:
+        supabase.table("shared_plans").insert(payload).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create plan share link: {e}")
+
+    return {
+        "success": True,
+        "share_id": share_id,
+        "expires_at": expires_at.isoformat(),
+        "share_path": f"/plan/shared/{share_id}",
+    }
+
+
+@router.get("/shared/{share_id}")
+async def get_shared_plan(share_id: str):
+    """Fetch a shared plan payload (public)."""
+
+    supabase = get_db_client()
+    try:
+        result = (
+            supabase.table("shared_plans")
+            .select("id,plan,expires_at")
+            .eq("id", share_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load shared plan: {e}")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Shared plan not found")
+
+    row = result.data[0]
+    expires_at = row.get("expires_at")
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                raise HTTPException(status_code=410, detail="Shared plan expired")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    plan = row.get("plan") or {}
+    return {"success": True, "plan": plan, "share_id": row.get("id")}
+
+
+@router.delete("/shared/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_shared_plan(
+    share_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    """Revoke (delete) a previously created plan share link."""
+
+    supabase = get_db_client()
+    try:
+        result = (
+            supabase.table("shared_plans")
+            .select("id,owner_user_id")
+            .eq("id", share_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load plan share: {e}")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Shared plan not found")
+
+    row = result.data[0]
+    owner_user_id = str(row.get("owner_user_id") or "")
+    if owner_user_id != str(user_id):
+        raise HTTPException(status_code=403, detail="Not allowed to revoke this share")
+
+    try:
+        supabase.table("shared_plans").delete().eq("id", share_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to revoke plan share: {e}")
+
+    return None
 
 
 def _recipe_name_text(recipe_name: Any) -> str:
@@ -2561,6 +2702,180 @@ def _generate_fallback_party_plan(
     }
 
 
+def _generate_fallback_weekly_plan(
+    *,
+    inventory: List[InventoryItem],
+    household: Dict[str, Any],
+    members: List[Dict[str, Any]],
+    start_date: date,
+    num_days: int,
+    timezone: str,
+    servings: int,
+    time_available_minutes: int,
+) -> Dict[str, Any]:
+    from datetime import datetime, timedelta
+
+    safe_days = max(1, min(int(num_days or 1), 4))
+    safe_servings = max(1, int(servings or 2))
+    safe_time = max(10, int(time_available_minutes or 30))
+
+    def _clone_recipe(recipe: dict[str, Any], *, day_idx: int) -> dict[str, Any]:
+        if not isinstance(recipe, dict):
+            return {}
+        r = dict(recipe)
+        rid = str(r.get("recipe_id") or f"fallback_day_{day_idx}_recipe")
+        r["recipe_id"] = f"{rid}_d{day_idx + 1}"
+        return r
+
+    menus: list[dict[str, Any]] = []
+    for day_idx in range(safe_days):
+        d = start_date + timedelta(days=day_idx)
+
+        daily = _generate_fallback_recipes(
+            inventory=inventory,
+            household=household,
+            members=members,
+            servings=safe_servings,
+            time_available=safe_time,
+            meal_type="dinner",
+        )
+
+        # Extract 2 recipe options from the daily fallback.
+        recipe_options: list[dict[str, Any]] = []
+        try:
+            dm = (daily.get("menus") or [])[0]
+            dc = (dm.get("courses") or [])[0]
+            opts = dc.get("recipe_options")
+            if isinstance(opts, list):
+                recipe_options = [_clone_recipe(o, day_idx=day_idx) for o in opts[:2] if isinstance(o, dict)]
+        except Exception:
+            recipe_options = []
+
+        # As a hard guarantee, ensure we have exactly 2 options (schema often requires >=2).
+        if len(recipe_options) < 2:
+            recipe_options = [
+                {
+                    "recipe_id": f"fallback_weekly_{day_idx}_1",
+                    "recipe_name": {"en": "Fallback Dinner"},
+                    "cuisine": "Indian",
+                    "difficulty": "easy",
+                    "estimated_times": {"prep_minutes": 10, "cook_minutes": 20, "total_minutes": 30},
+                    "cooking_method": "stovetop",
+                    "ingredients_used": [],
+                    "new_ingredients_optional": [],
+                    "steps": [
+                        {"step": 1, "instruction": {"en": "Cook a simple, safe dinner from pantry staples."}, "time_minutes": 20, "tips": []}
+                    ],
+                    "nutrition_per_serving": {
+                        "calories_kcal": 400,
+                        "macros": {"protein_g": 15, "carbs_g": 45, "fat_g": 12},
+                        "micros": {"fiber_g": 6, "sodium_mg": 600, "sugar_g": 6},
+                    },
+                    "health_benefits": [],
+                    "health_fit": {"flags": [], "adjustments": []},
+                    "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+                    "preservation_guidance": {
+                        "storage": "refrigerate",
+                        "safe_duration_hours": 24,
+                        "reheat_methods": ["microwave"],
+                        "quality_notes": "Best within a day.",
+                    },
+                    "chef_tips": [],
+                    "cultural_context": {"origin": "", "occasions": "", "serving": ""},
+                    "dietary_information": {
+                        "vegetarian": False,
+                        "vegan": False,
+                        "gluten_free": False,
+                        "allergens": [],
+                        "religious_compatibility": [],
+                    },
+                    "youtube_references": [],
+                    "agent_mode": "beginner_coach",
+                },
+                {
+                    "recipe_id": f"fallback_weekly_{day_idx}_2",
+                    "recipe_name": {"en": "Fallback Dinner (Alt)"},
+                    "cuisine": "Indian",
+                    "difficulty": "easy",
+                    "estimated_times": {"prep_minutes": 10, "cook_minutes": 20, "total_minutes": 30},
+                    "cooking_method": "stovetop",
+                    "ingredients_used": [],
+                    "new_ingredients_optional": [],
+                    "steps": [
+                        {"step": 1, "instruction": {"en": "Cook an alternate simple dinner from pantry staples."}, "time_minutes": 20, "tips": []}
+                    ],
+                    "nutrition_per_serving": {
+                        "calories_kcal": 400,
+                        "macros": {"protein_g": 15, "carbs_g": 45, "fat_g": 12},
+                        "micros": {"fiber_g": 6, "sodium_mg": 600, "sugar_g": 6},
+                    },
+                    "health_benefits": [],
+                    "health_fit": {"flags": [], "adjustments": []},
+                    "leftover_forecast": {"expected_leftover_servings": 0, "reuse_ideas": []},
+                    "preservation_guidance": {
+                        "storage": "refrigerate",
+                        "safe_duration_hours": 24,
+                        "reheat_methods": ["microwave"],
+                        "quality_notes": "Best within a day.",
+                    },
+                    "chef_tips": [],
+                    "cultural_context": {"origin": "", "occasions": "", "serving": ""},
+                    "dietary_information": {
+                        "vegetarian": False,
+                        "vegan": False,
+                        "gluten_free": False,
+                        "allergens": [],
+                        "religious_compatibility": [],
+                    },
+                    "youtube_references": [],
+                    "agent_mode": "beginner_coach",
+                },
+            ]
+
+        menus.append(
+            {
+                "menu_type": "weekly_day",
+                "day_index": day_idx,
+                "date": d.isoformat(),
+                "servings": {"count": safe_servings, "scaling_factor": 1},
+                "courses": [
+                    {
+                        "course_header": "Dinner",
+                        "recipe_options": recipe_options,
+                    }
+                ],
+            }
+        )
+
+    return {
+        "status": "ok",
+        "selected_cuisine": str(
+            (household.get("favorite_cuisines") or household.get("favoriteCuisines") or ["Indian"])[0]
+        )
+        if isinstance((household.get("favorite_cuisines") or household.get("favoriteCuisines") or ["Indian"]), list)
+        else "Indian",
+        "planning_window": {
+            "start_date": start_date.isoformat(),
+            "num_days": safe_days,
+            "timezone": timezone or "UTC",
+        },
+        "menu_headers": ["Dinner"],
+        "menus": menus,
+        "variety_log": {"rules_applied": ["fallback_mode"]},
+        "nutrition_summary": {"total_calories_kcal": 0, "per_member_estimates": [], "warnings": ["Fallback weekly plan."]},
+        "waste_summary": {
+            "expiring_items_used": [],
+            "waste_reduction_score": 0.0,
+            "waste_avoided_value_estimate": {"currency": "USD", "value": 0.0},
+        },
+        "shopping_suggestions": [],
+        "needs_clarification_questions": [],
+        "error_message": None,
+        "_generated_at": datetime.utcnow().isoformat(),
+        "_fallback_mode": True,
+    }
+
+
 def _allowed_cuisines_from_profile_and_request(req: Any, household: Any) -> set[str]:
     """Strict allow-list for cuisine selection.
 
@@ -3033,6 +3348,62 @@ def _recent_history_keys(history: Any, keep_last_n: int) -> set[str]:
         rid = row.get("recipe_id") or row.get("id")
         if isinstance(rid, str) and rid.strip():
             out.add(f"id:{rid.strip().lower()}")
+    return out
+
+
+def _extract_plan_recipes_as_history_entries(plan_payload: Any, *, limit: int = 50) -> List[Dict[str, Any]]:
+    """Convert a saved plan payload into history-like rows.
+
+    This is used to prevent repeated recipes when the user regenerates plans
+    multiple times without actually cooking (so cook-history doesn't change).
+    """
+
+    if not isinstance(plan_payload, dict):
+        return []
+    if plan_payload.get("status") != "ok":
+        return []
+
+    out: List[Dict[str, Any]] = []
+    menus = plan_payload.get("menus")
+    if not isinstance(menus, list):
+        return []
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list):
+                continue
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                rid = opt.get("recipe_id") or opt.get("id")
+                name = opt.get("recipe_name") or opt.get("name")
+                # Match _recent_history_keys expectations.
+                row: Dict[str, Any] = {}
+                if isinstance(rid, str) and rid.strip():
+                    row["recipe_id"] = rid.strip()
+                if isinstance(name, dict):
+                    en = name.get("en")
+                    if isinstance(en, str) and en.strip():
+                        row["recipe_name"] = en.strip()
+                    else:
+                        for v in name.values():
+                            if isinstance(v, str) and v.strip():
+                                row["recipe_name"] = v.strip()
+                                break
+                elif isinstance(name, str) and name.strip():
+                    row["recipe_name"] = name.strip()
+                if row:
+                    out.append(row)
+                if len(out) >= limit:
+                    return out
     return out
 
 
@@ -4085,6 +4456,25 @@ async def post_daily(
     except Exception:
         db_history = []
 
+    # Variety: when force_regenerate=true, avoid repeating recipes from the last generated plan,
+    # even if the user hasn't cooked anything new (cook-history stays unchanged).
+    plan_date = _parse_iso_date(getattr(req, "current_date", None)) or date.today()
+    seed_recipe = getattr(req, "seed_recipe", None)
+    if force_regenerate and not seed_recipe:
+        try:
+            prev = await get_meal_plan_for_date(
+                user_id,
+                plan_date=plan_date,
+                plan_type="daily",
+                meal_type=req.meal_type,
+            )
+            prev_payload = prev.get("recipes") if isinstance(prev, dict) else None
+            prev_rows = _extract_plan_recipes_as_history_entries(prev_payload, limit=50)
+            if prev_rows:
+                db_history = prev_rows + (db_history if isinstance(db_history, list) else [])
+        except Exception:
+            pass
+
     inventory_models = _db_inventory_to_models(db_inventory)
     inventory_hash = _inventory_snapshot_hash(inventory_models)
 
@@ -4104,8 +4494,8 @@ async def post_daily(
 
     # Reuse an existing saved plan for the day unless the request changed
     # AND the inventory snapshot hasn't materially changed.
-    plan_date = _parse_iso_date(getattr(req, "current_date", None)) or date.today()
-    if not force_regenerate:
+    # plan_date and seed_recipe already computed above.
+    if not force_regenerate and not seed_recipe:
         try:
             existing = await get_meal_plan_for_date(
                 user_id,
@@ -4171,6 +4561,87 @@ async def post_daily(
                                 pass
 
                             return MenuPlanResponse(**existing_payload)
+
+    # If the client provided a seed recipe, build a minimal plan around it.
+    # This avoids any ambiguity and makes the UX deterministic.
+    if isinstance(seed_recipe, dict) and seed_recipe:
+        try:
+            # Best-effort cleanup/validation.
+            rid = str(seed_recipe.get("recipe_id") or seed_recipe.get("id") or "").strip()
+            if rid:
+                seed_recipe["recipe_id"] = rid
+
+            cuisine = (
+                str(seed_recipe.get("cuisine") or req.selected_cuisine or "").strip()
+                if hasattr(req, "selected_cuisine")
+                else str(seed_recipe.get("cuisine") or "").strip()
+            )
+            if not cuisine:
+                cuisine = "auto"
+
+            mt = (req.meal_type or "dinner").strip() if isinstance(req.meal_type, str) else "dinner"
+            payload = {
+                "status": "ok",
+                "selected_cuisine": cuisine,
+                "planning_window": None,
+                "menu_headers": [str(mt).title()],
+                "menus": [
+                    {
+                        "menu_type": "daily",
+                        "day_index": None,
+                        "date": plan_date.isoformat(),
+                        "servings": {"count": int(req.servings), "scaling_factor": 1},
+                        "courses": [
+                            {
+                                "course_header": "Main",
+                                "recipe_options": [seed_recipe],
+                            }
+                        ],
+                    }
+                ],
+                "needs_clarification_questions": [],
+                "variety_log": {"rules_applied": [], "excluded_recent": [], "diversity_scores": {}},
+                "nutrition_summary": {"total_calories_kcal": 0, "per_member_estimates": [], "warnings": []},
+                "waste_summary": {
+                    "expiring_items_used": [],
+                    "waste_reduction_score": 0,
+                    "waste_avoided_value_estimate": {"currency": "USD", "value": 0},
+                },
+                "shopping_suggestions": [],
+                "_seed_recipe_id": rid,
+            }
+
+            # Keep response/persistence consistent with normal plans.
+            payload = _sanitize_recipe_names_in_payload(payload)
+            try:
+                payload = _tighten_ingredients_used_in_payload(payload)
+            except Exception:
+                pass
+            payload["_inventory_hash"] = inventory_hash
+            payload["_include_inactive_inventory"] = include_inactive_inv
+            payload = _coerce_menu_headers(payload)
+
+            # Persist like a normal plan.
+            try:
+                await create_meal_plan(
+                    user_id,
+                    {
+                        "plan_type": "daily",
+                        "plan_date": plan_date.isoformat(),
+                        "meal_type": req.meal_type,
+                        "time_available_minutes": req.time_available_minutes,
+                        "servings": req.servings,
+                        "recipes": payload,
+                    },
+                )
+            except Exception:
+                # Best-effort: the response is still usable.
+                pass
+
+            return MenuPlanResponse(**payload)
+        except Exception:
+            # If seed recipe handling fails, fall back to the standard flow.
+            pass
     
     # GOLDEN RULE: Check profile completeness and safety constraints
     golden_check = SAVOGoldenRule.check_before_generate(profile_dict)
@@ -4235,6 +4706,14 @@ async def post_daily(
         history_override=db_history,
         app_configuration_override=app_config_dict,
     )
+
+    # Encourage LLM variety between regenerations (non-deterministic hint).
+    try:
+        nonce = str(uuid4())
+        context["variety_nonce"] = nonce
+        context["VARIETY_NONCE"] = nonce
+    except Exception:
+        pass
 
     # Provide metadata-based cuisine candidates for the LLM to pick from.
     try:
@@ -4337,16 +4816,26 @@ async def post_daily(
     safety_context = build_complete_safety_context(profile_dict)
     context["safety_constraints"] = safety_context
     
-    # Generate meal plan with aggressive timeout and fallback
+    # Generate meal plan with bounded timeout and fallback
     llm_t0 = perf_counter()
     logger.info(f"Starting LLM call for user_id={user_id}")
     result = None
     try:
         # Prefer real LLM generation; fall back only if it stalls.
-        result = await asyncio.wait_for(plan_daily(context), timeout=20.0)
-        logger.info(f"LLM call completed: status={result.get('status')} time={int((perf_counter() - llm_t0) * 1000)}ms")
+        timeout_s = _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_DAILY_SECONDS", default_seconds=60.0)
+        result = await asyncio.wait_for(plan_daily(context), timeout=timeout_s)
+        logger.info(
+            "LLM call completed: status=%s time=%sms timeout_s=%s",
+            (result.get("status") if isinstance(result, dict) else None),
+            int((perf_counter() - llm_t0) * 1000),
+            timeout_s,
+        )
     except asyncio.TimeoutError:
-        logger.warning(f"LLM timeout after 20s, generating fallback recipes for user_id={user_id}")
+        logger.warning(
+            "LLM timeout for /plan/daily user_id=%s (timeout_s=%s), generating fallback recipes",
+            user_id,
+            _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_DAILY_SECONDS", default_seconds=60.0),
+        )
         result = None
     except Exception as e:
         logger.exception("plan_daily crashed user_id=%s", user_id)
@@ -4401,7 +4890,7 @@ async def post_daily(
 
     # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
     if isinstance(result, dict) and result.get("status") == "ok":
-        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
+        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=12)
 
     # Persist inventory snapshot hash inside the stored payload (response model ignores unknown keys).
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -4687,6 +5176,22 @@ async def post_party(
     except Exception:
         db_history = []
 
+    # Variety: if user regenerates, avoid repeating recipes from the last party plan (not just cooked history).
+    if force_regenerate and not getattr(req, "seed_recipe", None):
+        try:
+            existing = await get_meal_plan_for_date(
+                user_id,
+                plan_date=date.today(),
+                plan_type="party",
+                meal_type=None,
+            )
+            existing_payload = existing.get("recipes") if isinstance(existing, dict) else None
+            prev_rows = _extract_plan_recipes_as_history_entries(existing_payload, limit=50)
+            if prev_rows:
+                db_history = prev_rows + (db_history if isinstance(db_history, list) else [])
+        except Exception:
+            pass
+
     # Pull DB-backed profile (source of truth for regional + favorites)
     try:
         full_profile = await get_full_profile(user_id)
@@ -4745,6 +5250,8 @@ async def post_party(
             shopping_suggestions=[],
         )
 
+    seed_recipe = getattr(req, "seed_recipe", None)
+
     # Reuse an existing saved party plan for today unless request/inventory changed.
     # Party planning is expensive; caching avoids repeated long generations on web.
     plan_date = date.today()
@@ -4760,6 +5267,7 @@ async def post_party(
             "measurement_system": getattr(req, "measurement_system", None),
             "output_language": getattr(req, "output_language", None),
             "output_languages": getattr(req, "output_languages", None),
+            "seed_recipe_id": (seed_recipe or {}).get("recipe_id") if isinstance(seed_recipe, dict) else None,
         }
         request_hash = hashlib.sha256(
             json.dumps(request_fingerprint, sort_keys=True, default=str).encode("utf-8")
@@ -4767,7 +5275,7 @@ async def post_party(
     except Exception:
         request_hash = ""
 
-    if not force_regenerate:
+    if not force_regenerate and not seed_recipe:
         try:
             existing = await get_meal_plan_for_date(
                 user_id,
@@ -4848,6 +5356,14 @@ async def post_party(
         inventory_override=inventory_models,
         history_override=db_history,
     )
+
+    # Encourage LLM variety between regenerations (non-deterministic hint).
+    try:
+        nonce = str(uuid4())
+        context["variety_nonce"] = nonce
+        context["VARIETY_NONCE"] = nonce
+    except Exception:
+        pass
     context["party_settings"] = req.party_settings.model_dump()
     try:
         context["PARTY_SETTINGS"] = context.get("party_settings")
@@ -4855,6 +5371,14 @@ async def post_party(
         pass
     if getattr(req, "party_course_counts", None) is not None:
         context["party_course_counts"] = req.party_course_counts.model_dump()
+
+    # Ensure the LLM sees the seed recipe when present.
+    if isinstance(seed_recipe, dict) and seed_recipe:
+        try:
+            context["seed_recipe"] = seed_recipe
+            context["SEED_RECIPE"] = seed_recipe
+        except Exception:
+            pass
     
     # Use request preferences first; otherwise derive from household regional_profile.
     allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
@@ -4863,9 +5387,14 @@ async def post_party(
     llm_t0 = perf_counter()
     result = None
     try:
-        result = await asyncio.wait_for(plan_party(context), timeout=25.0)
+        timeout_s = _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_PARTY_SECONDS", default_seconds=90.0)
+        result = await asyncio.wait_for(plan_party(context), timeout=timeout_s)
     except asyncio.TimeoutError:
-        logger.warning("LLM timeout for /plan/party user_id=%s, using fallback party plan", user_id)
+        logger.warning(
+            "LLM timeout for /plan/party user_id=%s (timeout_s=%s), using fallback party plan",
+            user_id,
+            _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_PARTY_SECONDS", default_seconds=90.0),
+        )
         result = None
     except Exception:
         logger.exception("plan_party crashed user_id=%s", user_id)
@@ -4884,13 +5413,50 @@ async def post_party(
 
     # Enforce a recent-recipe cooldown so users see variety across parties.
     if isinstance(result, dict) and result.get("status") == "ok":
-        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
+        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=12)
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _enforce_allowed_cuisines_in_payload(result, allowed_cuisines)
 
     # Avoid duplicates inside a party menu (e.g., same recipe across courses/options).
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
+
+    # Deterministically inject seed recipe into the first course so the UX is guaranteed.
+    if isinstance(result, dict) and result.get("status") == "ok" and isinstance(seed_recipe, dict) and seed_recipe:
+        try:
+            rid = str(seed_recipe.get("recipe_id") or seed_recipe.get("id") or "").strip()
+            if rid:
+                seed_recipe["recipe_id"] = rid
+
+            menus = result.get("menus")
+            if isinstance(menus, list) and menus:
+                menu0 = menus[0] if isinstance(menus[0], dict) else None
+                if isinstance(menu0, dict):
+                    courses = menu0.get("courses")
+                    if isinstance(courses, list) and courses:
+                        # Prefer "Main" course if present.
+                        course_idx = 0
+                        for i, c in enumerate(courses):
+                            if not isinstance(c, dict):
+                                continue
+                            hdr = str(c.get("course_header") or "").strip().lower()
+                            if hdr == "main" or "main" in hdr:
+                                course_idx = i
+                                break
+                        course = courses[course_idx] if isinstance(courses[course_idx], dict) else None
+                        if isinstance(course, dict):
+                            opts = course.get("recipe_options")
+                            if not isinstance(opts, list):
+                                opts = []
+                            # Put seed first and drop any duplicate of the same recipe_id.
+                            opts = [o for o in opts if not (isinstance(o, dict) and rid and str(o.get("recipe_id") or "").strip() == rid)]
+                            course["recipe_options"] = [seed_recipe] + opts
+                            menus[0] = menu0
+                            result["menus"] = menus
+                            if rid:
+                                result["_seed_recipe_id"] = rid
+        except Exception:
+            pass
 
     # Clean up recipe titles so UI never shows ingredient dumps in the name.
     result = _sanitize_recipe_names_in_payload(result)
@@ -5036,6 +5602,21 @@ async def post_weekly(
     except Exception:
         db_history = []
 
+    # Variety: when generating multiple times for the same window, avoid repeating last generated plan recipes.
+    try:
+        prev = await get_meal_plan_for_date(
+            user_id,
+            plan_date=req.start_date,
+            plan_type="weekly",
+            meal_type=None,
+        )
+        prev_payload = prev.get("recipes") if isinstance(prev, dict) else None
+        prev_rows = _extract_plan_recipes_as_history_entries(prev_payload, limit=50)
+        if prev_rows:
+            db_history = prev_rows + (db_history if isinstance(db_history, list) else [])
+    except Exception:
+        pass
+
     inventory_models = _db_inventory_to_models(db_inventory)
     inventory_hash = _inventory_snapshot_hash(inventory_models)
     if not getattr(req, "planning_goal", None) and inventory_models:
@@ -5062,6 +5643,22 @@ async def post_weekly(
         inventory_override=inventory_models,
         history_override=db_history,
     )
+
+    # Encourage LLM variety between regenerations (non-deterministic hint).
+    try:
+        nonce = str(uuid4())
+        context["variety_nonce"] = nonce
+        context["VARIETY_NONCE"] = nonce
+    except Exception:
+        pass
+
+    seed_recipe = getattr(req, "seed_recipe", None)
+    if isinstance(seed_recipe, dict) and seed_recipe:
+        try:
+            context["seed_recipe"] = seed_recipe
+            context["SEED_RECIPE"] = seed_recipe
+        except Exception:
+            pass
     
     # Add weekly-specific fields
     context["start_date"] = req.start_date.isoformat()
@@ -5073,13 +5670,86 @@ async def post_weekly(
     if req.servings:
         context["servings"] = req.servings
     
+    # Generate weekly plan with bounded LLM time and fallback
     llm_t0 = perf_counter()
-    result = await plan_weekly(context)
+    result = None
+    try:
+        # Keep weekly UX responsive; if it stalls, fall back to deterministic weekly plan.
+        timeout_s = _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_WEEKLY_SECONDS", default_seconds=150.0)
+        result = await asyncio.wait_for(plan_weekly(context), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "LLM timeout for /plan/weekly user_id=%s (timeout_s=%s), using fallback weekly plan",
+            user_id,
+            _get_llm_timeout_seconds(env_var="SAVO_LLM_TIMEOUT_WEEKLY_SECONDS", default_seconds=150.0),
+        )
+        result = None
+    except Exception:
+        logger.exception("plan_weekly crashed user_id=%s", user_id)
+        result = None
+
+    # FAIL-SAFE: If LLM failed or returned non-ok/empty, generate a fallback weekly plan.
+    if result is None or not isinstance(result, dict) or result.get("status") != "ok" or not _payload_has_recipes(result):
+        logger.warning("/plan/weekly using fallback plan user_id=%s", user_id)
+        result = _generate_fallback_weekly_plan(
+            inventory=inventory_models,
+            household=household,
+            members=(full_profile.get("members") if isinstance(full_profile, dict) and isinstance(full_profile.get("members"), list) else []),
+            start_date=req.start_date,
+            num_days=req.num_days,
+            timezone=timezone,
+            servings=int(req.servings or 2),
+            time_available_minutes=int(req.time_available_minutes or 30),
+        )
+
     llm_ms = int((perf_counter() - llm_t0) * 1000)
 
     # Avoid duplicated recipes in the returned menu.
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
+
+    # Deterministically inject seed recipe into the first day so the UX is guaranteed.
+    if isinstance(result, dict) and result.get("status") == "ok" and isinstance(seed_recipe, dict) and seed_recipe:
+        try:
+            rid = str(seed_recipe.get("recipe_id") or seed_recipe.get("id") or "").strip()
+            if rid:
+                seed_recipe["recipe_id"] = rid
+
+            menus = result.get("menus")
+            if isinstance(menus, list) and menus:
+                # Find first weekly_day menu.
+                menu_idx = 0
+                for i, m in enumerate(menus):
+                    if not isinstance(m, dict):
+                        continue
+                    if str(m.get("menu_type") or "").strip() == "weekly_day":
+                        menu_idx = i
+                        break
+                menu0 = menus[menu_idx] if isinstance(menus[menu_idx], dict) else None
+                if isinstance(menu0, dict):
+                    courses = menu0.get("courses")
+                    if isinstance(courses, list) and courses:
+                        course_idx = 0
+                        for i, c in enumerate(courses):
+                            if not isinstance(c, dict):
+                                continue
+                            hdr = str(c.get("course_header") or "").strip().lower()
+                            if hdr == "main" or "main" in hdr:
+                                course_idx = i
+                                break
+                        course = courses[course_idx] if isinstance(courses[course_idx], dict) else None
+                        if isinstance(course, dict):
+                            opts = course.get("recipe_options")
+                            if not isinstance(opts, list):
+                                opts = []
+                            opts = [o for o in opts if not (isinstance(o, dict) and rid and str(o.get("recipe_id") or "").strip() == rid)]
+                            course["recipe_options"] = [seed_recipe] + opts
+                            menus[menu_idx] = menu0
+                            result["menus"] = menus
+                            if rid:
+                                result["_seed_recipe_id"] = rid
+        except Exception:
+            pass
 
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _tighten_ingredients_used_in_payload(result)
@@ -5115,7 +5785,7 @@ async def post_weekly(
     if isinstance(result, dict) and result.get("status") == "ok":
         # Enforce a recent-recipe cooldown so weekly plans don't repeat recent cooks.
         if isinstance(result, dict) and result.get("status") == "ok":
-            result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=3)
+            result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=12)
 
         # Enforce cuisine allow-list on output.
         allowed_cuisines = _allowed_cuisines_from_profile_and_request(req, household)
@@ -5140,6 +5810,10 @@ async def post_weekly(
         try:
             result["_inventory_hash"] = inventory_hash
             result["_include_inactive_inventory"] = include_inactive_inv
+            if isinstance(seed_recipe, dict) and seed_recipe:
+                rid = str(seed_recipe.get("recipe_id") or seed_recipe.get("id") or "").strip()
+                if rid:
+                    result["_seed_recipe_id"] = rid
         except Exception:
             pass
         try:

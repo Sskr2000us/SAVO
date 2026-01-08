@@ -316,6 +316,31 @@ class _CookModeScreenState extends State<CookModeScreen> {
         ? (response['insufficient_items'] as List)
         : const [];
 
+    String fmt(dynamic item) {
+      if (item is Map) {
+        final m = Map<String, dynamic>.from(item);
+        final name = (m['name'] ?? m['canonical_name'] ?? m['ingredient'] ?? m['item'] ?? '').toString().trim();
+        final unit = (m['unit'] ?? '').toString().trim();
+        final needed = m['required'] ?? m['needed'] ?? m['missing'] ?? m['quantity'] ?? m['amount'];
+        final have = m['available'] ?? m['have'] ?? m['on_hand'] ?? m['inventory_quantity'];
+
+        final String neededStr = (needed == null)
+            ? ''
+            : [needed, unit].where((x) => x != null && x.toString().trim().isNotEmpty).join(' ').trim();
+        final String haveStr = (have == null)
+            ? ''
+            : [have, unit].where((x) => x != null && x.toString().trim().isNotEmpty).join(' ').trim();
+
+        final base = name.isNotEmpty ? name : 'Item';
+        if (neededStr.isNotEmpty && haveStr.isNotEmpty) return '$base — need $neededStr, have $haveStr';
+        if (neededStr.isNotEmpty) return '$base — need $neededStr';
+        if (haveStr.isNotEmpty) return '$base — have $haveStr';
+        return base;
+      }
+      final s = item?.toString().trim() ?? '';
+      return s.isNotEmpty ? s : 'Item';
+    }
+
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -329,7 +354,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
               const SizedBox(height: 12),
               const Text('Missing items:'),
               const SizedBox(height: 8),
-              ...insufficient.take(6).map((i) => Text('• ${i.toString()}')),
+              ...insufficient.take(6).map((i) => Text('• ${fmt(i)}')),
               if (insufficient.length > 6) Text('• +${insufficient.length - 6} more'),
             ],
           ],

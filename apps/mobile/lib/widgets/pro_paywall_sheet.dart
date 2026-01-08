@@ -1,13 +1,46 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../services/api_client.dart';
 import '../services/entitlements_service.dart';
+import '../services/metrics_service.dart';
 
 Future<bool> showProPaywallSheet(
   BuildContext context, {
   required String title,
   required String ctaLabel,
   required String reason,
+  String? trigger,
 }) async {
+  final safeTrigger = (trigger ?? '').trim().isNotEmpty ? trigger!.trim() : 'unknown';
+
+  fireAndForget(MetricsService.instance.recordEvent('paywall_shown'));
+  // Best-effort server analytics.
+  try {
+    final apiClient = Provider.of<ApiClient>(context, listen: false);
+    fireAndForget(() async {
+      try {
+        await apiClient.post('/analytics/events', {
+          'events': [
+            {
+              'name': 'paywall_shown',
+              'ts': DateTime.now().toIso8601String(),
+              'props': {
+                'trigger': safeTrigger,
+                'title': title,
+                'cta_label': ctaLabel,
+              },
+            }
+          ],
+        });
+      } catch (_) {
+        // ignore
+      }
+    }());
+  } catch (_) {
+    // ignore
+  }
+
   final res = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
@@ -42,8 +75,44 @@ Future<bool> showProPaywallSheet(
                   Expanded(
                     child: FilledButton(
                       onPressed: () async {
+                        fireAndForget(MetricsService.instance.recordEvent('upgrade_started'));
                         // Placeholder upgrade flow: locally unlock.
                         await EntitlementsService.instance.setPro(true);
+
+                        fireAndForget(MetricsService.instance.recordEvent('upgrade_completed'));
+                        // Best-effort server analytics.
+                        try {
+                          final apiClient = Provider.of<ApiClient>(context, listen: false);
+                          fireAndForget(() async {
+                            try {
+                              await apiClient.post('/analytics/events', {
+                                'events': [
+                                  {
+                                    'name': 'upgrade_started',
+                                    'ts': DateTime.now().toIso8601String(),
+                                    'props': {
+                                      'trigger': safeTrigger,
+                                      'title': title,
+                                    },
+                                  },
+                                  {
+                                    'name': 'upgrade_completed',
+                                    'ts': DateTime.now().toIso8601String(),
+                                    'props': {
+                                      'trigger': safeTrigger,
+                                      'title': title,
+                                    },
+                                  },
+                                ],
+                              });
+                            } catch (_) {
+                              // ignore
+                            }
+                          }());
+                        } catch (_) {
+                          // ignore
+                        }
+
                         if (ctx.mounted) Navigator.pop(ctx, true);
                       },
                       child: Text(ctaLabel),

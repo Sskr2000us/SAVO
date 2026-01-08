@@ -186,6 +186,7 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade to weekly planning',
         reason: 'Weekly planning is a Pro feature. Pro saves you time by generating a full week plus a shopping list in one tap.',
+        trigger: 'weekly_planning_gate',
       );
       return;
     }

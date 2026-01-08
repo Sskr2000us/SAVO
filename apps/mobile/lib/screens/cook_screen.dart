@@ -156,12 +156,16 @@ class _CookScreenState extends State<CookScreen> {
 
   int _extractServings(Menu menu) {
     if (menu.servings.isEmpty) return 1;
-    final total = menu.servings['total'];
+    final total = menu.servings['total'] ?? menu.servings['count'];
     if (total is int && total > 0) return total;
     if (total is num && total > 0) return total.toInt();
 
     int sum = 0;
-    for (final v in menu.servings.values) {
+    for (final entry in menu.servings.entries) {
+      final key = entry.key.toString().toLowerCase();
+      if (key == 'scaling_factor' || key == 'scale' || key == 'multiplier') continue;
+
+      final v = entry.value;
       if (v is int) sum += v;
       if (v is num) sum += v.toInt();
     }

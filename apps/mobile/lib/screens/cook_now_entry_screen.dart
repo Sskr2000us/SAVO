@@ -107,6 +107,7 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade for unlimited suggestions',
         reason: 'You\'ve used today\'s free recipe suggestions. Pro unlocks unlimited daily suggestions plus weekly planning and shopping lists.',
+        trigger: 'suggestions_limit',
       );
       return;
     }

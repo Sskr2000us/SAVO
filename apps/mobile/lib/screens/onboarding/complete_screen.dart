@@ -4,6 +4,7 @@ import '../../models/profile_state.dart';
 import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
+import '../../services/metrics_service.dart';
 
 class OnboardingCompleteScreen extends StatefulWidget {
   const OnboardingCompleteScreen({super.key});
@@ -43,6 +44,26 @@ class _OnboardingCompleteScreenState extends State<OnboardingCompleteScreen> {
       if (userId != null) {
         await OnboardingStorage.saveLastStep('COMPLETE', userId);
       }
+
+      // Activation tracking (local-first): onboarding completion + time-to-first-value.
+      fireAndForget(MetricsService.instance.recordEvent('onboarding_complete'));
+      fireAndForget(MetricsService.instance.startTimer('ttfv'));
+
+      // Activation funnel reporting (best-effort; ignore failures).
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'onboarding_complete',
+                'ts': DateTime.now().toIso8601String(),
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
 
       if (mounted) {
         // Navigate to landing page for first-time welcome

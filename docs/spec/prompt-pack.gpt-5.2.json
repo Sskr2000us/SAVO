@@ -633,20 +633,21 @@
             "If SESSION_REQUEST.planning_goal is set, apply the same tradeoffs as daily planning across the full horizon.",
             "If SESSION_REQUEST.avoid_waste=true, schedule expiring items earlier in the window and include leftover reuse ideas to reduce waste.",
             "Leftovers-aware planning: Unless SESSION_REQUEST.use_leftovers is explicitly false, if leftovers_summary.count>0 or any INVENTORY item has state='leftover', you MUST schedule leftover consumption within the first 1-2 days when safe (or within weekly_rules.use_leftovers_within_days if present). Prefer consuming leftovers with low freshness_days_remaining earlier.",
+            "CONCISENESS (CRITICAL): Weekly plans must be compact to avoid truncation. Use short strings. Keep steps length 1-2 and steps[].tips=[]. Keep youtube_references=[]. Keep health_benefits=[]. new_ingredients_optional max 3 items.",
             "REQUIRED: Return planning_window object with fields: {start_date (YYYY-MM-DD), num_days (1..4), timezone (string)}.",
             "Generate one menu with menu_type='weekly_day' for each day in the planning window.",
             "For each weekly_day menu, you MUST set:",
             "  - day_index: 0-based integer (0 for first day, 1 for second day, etc.)",
             "  - date: calculated date in YYYY-MM-DD format (start_date + day_index days)",
+            "For each weekly_day menu, generate a SINGLE course (course_header='Dinner') with EXACTLY 2 recipe_options (minimum viable variety).",
             "Apply weekly planning rules:",
             "  - max_repeat_cuisine_per_week: avoid same cuisine appearing more than twice in the window",
             "  - use_leftovers_within_days: schedule leftover reuse within 2 days (configurable, default 2)",
             "  - treat_meals_per_week: optional special meals if configured",
             "  - Rotate cuisines and cooking methods for variety",
             "  - Prefer expiring ingredients in earlier days",
-            "Include shopping_suggestions aggregated across all days for efficient grocery planning."
-            ,
-            "For each recipe, also include chef_tips, cultural_context, and dietary_information as defined in the schema."
+            "Include shopping_suggestions aggregated across all days for efficient grocery planning (max 10 items).",
+            "If chef_tips/cultural_context/dietary_information fields are present in the schema, keep them minimal: chef_tips max 2 short bullets; cultural_context strings <= 80 chars; dietary_information allergens/religious_compatibility lists should be concise."
           ]
         },
         {

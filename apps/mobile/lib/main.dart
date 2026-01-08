@@ -15,6 +15,7 @@ import 'screens/onboarding/login_screen.dart';
 import 'screens/account_settings_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
+import 'services/pending_scan_sync_service.dart';
 import 'services/profile_service.dart';
 import 'services/onboarding_storage.dart';
 import 'models/profile_state.dart';
@@ -56,6 +57,9 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // Best-effort: flush any queued scan confirmations.
+    unawaited(PendingScanSyncService.instance.flush());
   }
 
   @override
@@ -69,6 +73,9 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // Refresh session when app resumes
       _refreshSession();
+
+      // Best-effort: flush any queued scan confirmations.
+      unawaited(PendingScanSyncService.instance.flush());
     }
   }
 
@@ -249,6 +256,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       // Add small delay to ensure Supabase is initialized
       _setPhase('Initializing auth');
       await Future.delayed(const Duration(milliseconds: 500));
+
+      if (!mounted) return;
       
       final session = Supabase.instance.client.auth.currentSession;
       

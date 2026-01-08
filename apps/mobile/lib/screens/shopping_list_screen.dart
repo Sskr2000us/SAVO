@@ -192,6 +192,28 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
     await client.from(_supabaseTable).upsert(rows);
   }
 
+  Future<void> _pushAllLocalToSupabase(String householdId) async {
+    if (_items.isEmpty) return;
+    final client = Supabase.instance.client;
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    final rows = <Map<String, dynamic>>[];
+    for (final item in _items) {
+      final key = _itemKey(item);
+      if (key.trim().isEmpty) continue;
+      rows.add({
+        'household_id': householdId,
+        'item_key': key,
+        'item_json': item,
+        'checked': _checked[key] == true,
+        'updated_at': now,
+      });
+    }
+    if (rows.isEmpty) return;
+
+    await client.from(_supabaseTable).upsert(rows);
+  }
+
   void _subscribeRealtime(String householdId) {
     final client = Supabase.instance.client;
 
@@ -414,9 +436,23 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
               onPressed: () async {
                 await _persistItems(_items);
                 await _persistChecked(_checked);
+
+                // Best-effort: also sync to Supabase so it survives reinstall / other devices.
+                String message = 'Shopping list saved';
+                try {
+                  final session = Supabase.instance.client.auth.currentSession;
+                  final householdId = _householdId();
+                  if (session != null && householdId != null) {
+                    await _pushAllLocalToSupabase(householdId);
+                    message = 'Shopping list saved + synced';
+                  }
+                } catch (_) {
+                  // Keep local save success, but inform user sync might be unavailable.
+                  message = 'Shopping list saved (sync unavailable)';
+                }
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Shopping list saved')),
+                  SnackBar(content: Text(message)),
                 );
               },
             ),

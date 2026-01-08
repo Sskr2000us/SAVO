@@ -52,6 +52,7 @@ class _LandingScreenState extends State<LandingScreen> {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade for unlimited scans',
         reason: 'You\'ve hit today\'s free scan limit. Upgrade to keep scanning and get unlimited suggestions.',
+        trigger: 'scan_limit',
       );
       return;
     }

@@ -95,6 +95,7 @@ class UpsellService {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade to auto-plan',
         reason: 'Auto weekly plans + shopping lists are a Pro feature. Upgrade to save time and reduce waste.',
+        trigger: 'upsell_auto_plan',
       );
       if (!upgraded) return;
     }

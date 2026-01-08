@@ -139,6 +139,29 @@ def _looks_like(recipe: Dict[str, Any], *, words: Iterable[str], course_header: 
 def validate_recipe(*, recipe: Dict[str, Any], path_prefix: str, course_header: Optional[str]) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
 
+    # Require stable identifiers and names so clients can display and dedupe reliably.
+    rid = recipe.get("recipe_id")
+    if not isinstance(rid, str) or not rid.strip():
+        issues.append(
+            SemanticIssue(
+                severity="error",
+                code="RECIPE_MISSING_ID",
+                message="Recipe is missing recipe_id; include a stable non-empty identifier.",
+                path=f"{path_prefix}.recipe_id",
+            )
+        )
+
+    display_name = _recipe_display_name(recipe)
+    if not isinstance(display_name, str) or not display_name.strip():
+        issues.append(
+            SemanticIssue(
+                severity="error",
+                code="RECIPE_MISSING_NAME",
+                message="Recipe is missing recipe_name; include a short human-readable dish name.",
+                path=f"{path_prefix}.recipe_name",
+            )
+        )
+
     # Basic trust guardrails: recipe must have some ingredients and steps.
     ingredients_used = recipe.get("ingredients_used")
     if not isinstance(ingredients_used, list) or len(ingredients_used) == 0:
@@ -150,6 +173,37 @@ def validate_recipe(*, recipe: Dict[str, Any], path_prefix: str, course_header: 
                 path=f"{path_prefix}.ingredients_used",
             )
         )
+
+    # Enforce ingredient detail: most ingredients must have amount + unit.
+    # This prevents "just names" lists that make cooking impossible.
+    if isinstance(ingredients_used, list) and ingredients_used:
+        detailed = 0
+        total = 0
+        for it in ingredients_used:
+            if not isinstance(it, dict):
+                continue
+            total += 1
+            amt = it.get("amount")
+            unit = it.get("unit")
+            has_amt = isinstance(amt, (int, float)) and float(amt) > 0
+            has_unit = isinstance(unit, str) and unit.strip()
+            if has_amt and has_unit:
+                detailed += 1
+
+        if total > 0:
+            # Require at least half the ingredients to have measurable amounts.
+            if detailed < max(1, total // 2):
+                issues.append(
+                    SemanticIssue(
+                        severity="error",
+                        code="INGREDIENT_DETAILS_MISSING",
+                        message=(
+                            "Too many ingredients are missing amount/unit. Provide measurable amounts (e.g., 200 g, 1 tsp) "
+                            "for at least half of ingredients_used."
+                        ),
+                        path=f"{path_prefix}.ingredients_used",
+                    )
+                )
 
     steps = recipe.get("steps")
     if not isinstance(steps, list) or len(steps) == 0:
@@ -255,6 +309,10 @@ def validate_menu_plan_semantics(payload: Dict[str, Any]) -> List[SemanticIssue]
     if not isinstance(menus, list):
         return issues
 
+    # Plan-level dedupe: repeated recipe options make the UX feel broken.
+    seen_ids: Dict[str, str] = {}
+    seen_names: Dict[str, str] = {}
+
     for mi, menu in enumerate(menus):
         if not isinstance(menu, dict):
             continue
@@ -268,11 +326,74 @@ def validate_menu_plan_semantics(payload: Dict[str, Any]) -> List[SemanticIssue]
             recipe_options = course.get("recipe_options")
             if not isinstance(recipe_options, list):
                 continue
+
+            # Course-level uniqueness.
+            course_ids: Dict[str, str] = {}
+            course_names: Dict[str, str] = {}
+
             for ri, recipe in enumerate(recipe_options):
                 if not isinstance(recipe, dict):
                     continue
                 path = f"menus[{mi}].courses[{ci}].recipe_options[{ri}]"
                 issues.extend(validate_recipe(recipe=recipe, path_prefix=path, course_header=course_header))
+
+                rid = recipe.get("recipe_id")
+                if isinstance(rid, str) and rid.strip():
+                    rid_norm = rid.strip().lower()
+                    prior = course_ids.get(rid_norm)
+                    if prior is not None:
+                        issues.append(
+                            SemanticIssue(
+                                severity="error",
+                                code="DUPLICATE_RECIPE_ID_IN_COURSE",
+                                message="Duplicate recipe_id inside the same course. Options must be distinct recipes.",
+                                path=path,
+                            )
+                        )
+                    else:
+                        course_ids[rid_norm] = path
+
+                    prior_global = seen_ids.get(rid_norm)
+                    if prior_global is not None:
+                        issues.append(
+                            SemanticIssue(
+                                severity="error",
+                                code="DUPLICATE_RECIPE_ID_IN_PLAN",
+                                message="Duplicate recipe_id found in the plan. Do not repeat the same recipe across options/courses.",
+                                path=path,
+                            )
+                        )
+                    else:
+                        seen_ids[rid_norm] = path
+
+                nm = _recipe_display_name(recipe)
+                if isinstance(nm, str) and nm.strip():
+                    nm_norm = nm.strip().lower()
+                    prior_n = course_names.get(nm_norm)
+                    if prior_n is not None:
+                        issues.append(
+                            SemanticIssue(
+                                severity="error",
+                                code="DUPLICATE_RECIPE_NAME_IN_COURSE",
+                                message="Duplicate recipe_name inside the same course. Options must be different dishes.",
+                                path=path,
+                            )
+                        )
+                    else:
+                        course_names[nm_norm] = path
+
+                    prior_global_n = seen_names.get(nm_norm)
+                    if prior_global_n is not None:
+                        issues.append(
+                            SemanticIssue(
+                                severity="error",
+                                code="DUPLICATE_RECIPE_NAME_IN_PLAN",
+                                message="Duplicate recipe_name found in the plan. Avoid repeating the same dish across the plan.",
+                                path=path,
+                            )
+                        )
+                    else:
+                        seen_names[nm_norm] = path
 
     return issues
 

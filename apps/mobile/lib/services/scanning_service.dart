@@ -7,10 +7,33 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/app_config.dart';
+import 'pending_scan_sync_service.dart';
 
 /// Service for pantry/fridge scanning with Vision AI
 class ScanningService {
   final String baseUrl = Config.apiBaseUrl;
+
+  String _normalizeUnit(String? unit) {
+    final u = (unit ?? '').trim().toLowerCase();
+    if (u.isEmpty) return 'pieces';
+    if (u == 'pc' || u == 'pcs' || u == 'piece') return 'pieces';
+    if (u == 'g') return 'grams';
+    if (u == 'l') return 'liters';
+    return u;
+  }
+
+  Map<String, dynamic> _normalizeConfirmation(Map<String, dynamic> confirmation) {
+    final out = Map<String, dynamic>.from(confirmation);
+    final cn = out['confirmed_name'];
+    if (cn is String) {
+      out['confirmed_name'] = cn.trim();
+    }
+    final unit = out['unit'];
+    if (unit is String) {
+      out['unit'] = _normalizeUnit(unit);
+    }
+    return out;
+  }
 
   Future<String?> _getAccessToken() async {
     final session = Supabase.instance.client.auth.currentSession;
@@ -221,6 +244,7 @@ class ScanningService {
   Future<Map<String, dynamic>> confirmIngredients({
     required String scanId,
     required List<Map<String, dynamic>> confirmations,
+    bool queueOnFailure = true,
   }) async {
     try {
       // Get auth token
@@ -243,7 +267,7 @@ class ScanningService {
         },
         body: json.encode({
           'scan_id': scanId,
-          'confirmations': confirmations,
+          'confirmations': confirmations.map(_normalizeConfirmation).toList(),
         }),
       );
 
@@ -264,6 +288,38 @@ class ScanningService {
           'error': error['detail'] ?? 'Confirmation failed',
         };
       }
+    } on SocketException {
+      if (queueOnFailure) {
+        await PendingScanSyncService.instance.enqueueConfirmIngredients(
+          scanId: scanId,
+          confirmations: confirmations.map(_normalizeConfirmation).toList(),
+        );
+        return {
+          'success': true,
+          'queued': true,
+          'message': 'Saved offline. Will sync when online.',
+        };
+      }
+      return {
+        'success': false,
+        'error': 'No internet connection. Please check your network and try again.',
+      };
+    } on TimeoutException {
+      if (queueOnFailure) {
+        await PendingScanSyncService.instance.enqueueConfirmIngredients(
+          scanId: scanId,
+          confirmations: confirmations.map(_normalizeConfirmation).toList(),
+        );
+        return {
+          'success': true,
+          'queued': true,
+          'message': 'Saved offline. Will sync when online.',
+        };
+      }
+      return {
+        'success': false,
+        'error': 'Request timed out. Please try again.',
+      };
     } catch (e) {
       return {
         'success': false,
@@ -672,6 +728,7 @@ class ScanningService {
     required double quantity,
     required String unit,
     String scanType = 'pantry',
+    bool queueOnFailure = true,
   }) async {
     try {
       final token = await _getAccessToken();
@@ -686,9 +743,17 @@ class ScanningService {
       final request = http.MultipartRequest('POST', uri);
       request.headers['Authorization'] = 'Bearer $token';
 
-      request.fields['ingredient_name'] = ingredientName;
-      request.fields['quantity'] = quantity.toString();
-      request.fields['unit'] = unit;
+      final name = ingredientName.trim();
+      if (name.isEmpty) {
+        return {
+          'success': false,
+          'error': 'Missing ingredient name.',
+        };
+      }
+
+      request.fields['ingredient_name'] = name;
+      request.fields['quantity'] = (quantity <= 0 ? 1.0 : quantity).toString();
+      request.fields['unit'] = _normalizeUnit(unit);
       request.fields['scan_type'] = scanType;
 
       final streamedResponse = await request.send();
@@ -707,6 +772,42 @@ class ScanningService {
           'error': error['detail'] ?? 'Confirmation failed',
         };
       }
+    } on SocketException {
+      if (queueOnFailure) {
+        await PendingScanSyncService.instance.enqueueConfirmSingle(
+          ingredientName: ingredientName,
+          quantity: quantity <= 0 ? 1.0 : quantity,
+          unit: _normalizeUnit(unit),
+          scanType: scanType,
+        );
+        return {
+          'success': true,
+          'queued': true,
+          'message': 'Saved offline. Will sync when online.',
+        };
+      }
+      return {
+        'success': false,
+        'error': 'No internet connection. Check network and try again.',
+      };
+    } on TimeoutException {
+      if (queueOnFailure) {
+        await PendingScanSyncService.instance.enqueueConfirmSingle(
+          ingredientName: ingredientName,
+          quantity: quantity <= 0 ? 1.0 : quantity,
+          unit: _normalizeUnit(unit),
+          scanType: scanType,
+        );
+        return {
+          'success': true,
+          'queued': true,
+          'message': 'Saved offline. Will sync when online.',
+        };
+      }
+      return {
+        'success': false,
+        'error': 'Request timed out. Please try again.',
+      };
     } catch (e) {
       return {
         'success': false,

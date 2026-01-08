@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../services/api_client.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../theme/app_theme.dart';
@@ -155,6 +156,27 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
         fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
         fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
         fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
+        // Explicit confirm/save completion for activation funnel.
+        fireAndForget(MetricsService.instance.recordEvent('pantry_confirm_completed'));
+        // Time-to-first-value: best-effort end on first successful scan save.
+        fireAndForget(MetricsService.instance.endTimer('ttfv'));
+
+        // Activation funnel reporting (best-effort; ignore failures).
+        fireAndForget(() async {
+          try {
+            final apiClient = ApiClient();
+            await apiClient.post('/analytics/events', {
+              'events': [
+                {
+                  'name': 'pantry_confirm_completed',
+                  'ts': DateTime.now().toIso8601String(),
+                }
+              ],
+            });
+          } catch (_) {
+            // ignore
+          }
+        }());
         final added = res['pantry_items_added'];
         final addedCount = (added is num) ? added.toInt() : _itemCount();
 

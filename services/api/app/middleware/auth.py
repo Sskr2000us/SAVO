@@ -8,7 +8,7 @@ import jwt
 from jwt.exceptions import InvalidTokenError
 import os
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,28 @@ if not SUPABASE_JWT_SECRET:
     logger.warning("SUPABASE_JWT_SECRET not set - JWT validation will fail")
 
 
-async def get_current_user(authorization: str = Header(None, alias="Authorization")) -> str:
+class UserContext(str):
+    """Backwards-compatible user context.
+
+    Many routes historically depended on `get_current_user` returning either:
+    - a plain `str` user_id, OR
+    - a dict-like object with `.get('id')`.
+
+    This type behaves like a string user_id, while also exposing `.get()`.
+    """
+
+    def __new__(cls, user_id: str, payload: Optional[Dict[str, Any]] = None):
+        obj = str.__new__(cls, user_id)
+        obj._payload = payload or {}
+        return obj
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "id":
+            return str(self)
+        return self._payload.get(key, default)
+
+
+async def get_current_user(authorization: str = Header(None, alias="Authorization")) -> UserContext:
     """
     Dependency that validates JWT token and returns user_id.
     TEMPORARY: Validation disabled for debugging
@@ -61,7 +82,8 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
             )
         
         logger.info(f"AUTH_SUCCESS: user_id={user_id}")
-        return user_id
+        # Return a string-like object that also supports `.get('id')`.
+        return UserContext(str(user_id), payload=payload if isinstance(payload, dict) else {})
         
     except jwt.InvalidTokenError as e:
         logger.error(f"AUTH_FAIL: JWT decode error: {type(e).__name__}: {e}")
@@ -77,7 +99,7 @@ async def get_current_user(authorization: str = Header(None, alias="Authorizatio
         )
 
 
-async def get_current_user_optional(authorization: str = Header(None, alias="Authorization")) -> Optional[str]:
+async def get_current_user_optional(authorization: str = Header(None, alias="Authorization")) -> Optional[UserContext]:
     """
     Optional authentication - returns user_id if token provided, else None.
     Useful for routes that work for both authenticated and anonymous users.

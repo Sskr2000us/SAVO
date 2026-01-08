@@ -8,9 +8,13 @@ import '../services/cuisine_preference_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../services/saved_recipes_local_service.dart';
+import '../services/entitlements_service.dart';
 import '../services/upsell_service.dart';
+import '../services/weekly_cook_streak_service.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'cook_mode_screen.dart';
-import 'plan_screen.dart';
+import 'party_setup_screen.dart';
+import 'planning_results_screen.dart';
 
 class CookNowRecipeDetailScreen extends StatefulWidget {
   final Recipe recipe;
@@ -68,6 +72,194 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   bool _checkingSaved = true;
   bool _savingToggle = false;
   bool _isSaved = false;
+
+  bool _markingCooked = false;
+  bool _addingToPlan = false;
+
+  String _todayIsoDate() {
+    final now = DateTime.now();
+    final y = now.year.toString().padLeft(4, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final d = now.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  Future<void> _addToDailyPlan() async {
+    if (_addingToPlan) return;
+    setState(() => _addingToPlan = true);
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final recipe = widget.recipe;
+
+      final body = <String, dynamic>{
+        'time_available_minutes': (recipe.estimatedTimes.totalMinutes > 0) ? recipe.estimatedTimes.totalMinutes : 60,
+        'servings': 4,
+        'current_date': _todayIsoDate(),
+        'meal_type': 'dinner',
+        'seed_recipe': recipe.toJson(),
+      };
+
+      final res = await apiClient.post('/plan/daily?force_regenerate=true', body);
+      final plan = MenuPlanResponse.fromJson(res);
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PlanningResultsScreen(
+            menuPlan: plan,
+            planType: 'daily',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to add to plan: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _addingToPlan = false);
+    }
+  }
+
+  Future<void> _addToWeeklyPlan() async {
+    if (_addingToPlan) return;
+    setState(() => _addingToPlan = true);
+
+    try {
+      final isPro = await EntitlementsService.instance.isPro();
+      if (!isPro && mounted) {
+        await showProPaywallSheet(
+          context,
+          title: 'Upgrade to SAVO Pro',
+          ctaLabel: 'Upgrade to weekly planning',
+          reason: 'Weekly planning is a Pro feature.',
+          trigger: 'weekly_planning_gate',
+        );
+        return;
+      }
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final recipe = widget.recipe;
+
+      final body = <String, dynamic>{
+        'start_date': _todayIsoDate(),
+        'num_days': 3,
+        'servings': 4,
+        'time_available_minutes': 60,
+        'seed_recipe': recipe.toJson(),
+      };
+
+      final res = await apiClient.post('/plan/weekly', body);
+      final plan = MenuPlanResponse.fromJson(res);
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PlanningResultsScreen(
+            menuPlan: plan,
+            planType: 'weekly',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to add to weekly plan: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _addingToPlan = false);
+    }
+  }
+
+  Future<void> _addToPartyPlan() async {
+    if (_addingToPlan) return;
+
+    // Party planning requires guest inputs; route to setup and carry the seed recipe.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PartySetupScreen(
+          mode: PartyPlanningMode.dinnerParty,
+          seedRecipe: widget.recipe,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAddToPlanChooser() async {
+    if (_addingToPlan) return;
+
+    final selection = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('Daily plan'),
+              onTap: () => Navigator.pop(ctx, 'daily'),
+            ),
+            ListTile(
+              title: const Text('Weekly plan'),
+              onTap: () => Navigator.pop(ctx, 'weekly'),
+            ),
+            ListTile(
+              title: const Text('Party plan'),
+              onTap: () => Navigator.pop(ctx, 'party'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    if (selection == 'daily') return _addToDailyPlan();
+    if (selection == 'weekly') return _addToWeeklyPlan();
+    if (selection == 'party') return _addToPartyPlan();
+  }
+
+  final WeeklyCookStreakService _weeklyCookStreakService = WeeklyCookStreakService();
+
+  Future<void> _markCooked() async {
+    if (_markingCooked) return;
+    setState(() => _markingCooked = true);
+
+    try {
+      fireAndForget(MetricsService.instance.recordEvent('recipe_marked_cooked'));
+      fireAndForget(MetricsService.instance.recordEvent('recipe_cooked'));
+      fireAndForget(_weeklyCookStreakService.markCooked());
+      fireAndForget(MetricsService.instance.endTimer('ttfv'));
+
+      // Activation funnel reporting (best-effort; ignore failures).
+      try {
+        final apiClient = Provider.of<ApiClient>(context, listen: false);
+        fireAndForget(() async {
+          try {
+            await apiClient.post('/analytics/events', {
+              'events': [
+                {
+                  'name': 'recipe_cooked',
+                  'ts': DateTime.now().toIso8601String(),
+                }
+              ],
+            });
+          } catch (_) {
+            // ignore
+          }
+        }());
+      } catch (_) {
+        // ignore
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Marked as cooked')),
+      );
+    } finally {
+      if (mounted) setState(() => _markingCooked = false);
+    }
+  }
 
   String _stripIngredientDumpSuffix(String input) {
     var s = (input).trim();
@@ -150,6 +342,32 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // Core loop tracking: recipe opened.
+    fireAndForget(MetricsService.instance.recordEvent('recipe_opened'));
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'recipe_opened',
+                'ts': DateTime.now().toIso8601String(),
+                'props': {
+                  'recipe_id': widget.recipe.recipeId,
+                  'screen': 'CookNowRecipeDetailScreen',
+                },
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
+    } catch (_) {
+      // ignore
+    }
+
     if (widget.assumeStaples != null) {
       _assumeStaples = widget.assumeStaples!;
     } else {
@@ -201,6 +419,27 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
         await SavedRecipesLocalService.instance.upsertSavedRecipe(widget.recipe);
       }
 
+
+        // Core loop tracking: recipe saved.
+        fireAndForget(MetricsService.instance.recordEvent('recipe_saved'));
+        fireAndForget(() async {
+          try {
+            await apiClient.post('/analytics/events', {
+              'events': [
+                {
+                  'name': 'recipe_saved',
+                  'ts': DateTime.now().toIso8601String(),
+                  'props': {
+                    'recipe_id': rid,
+                    'screen': 'CookNowRecipeDetailScreen',
+                  },
+                }
+              ],
+            });
+          } catch (_) {
+            // ignore
+          }
+        }());
       if (!mounted) return;
       final next = !_isSaved;
       setState(() => _isSaved = next);
@@ -678,13 +917,22 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
           const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _markingCooked ? null : _markCooked,
+              icon: _markingCooked
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.check_circle_outline),
+              label: const Text('Mark cooked'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
             child: TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const PlanScreen()),
-                );
-              },
-              child: const Text('Add to plan'),
+              onPressed: _addingToPlan ? null : _showAddToPlanChooser,
+              child: _addingToPlan
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Add to plan'),
             ),
           ),
         ],

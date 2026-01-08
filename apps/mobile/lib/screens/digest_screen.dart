@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/weekly_cook_streak_service.dart';
+
 /// Daily Digest Screen
 /// Displays morning/evening digest with personalized recommendations
 class DigestScreen extends StatefulWidget {
@@ -17,9 +19,11 @@ class DigestScreen extends StatefulWidget {
 
 class _DigestScreenState extends State<DigestScreen> {
   final DailyHabitService _habitService = DailyHabitService();
+  final WeeklyCookStreakService _weeklyCookStreakService = WeeklyCookStreakService();
   Map<String, dynamic>? _digest;
   bool _isLoading = true;
   String? _error;
+  int _cookedThisWeek = 0;
 
   @override
   void initState() {
@@ -44,8 +48,11 @@ class _DigestScreenState extends State<DigestScreen> {
           ? await _habitService.generateMorningDigest(userId)
           : await _habitService.generateEveningDigest(userId);
 
+        final cookedThisWeek = await _weeklyCookStreakService.cookedCountThisWeek();
+
       setState(() {
         _digest = digest;
+        _cookedThisWeek = cookedThisWeek;
         _isLoading = false;
       });
     } catch (e) {
@@ -283,6 +290,12 @@ class _DigestScreenState extends State<DigestScreen> {
             _buildStreakRow(
               '👨‍🍳 Daily Cook',
               streaks['daily_cook'] ?? 0,
+              isDarkMode,
+            ),
+            const SizedBox(height: 12),
+            _buildStreakRow(
+              '🥘 Cooked This Week',
+              _cookedThisWeek,
               isDarkMode,
             ),
           ],

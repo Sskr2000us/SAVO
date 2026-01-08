@@ -88,6 +88,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
         title: 'Upgrade to SAVO Pro',
         ctaLabel: 'Upgrade to family planning',
         reason: 'Planning for groups and events is a Pro feature. Upgrade to generate menus faster and reduce waste with better shopping lists.',
+        trigger: 'party_planning_gate',
       );
       return;
     }
@@ -139,7 +140,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
         body['use_leftovers'] = false;
       }
 
-      final response = await apiClient.post('/plan/party', body);
+      final response = await apiClient.post('/plan/party?force_regenerate=true', body);
 
       if (response['status'] == 'ok') {
         final menuPlan = MenuPlanResponse.fromJson(response);

@@ -21,8 +21,9 @@ enum _MealTypeChoice { casual, standard, formal }
 
 class PartySetupScreen extends StatefulWidget {
   final PartyPlanningMode mode;
+  final Recipe? seedRecipe;
 
-  const PartySetupScreen({super.key, required this.mode});
+  const PartySetupScreen({super.key, required this.mode, this.seedRecipe});
 
   @override
   State<PartySetupScreen> createState() => _PartySetupScreenState();
@@ -281,6 +282,11 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
       'use_leftovers': true,
     };
 
+    // Optional: seed a specific recipe into the party plan.
+    if (widget.seedRecipe != null) {
+      body['seed_recipe'] = widget.seedRecipe!.toJson();
+    }
+
     if (_includeInactiveInventory) {
       body['include_inactive_inventory'] = true;
     }
@@ -303,7 +309,7 @@ class _PartySetupScreenState extends State<PartySetupScreen> {
       body['measurement_system'] = measurementSystem.trim();
     }
 
-    final res = await apiClient.post('/plan/party', body);
+    final res = await apiClient.post('/plan/party?force_regenerate=true', body);
     final plan = MenuPlanResponse.fromJson(res);
 
     fireAndForget(MetricsService.instance.recordWorkflowStep('PlanParty', 'GenerateMenu'));

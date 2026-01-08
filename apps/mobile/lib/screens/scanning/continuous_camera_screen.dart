@@ -244,9 +244,39 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   }
 
   Future<void> _onIngredientConfirmed(Map<String, dynamic> ingredient) async {
-    setState(() {
-      _scannedItems.add(ingredient);
-    });
+    if (mounted) {
+      setState(() {
+        _scannedItems.add(ingredient);
+      });
+    }
+
+    // Persist immediately so "Confirm" actually saves to pantry.
+    // Best-effort: keep UX snappy and show a message only on failure.
+    try {
+      final name = (ingredient['canonical_name'] ?? ingredient['name'] ?? '').toString().trim();
+      if (name.isEmpty) return;
+
+      final quantityRaw = ingredient['quantity'];
+      final quantity = (quantityRaw is num) ? quantityRaw.toDouble() : double.tryParse(quantityRaw?.toString() ?? '') ?? 1.0;
+      final unit = (ingredient['unit'] ?? 'pieces').toString().trim();
+
+      final res = await _scanningService.confirmSingleIngredient(
+        ingredientName: name,
+        quantity: quantity <= 0 ? 1.0 : quantity,
+        unit: unit.isEmpty ? 'pieces' : unit,
+        scanType: _scanType,
+      );
+
+      if (!mounted) return;
+      if (res['success'] != true) {
+        final msg = res['error']?.toString() ?? 'Could not save item to pantry.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   void _finishScanning() {

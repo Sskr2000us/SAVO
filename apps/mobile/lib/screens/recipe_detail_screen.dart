@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
 import '../services/scanning_service.dart';
+import '../services/metrics_service.dart';
+import '../services/weekly_cook_streak_service.dart';
 import '../models/planning.dart';
 import '../models/profile_state.dart';
 import '../models/market_config_state.dart';
@@ -48,6 +50,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   bool _sharing = false;
 
+  bool _markingCooked = false;
+  final WeeklyCookStreakService _weeklyCookStreakService = WeeklyCookStreakService();
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +61,32 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         ? widget.baseServings!
         : 4;
     _targetServings = _baseServings;
+
+    // Core loop tracking: recipe opened.
+    fireAndForget(MetricsService.instance.recordEvent('recipe_opened'));
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'recipe_opened',
+                'ts': DateTime.now().toIso8601String(),
+                'props': {
+                  'recipe_id': widget.recipe.recipeId,
+                  'screen': 'RecipeDetailScreen',
+                },
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
+    } catch (_) {
+      // ignore
+    }
   }
 
   Future<void> _shareRecipe() async {
@@ -89,6 +120,46 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           _sharing = false;
         });
       }
+    }
+  }
+
+  Future<void> _markCooked() async {
+    if (_markingCooked) return;
+    setState(() => _markingCooked = true);
+
+    try {
+      fireAndForget(MetricsService.instance.recordEvent('recipe_marked_cooked'));
+      fireAndForget(MetricsService.instance.recordEvent('recipe_cooked'));
+      fireAndForget(_weeklyCookStreakService.markCooked());
+      fireAndForget(MetricsService.instance.endTimer('ttfv'));
+
+      // Activation funnel reporting (best-effort; ignore failures).
+      try {
+        final apiClient = Provider.of<ApiClient>(context, listen: false);
+        fireAndForget(() async {
+          try {
+            await apiClient.post('/analytics/events', {
+              'events': [
+                {
+                  'name': 'recipe_cooked',
+                  'ts': DateTime.now().toIso8601String(),
+                }
+              ],
+            });
+          } catch (_) {
+            // ignore
+          }
+        }());
+      } catch (_) {
+        // ignore
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Marked as cooked')),
+      );
+    } finally {
+      if (mounted) setState(() => _markingCooked = false);
     }
   }
 
@@ -1400,23 +1471,42 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             ),
           ],
         ),
-        child: FilledButton.icon(
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => CookModeScreen(
-                  recipe: widget.recipe,
-                  servings: _targetServings,
-                  baseServings: _baseServings,
-                  preferredLanguageCode: _recipeLanguageCode,
-                  startBilingual: _showBilingual,
-                ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CookModeScreen(
+                        recipe: widget.recipe,
+                        servings: _targetServings,
+                        baseServings: _baseServings,
+                        preferredLanguageCode: _recipeLanguageCode,
+                        startBilingual: _showBilingual,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('Start Cook Mode'),
               ),
-            );
-          },
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Cook Mode'),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _markingCooked ? null : _markCooked,
+                icon: _markingCooked
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.check_circle_outline),
+                label: const Text('Mark cooked'),
+              ),
+            ),
+          ],
         ),
       ),
     );

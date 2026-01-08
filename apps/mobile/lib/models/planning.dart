@@ -34,6 +34,18 @@ class MenuPlanResponse {
       errorMessage: json['error_message'],
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'status': status,
+      'selected_cuisine': selectedCuisine,
+      'planning_window': planningWindow,
+      'menu_headers': menuHeaders,
+      'menus': menus.map((m) => m.toJson()).toList(),
+      'needs_clarification_questions': needsClarificationQuestions,
+      'error_message': errorMessage,
+    };
+  }
 }
 
 class Menu {
@@ -63,6 +75,16 @@ class Menu {
           [],
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'menu_type': menuType,
+      'day_index': dayIndex,
+      'date': date,
+      'servings': servings,
+      'courses': courses.map((c) => c.toJson()).toList(),
+    };
+  }
 }
 
 class Course {
@@ -82,6 +104,13 @@ class Course {
               .toList() ??
           [],
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'course_header': courseHeader,
+      'recipe_options': recipeOptions.map((r) => r.toJson()).toList(),
+    };
   }
 }
 

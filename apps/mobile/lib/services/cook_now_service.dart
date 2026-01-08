@@ -63,14 +63,22 @@ class CookNowService {
     }
 
     // Avoid forcing regeneration on every request.
-    // On web, long-running forced generations can be cut off by upstream timeouts and surface as "Failed to fetch".
+    // Historically we avoided forcing regeneration on every request.
+    // However, users expect "Generate recipes" to produce NEW ideas each time.
+    // We now prefer force_regenerate=true, with a fallback to cached plans if regeneration fails.
     Future<MenuPlanResponse> fetchPlan({required bool forceRegenerate}) async {
       final path = forceRegenerate ? '/plan/daily?force_regenerate=true' : '/plan/daily';
       final response = await apiClient.post(path, body);
       return MenuPlanResponse.fromJson(response);
     }
 
-    var plan = await fetchPlan(forceRegenerate: false);
+    MenuPlanResponse plan;
+    try {
+      plan = await fetchPlan(forceRegenerate: true);
+    } catch (_) {
+      // Best-effort fallback: return cached plan if regeneration stalls/fails.
+      plan = await fetchPlan(forceRegenerate: false);
+    }
 
     // If the backend is asking for safety/profile clarification, surface that directly.
     if (plan.status != 'ok') {

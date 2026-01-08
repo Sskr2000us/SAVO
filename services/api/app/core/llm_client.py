@@ -300,9 +300,10 @@ class OpenAIClient(LlmClient):
             ),
         }
 
-        # Party menus can easily exceed token limits if verbose.
+        # Menus can easily exceed token limits if verbose.
         mode_hint = _infer_menu_mode(messages)
         party_concise = None
+        weekly_concise = None
         if mode_hint == "party":
             party_concise = {
                 "role": "system",
@@ -312,18 +313,33 @@ class OpenAIClient(LlmClient):
                     "use minimal but sufficient ingredient lists and tips."
                 ),
             }
+        elif mode_hint == "weekly":
+            weekly_concise = {
+                "role": "system",
+                "content": (
+                    "CONCISENESS RULES (weekly): weekly plans must be compact. "
+                    "Use short strings; keep steps length 1-2 with tips=[]; youtube_references=[]; "
+                    "health_benefits=[]; new_ingredients_optional max 3; avoid repeated long text across days."
+                ),
+            }
         
         # Insert schema instruction after system message
         enhanced_messages = [messages[0], schema_instruction]
         if party_concise is not None:
             enhanced_messages.append(party_concise)
+        if weekly_concise is not None:
+            enhanced_messages.append(weekly_concise)
         enhanced_messages.extend(messages[1:])
 
-        # Allow party-specific override for output tokens.
+        # Allow mode-specific overrides for output tokens.
         max_tokens = self.json_max_output_tokens
         party_override = os.getenv("OPENAI_PARTY_JSON_MAX_TOKENS")
         if mode_hint == "party" and party_override and str(party_override).strip().isdigit():
             max_tokens = max(max_tokens, int(str(party_override).strip()))
+
+        weekly_override = os.getenv("OPENAI_WEEKLY_JSON_MAX_TOKENS")
+        if mode_hint == "weekly" and weekly_override and str(weekly_override).strip().isdigit():
+            max_tokens = max(max_tokens, int(str(weekly_override).strip()))
         
         timeout = httpx.Timeout(
             self.timeout,
@@ -359,7 +375,7 @@ class OpenAIClient(LlmClient):
                         "model": self.model,
                         "messages": enhanced_messages,
                         "response_format": response_format,
-                        "temperature": 0.5,  # Lower temperature = faster, more deterministic
+                        "temperature": 0.4 if mode_hint == "weekly" else 0.5,  # Weekly: slightly more deterministic
                         "max_tokens": max_tokens,
                     }
 

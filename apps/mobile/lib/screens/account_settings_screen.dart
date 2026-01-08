@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
+import '../services/api_client.dart';
+import '../services/entitlements_service.dart';
+import '../services/metrics_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'settings_screen.dart';
 import 'inventory_screen.dart';
 import 'recipe_import_screen.dart';
 import 'shopping_list_screen.dart';
+import 'coach_dashboard_screen.dart';
 import 'settings/device_security_screen.dart';
 import '../models/market_config_state.dart';
 
@@ -16,6 +21,119 @@ import '../models/market_config_state.dart';
 /// Hosts profile preferences and related account controls.
 class UserProfileScreen extends StatelessWidget {
   const UserProfileScreen({super.key});
+
+  Future<String?> _showCancelProReasonSheet(BuildContext context) async {
+    const reasons = <String, String>{
+      'too_expensive': 'Too expensive',
+      'not_using_enough': 'Not using it enough',
+      'not_accurate': 'Not accurate enough',
+      'too_hard': 'Too hard to use',
+      'other': 'Other',
+    };
+
+    String? selected;
+
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: StatefulBuilder(
+              builder: (ctx, setModalState) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cancel Pro',
+                      style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'What\'s the main reason you\'re cancelling?',
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 12),
+                    for (final e in reasons.entries)
+                      RadioListTile<String>(
+                        value: e.key,
+                        groupValue: selected,
+                        onChanged: (v) => setModalState(() => selected = v),
+                        title: Text(e.value),
+                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Keep Pro'),
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: (selected == null)
+                                ? null
+                                : () {
+                                    Navigator.pop(ctx, selected);
+                                  },
+                            child: const Text('Confirm cancel'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleCancelPro(BuildContext context) async {
+    final reasonKey = await _showCancelProReasonSheet(context);
+    if (reasonKey == null || !context.mounted) return;
+
+    await EntitlementsService.instance.setPro(false);
+    fireAndForget(MetricsService.instance.recordEvent('pro_cancelled'));
+
+    // Best-effort server analytics.
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'pro_cancelled',
+                'ts': DateTime.now().toIso8601String(),
+                'props': {
+                  'reason': reasonKey,
+                  'screen': 'UserProfileScreen',
+                },
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
+    } catch (_) {
+      // ignore
+    }
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pro cancelled for this device.')),
+      );
+    }
+  }
 
   Future<void> _handleSignOut(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -64,6 +182,7 @@ class UserProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final market = Provider.of<MarketConfigState>(context);
     final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
+    final showCoach = market.isEnabled('coach_dashboard', defaultValue: false) || market.isSuperAdmin;
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
@@ -85,6 +204,20 @@ class UserProfileScreen extends StatelessWidget {
               Navigator.push(context, AppMotion.createRoute(const SettingsScreen()));
             },
           ),
+
+          if (showCoach) ...[
+            const SizedBox(height: AppSpacing.sm),
+            _settingTile(
+              context: context,
+              icon: Icons.groups_outlined,
+              iconColor: theme.colorScheme.primary,
+              title: 'Coach dashboard',
+              subtitle: 'Manage clients and generate weekly plans',
+              onTap: () {
+                Navigator.push(context, AppMotion.createRoute(const CoachDashboardScreen()));
+              },
+            ),
+          ],
           
           const SizedBox(height: AppSpacing.lg),
           
@@ -131,6 +264,45 @@ class UserProfileScreen extends StatelessWidget {
             },
           ),
           
+          const SizedBox(height: AppSpacing.lg),
+
+          // Pro Section
+          _buildSectionHeader(context, 'Pro'),
+          const SizedBox(height: AppSpacing.sm),
+          FutureBuilder<bool>(
+            future: EntitlementsService.instance.isPro(),
+            builder: (context, snapshot) {
+              final isPro = snapshot.data == true;
+              if (isPro) {
+                return _settingTile(
+                  context: context,
+                  icon: Icons.workspace_premium,
+                  iconColor: theme.colorScheme.primary,
+                  title: 'Cancel Pro',
+                  subtitle: 'Tell us why (helps improve SAVO)',
+                  onTap: () => _handleCancelPro(context),
+                );
+              }
+
+              return _settingTile(
+                context: context,
+                icon: Icons.workspace_premium,
+                iconColor: theme.colorScheme.primary,
+                title: 'Upgrade to Pro',
+                subtitle: 'Unlimited scans, suggestions, planning',
+                onTap: () async {
+                  await showProPaywallSheet(
+                    context,
+                    title: 'Upgrade to SAVO Pro',
+                    ctaLabel: 'Upgrade to Pro',
+                    reason: 'Pro unlocks unlimited scans and suggestions plus weekly planning and shopping lists.',
+                    trigger: 'settings_upgrade',
+                  );
+                },
+              );
+            },
+          ),
+
           const SizedBox(height: AppSpacing.lg),
           
           // Security Section

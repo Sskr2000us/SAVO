@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../models/inventory.dart';
 import '../services/api_client.dart';
+import '../services/waste_analytics_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 
@@ -19,10 +20,37 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
   List<InventoryItem> _items = const [];
   bool _cleaning = false;
 
+  bool _loadingWaste = true;
+  WasteAnalyticsSummary? _waste;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadWaste();
+  }
+
+  Future<void> _loadWaste() async {
+    if (mounted) {
+      setState(() => _loadingWaste = true);
+    }
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final service = WasteAnalyticsService();
+      final summary = await service.fetchMonthly(apiClient);
+      if (!mounted) return;
+      setState(() {
+        _waste = summary;
+        _loadingWaste = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _waste = null;
+        _loadingWaste = false;
+      });
+    }
   }
 
   Future<void> _load() async {
@@ -162,7 +190,13 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
                 onRefresh: _load,
                 child: TabBarView(
                   children: [
-                    _PantryList(items: _useSoon),
+                    _PantryList(
+                      items: _useSoon,
+                      header: _WasteHeader(
+                        loading: _loadingWaste,
+                        summary: _waste,
+                      ),
+                    ),
                     _PantryList(items: _available),
                     _PantryList(items: _missing),
                   ],
@@ -175,12 +209,13 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
 
 class _PantryList extends StatelessWidget {
   final List<InventoryItem> items;
+  final Widget? header;
 
-  const _PantryList({required this.items});
+  const _PantryList({required this.items, this.header});
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
+    if (items.isEmpty && header == null) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -196,10 +231,19 @@ class _PantryList extends StatelessWidget {
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(AppSpacing.md),
-      itemCount: items.length,
+      itemCount: items.length + (header != null ? 1 : 0),
       separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
       itemBuilder: (context, index) {
-        final item = items[index];
+        if (header != null && index == 0) {
+          return header!;
+        }
+
+        final realIndex = header != null ? index - 1 : index;
+        if (realIndex < 0 || realIndex >= items.length) {
+          return const SizedBox.shrink();
+        }
+
+        final item = items[realIndex];
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
@@ -220,6 +264,70 @@ class _PantryList extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _WasteHeader extends StatelessWidget {
+  final bool loading;
+  final WasteAnalyticsSummary? summary;
+
+  const _WasteHeader({required this.loading, required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    if (loading) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'Calculating waste score…',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (summary == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Waste score: ${summary!.score}/100',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              summary!.message,
+              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Expiring soon: ${summary!.expiringSoonCount} • Expired: ${summary!.expiredCount} • Risk: ${summary!.wasteRiskPercentage.toStringAsFixed(1)}%',
+              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

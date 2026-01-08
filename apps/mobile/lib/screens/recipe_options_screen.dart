@@ -36,6 +36,8 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   bool _timerStarted = false;
   final Map<String, Map<String, dynamic>> _matchByRecipeId = {};
 
+  bool _recipeShownLogged = false;
+
   Map<String, int> _cuisineScores = const {};
 
   bool _suggestionsLocked = false;
@@ -310,11 +312,48 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
           if (!mounted) return;
           if (!gate.allowed) {
             setState(() => _suggestionsLocked = true);
+            return;
           }
+
+          // Gate passed: this is the moment options are actually shown.
+          _logRecipeShownOnce();
         } catch (_) {
           // Best-effort only.
         }
       }();
+    } else {
+      // No gate: options are shown immediately.
+      _logRecipeShownOnce();
+    }
+  }
+
+  void _logRecipeShownOnce() {
+    if (_recipeShownLogged) return;
+    _recipeShownLogged = true;
+
+    fireAndForget(MetricsService.instance.recordEvent('recipe_shown'));
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'recipe_shown',
+                'ts': DateTime.now().toIso8601String(),
+                'props': {
+                  'count': widget.recipes.length,
+                  'screen': 'RecipeOptionsScreen',
+                },
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
+    } catch (_) {
+      // ignore
     }
   }
 
@@ -361,6 +400,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                       title: 'Upgrade to SAVO Pro',
                       ctaLabel: 'Upgrade for unlimited suggestions',
                       reason: 'Free tier includes scanning + a limited number of daily suggestion sessions. Pro unlocks unlimited suggestions and planning.',
+                      trigger: 'suggestions_limit',
                     );
                     if (upgraded && mounted) {
                       setState(() => _suggestionsLocked = false);

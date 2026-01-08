@@ -6,6 +6,7 @@ import '../models/planning.dart';
 import '../services/api_client.dart';
 import '../services/cook_session_storage.dart';
 import '../services/metrics_service.dart';
+import '../services/weekly_cook_streak_service.dart';
 import '../ui/ui_principles.dart';
 
 class PostCookFeedbackScreen extends StatefulWidget {
@@ -28,6 +29,8 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
   final TextEditingController _notesController = TextEditingController();
   bool _saving = false;
   String? _error;
+
+  final WeeklyCookStreakService _weeklyCookStreakService = WeeklyCookStreakService();
 
   @override
   void dispose() {
@@ -61,6 +64,25 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
 
       fireAndForget(MetricsService.instance.recordWorkflowStep('CookNow', 'Learn'));
       fireAndForget(MetricsService.instance.recordEvent('recipe_cooked'));
+      fireAndForget(_weeklyCookStreakService.markCooked());
+      // Time-to-first-value: best-effort end when the user cooks for the first time.
+      fireAndForget(MetricsService.instance.endTimer('ttfv'));
+
+      // Activation funnel reporting (best-effort; ignore failures).
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/analytics/events', {
+            'events': [
+              {
+                'name': 'recipe_cooked',
+                'ts': DateTime.now().toIso8601String(),
+              }
+            ],
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
 
       // Clear any resume state.
       try {

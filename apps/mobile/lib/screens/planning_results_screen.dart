@@ -5,7 +5,9 @@ import 'package:provider/provider.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
+import '../services/plan_share_service.dart';
 import '../services/cuisine_preference_service.dart';
+import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../services/saved_recipes_local_service.dart';
 import '../services/upsell_service.dart';
@@ -38,8 +40,39 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   bool _loadingCuisines = true;
   String? _selectedCuisine;
   bool _buildingShoppingList = false;
+  bool _sharingPlan = false;
 
   static const _shoppingListPrefsKey = 'savo.shopping_list.latest';
+
+  Future<void> _sharePlan() async {
+    if (_sharingPlan) return;
+
+    setState(() => _sharingPlan = true);
+    try {
+      final market = Provider.of<MarketConfigState>(context, listen: false);
+      final canShare = market.isEnabled('shareable_plans', defaultValue: false) || market.isSuperAdmin;
+      if (!canShare) {
+        throw Exception('Plan sharing is disabled in this region.');
+      }
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final shareService = PlanShareService();
+      final sharePath = await shareService.createShare(apiClient, widget.menuPlan.toJson());
+
+      await shareService.shareLink(
+        title: _getPlanTitle(),
+        sharePath: sharePath,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to share plan: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sharingPlan = false);
+    }
+  }
 
   @override
   void initState() {
@@ -132,12 +165,20 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
 
   int _extractServings(Menu menu) {
     if (menu.servings.isEmpty) return 1;
-    final total = menu.servings['total'];
+    // Backend may return different shapes, e.g.
+    // - {"total": 6}
+    // - {"count": 6, "scaling_factor": 1}
+    final total = menu.servings['total'] ?? menu.servings['count'];
     if (total is int && total > 0) return total;
     if (total is num && total > 0) return total.toInt();
 
     int sum = 0;
-    for (final v in menu.servings.values) {
+    for (final entry in menu.servings.entries) {
+      final key = entry.key.toString().toLowerCase();
+      // Ignore metadata fields so we don't inflate totals.
+      if (key == 'scaling_factor' || key == 'scale' || key == 'multiplier') continue;
+
+      final v = entry.value;
       if (v is int) sum += v;
       if (v is num) sum += v.toInt();
     }
@@ -357,6 +398,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   Widget build(BuildContext context) {
     final market = Provider.of<MarketConfigState>(context);
     final showShoppingList = market.isEnabled('shopping_list', defaultValue: true);
+    final canSharePlan = market.isEnabled('shareable_plans', defaultValue: false) || market.isSuperAdmin;
     final leftoversScheduleLines = _buildLeftoversScheduleLines(widget.menuPlan);
     final content = widget.menuPlan.status == 'error'
         ? Center(
@@ -485,6 +527,12 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
       appBar: AppBar(
         title: Text(_getPlanTitle()),
         actions: [
+          if (canSharePlan)
+            IconButton(
+              tooltip: 'Share plan',
+              onPressed: widget.menuPlan.status == 'ok' ? (_sharingPlan ? null : _sharePlan) : null,
+              icon: Icon(_sharingPlan ? Icons.hourglass_top : Icons.share_outlined),
+            ),
           IconButton(
             tooltip: 'Remove plan',
             onPressed: widget.menuPlan.status == 'ok' ? _deleteSavedPlan : null,
@@ -492,6 +540,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
           ),
           if (!_loadingCuisines && _cuisines.isNotEmpty)
             PopupMenuButton<String>(
+              initialValue: _selectedCuisine,
               icon: const Icon(Icons.restaurant),
               tooltip: 'Change Cuisine',
               onSelected: (cuisine) {
@@ -714,6 +763,27 @@ class _RecipeCardState extends State<_RecipeCard> {
         // Preference signal: user saved this cuisine.
         await CuisinePreferenceService.instance.recordSavedCuisine(widget.recipe.cuisine);
         await SavedRecipesLocalService.instance.upsertSavedRecipe(widget.recipe);
+
+          // Core loop tracking: recipe saved.
+          fireAndForget(MetricsService.instance.recordEvent('recipe_saved'));
+          fireAndForget(() async {
+            try {
+              await apiClient.post('/analytics/events', {
+                'events': [
+                  {
+                    'name': 'recipe_saved',
+                    'ts': DateTime.now().toIso8601String(),
+                    'props': {
+                      'recipe_id': rid,
+                      'screen': 'PlanningResultsScreen',
+                    },
+                  }
+                ],
+              });
+            } catch (_) {
+              // ignore
+            }
+          }());
       }
 
       if (!mounted) return;
