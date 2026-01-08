@@ -441,7 +441,9 @@ RESPONSE FORMAT (JSON):
         
         normalizer = IngredientNormalizer()
         
-        detected_name = item.get("detected_name", "")
+        detected_name = (item.get("detected_name") or item.get("name") or "")
+        if isinstance(detected_name, str):
+            detected_name = detected_name.strip()
         confidence = Decimal(str(item.get("confidence", 0.0)))
         
         # Extract quantity information
@@ -451,7 +453,7 @@ RESPONSE FORMAT (JSON):
         quantity_source = item.get("quantity_source", "")
         
         # Normalize ingredient name
-        canonical_name = normalizer.normalize_name(detected_name)
+        canonical_name = normalizer.normalize_name(detected_name) if detected_name else ""
         
         # Get visual similarity group
         similarity_group = normalizer.get_visual_similarity_group(canonical_name)
@@ -661,6 +663,20 @@ Return ONLY the JSON object, no other text."""
                 content = content.split("```")[1].split("```")[0].strip()
             
             detected = json.loads(content)
+
+            # The single-item prompt asks for `name`, but the rest of the pipeline
+            # expects `detected_name`.
+            if isinstance(detected, dict):
+                if "detected_name" not in detected and "name" in detected:
+                    detected["detected_name"] = detected.get("name")
+                dn = detected.get("detected_name")
+                if isinstance(dn, str):
+                    detected["detected_name"] = dn.strip()
+
+            # Guardrail: don't return empty/unknown junk items.
+            dn_val = detected.get("detected_name") if isinstance(detected, dict) else None
+            if not isinstance(dn_val, str) or not dn_val.strip() or dn_val.strip().lower() in {"unknown", "n/a", "na"}:
+                raise ValueError("Could not confidently identify single item")
             
             # Enrich with additional data
             ingredient = self._enrich_detection(detected, user_preferences)

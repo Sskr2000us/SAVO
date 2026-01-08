@@ -124,9 +124,22 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           final ingredient = result['ingredient'];
           final autoSaved = result['auto_saved'] ?? false;
 
+          final detectedName = (ingredient is Map ? (ingredient['detected_name'] ?? '') : '').toString().trim();
+          final confRaw = (ingredient is Map) ? ingredient['confidence'] : null;
+          final conf = (confRaw is num) ? confRaw.toDouble() : double.tryParse(confRaw?.toString() ?? '');
+          if (detectedName.isEmpty || detectedName.toLowerCase() == 'unknown' || conf == null) {
+            setState(() {
+              _currentStep = 'centering';
+              _detectedItem = '';
+              _estimatedQuantity = '';
+            });
+            _showError('Couldn\'t identify item. Hold steady and try again.');
+            return;
+          }
+
           // Update UI with detected item and quantity
           setState(() {
-            _detectedItem = ingredient['detected_name'] ?? '';
+            _detectedItem = detectedName;
             final qty = ingredient['quantity'];
             final unit = ingredient['unit'] ?? '';
             _estimatedQuantity = qty != null ? '$qty $unit' : '';

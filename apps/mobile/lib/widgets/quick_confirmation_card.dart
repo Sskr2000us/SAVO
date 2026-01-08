@@ -55,13 +55,21 @@ class _QuickConfirmationCardState extends State<QuickConfirmationCard> {
   void _handleConfirm() async {
     if (_isConfirming) return;
 
+    final name = (widget.ingredient['detected_name'] ?? '').toString().trim();
+    if (name.isEmpty || name.toLowerCase() == 'unknown') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not identify item. Please rescan.')),
+      );
+      return;
+    }
+
     setState(() {
       _isConfirming = true;
     });
 
     try {
       final confirmedData = {
-        'name': widget.ingredient['detected_name'],
+        'name': name,
         'canonical_name': widget.ingredient['canonical_name'],
         'quantity': double.tryParse(_quantityController.text) ?? 1.0,
         'unit': _selectedUnit,

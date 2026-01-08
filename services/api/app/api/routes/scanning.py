@@ -861,6 +861,13 @@ async def scan_single_item(
             raise HTTPException(status_code=500, detail=f"Analysis failed: {result.get('error')}")
         
         ingredient = result["ingredient"]
+        detected_name = (ingredient.get("detected_name") if isinstance(ingredient, dict) else None)
+        if not isinstance(detected_name, str) or not detected_name.strip() or detected_name.strip().lower() in {"unknown", "n/a", "na"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Couldn't identify the item. Please hold steady, move closer, and try again.",
+            )
+
         confidence = ingredient["confidence"]
         
         # Auto-save high-confidence items
@@ -871,6 +878,8 @@ async def scan_single_item(
                 normalizer = get_normalizer()
                 
                 canonical_name = normalizer.normalize_name(ingredient["detected_name"])
+                if not canonical_name:
+                    raise ValueError("Empty canonical name")
                 storage_location = _scan_type_to_storage_location(scan_type)
                 now_iso = datetime.utcnow().isoformat()
                 
@@ -952,6 +961,9 @@ async def confirm_single_ingredient(
     - Returns immediately for next scan
     """
     try:
+        if not ingredient_name or not ingredient_name.strip():
+            raise HTTPException(status_code=400, detail="Missing ingredient name")
+
         db = get_db_client()
         normalizer = get_normalizer()
         
