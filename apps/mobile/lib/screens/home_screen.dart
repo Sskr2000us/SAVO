@@ -290,7 +290,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ] else ...[
                     Text(
-                      _tonightError ?? 'No suggestions right now. Try updating your pantry.',
+                      _tonightError ?? 'No dinner idea yet. Update pantry to enable Cook tonight.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
