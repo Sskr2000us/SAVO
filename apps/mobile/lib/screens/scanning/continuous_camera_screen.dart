@@ -72,7 +72,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   }
 
   void _startFocusDetection() {
-    _focusCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+    _focusCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       final allowAt = _nextAutoCaptureAllowedAt;
       if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
       if (_isInFocus() && !_isProcessing && mounted) {
@@ -373,7 +373,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     switch (_currentStep) {
       case 'centering':
         return _autoCapture 
-            ? 'Center item in frame (auto-capture in 3s)'
+            ? 'Center item in frame (auto-capture in 5s)'
             : 'Center item & tap Capture';
       case 'analyzing':
         return 'Analyzing item...';
@@ -429,7 +429,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                               ),
                               SizedBox(height: 4),
                               Text(
-                                '1. Center item in frame\n2. Wait 3 sec (auto) or tap Capture\n3. Confirm quantity & save',
+                                '1. Center item in frame\n2. Wait 5 sec (auto) or tap Capture\n3. Confirm quantity & save',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 12,
