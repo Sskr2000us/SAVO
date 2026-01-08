@@ -1,7 +1,5 @@
-"""
-Graph Intelligence Service for Flutter Mobile App
-Handles substitutions, confusions, pairings, and recipe compatibility
-"""
+/// Graph Intelligence Service for Flutter Mobile App
+/// Handles substitutions, confusions, pairings, and recipe compatibility
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;

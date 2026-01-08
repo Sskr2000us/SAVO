@@ -7,11 +7,7 @@ import '../../services/api_client.dart';
 import '../../services/onboarding_storage.dart';
 import 'login_screen.dart';
 import 'household_screen.dart';
-import 'allergies_screen.dart';
 import 'dietary_screen.dart';
-import 'spice_screen.dart';
-import 'pantry_screen.dart';
-import 'language_screen.dart';
 import 'complete_screen.dart';
 
 /// Coordinates the onboarding flow based on server resume_step
@@ -38,10 +34,6 @@ class _OnboardingCoordinatorState extends State<OnboardingCoordinator> {
     final profileState = Provider.of<ProfileState>(context, listen: false);
 
     try {
-      // Try to get current user ID for local storage lookup
-      final session = Supabase.instance.client.auth.currentSession;
-      final userId = session?.user.id;
-
       // Get onboarding status from server
       final status = await profileService.getOnboardingStatus();
       profileState.updateOnboardingStatus(status);
@@ -115,16 +107,14 @@ class _OnboardingCoordinatorState extends State<OnboardingCoordinator> {
         return const OnboardingLoginScreen();
       case 'HOUSEHOLD':
         return const OnboardingHouseholdScreen();
-      case 'ALLERGIES':
-        return const OnboardingAllergiesScreen();
       case 'DIETARY':
         return const OnboardingDietaryScreen();
+      // Backward compatibility: legacy steps now roll up into DIETARY.
+      case 'ALLERGIES':
       case 'SPICE':
-        return const OnboardingSpiceScreen();
       case 'PANTRY':
-        return const OnboardingPantryScreen();
       case 'LANGUAGE':
-        return const OnboardingLanguageScreen();
+        return const OnboardingDietaryScreen();
       case 'COMPLETE':
         return const OnboardingCompleteScreen();
       default:
@@ -150,11 +140,12 @@ class _OnboardingCoordinatorState extends State<OnboardingCoordinator> {
 void navigateToNextOnboardingStep(BuildContext context, String currentStep) {
   final nextSteps = {
     'LOGIN': 'HOUSEHOLD',
-    'HOUSEHOLD': 'ALLERGIES',
+    'HOUSEHOLD': 'DIETARY',
+    // Legacy steps (if encountered) roll up into DIETARY/COMPLETE.
     'ALLERGIES': 'DIETARY',
-    'DIETARY': 'SPICE',
-    'SPICE': 'PANTRY',
-    'PANTRY': 'LANGUAGE',
+    'DIETARY': 'COMPLETE',
+    'SPICE': 'COMPLETE',
+    'PANTRY': 'COMPLETE',
     'LANGUAGE': 'COMPLETE',
     'COMPLETE': 'HOME',
   };
@@ -172,20 +163,8 @@ void navigateToNextOnboardingStep(BuildContext context, String currentStep) {
     case 'HOUSEHOLD':
       nextScreen = const OnboardingHouseholdScreen();
       break;
-    case 'ALLERGIES':
-      nextScreen = const OnboardingAllergiesScreen();
-      break;
     case 'DIETARY':
       nextScreen = const OnboardingDietaryScreen();
-      break;
-    case 'SPICE':
-      nextScreen = const OnboardingSpiceScreen();
-      break;
-    case 'PANTRY':
-      nextScreen = const OnboardingPantryScreen();
-      break;
-    case 'LANGUAGE':
-      nextScreen = const OnboardingLanguageScreen();
       break;
     case 'COMPLETE':
       nextScreen = const OnboardingCompleteScreen();
@@ -201,35 +180,25 @@ void navigateToNextOnboardingStep(BuildContext context, String currentStep) {
 
 /// Get progress percentage based on current step
 double getOnboardingProgress(String step) {
-  const steps = [
-    'LOGIN',
-    'HOUSEHOLD',
-    'ALLERGIES',
-    'DIETARY',
-    'SPICE',
-    'PANTRY',
-    'LANGUAGE',
-    'COMPLETE',
-  ];
-
-  final index = steps.indexOf(step);
-  if (index == -1) return 0.0;
-  
-  return (index + 1) / steps.length;
+  // US-05: onboarding only requires two steps (HOUSEHOLD + DIETARY).
+  // COMPLETE is a confirmation screen and shows full progress.
+  switch (step) {
+    case 'HOUSEHOLD':
+      return 0.5;
+    case 'DIETARY':
+    case 'COMPLETE':
+      return 1.0;
+    default:
+      return 0.0;
+  }
 }
 
 /// Get step number for display
 String getStepNumber(String step) {
   const steps = {
-    'LOGIN': '1',
-    'HOUSEHOLD': '2',
-    'ALLERGIES': '3',
-    'DIETARY': '4',
-    'SPICE': '5',
-    'PANTRY': '6',
-    'LANGUAGE': '7',
-    'COMPLETE': '8',
+    'HOUSEHOLD': '1',
+    'DIETARY': '2',
   };
-  
+
   return steps[step] ?? '1';
 }

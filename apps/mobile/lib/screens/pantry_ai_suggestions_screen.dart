@@ -1,10 +1,16 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
+import '../services/cook_now_service.dart';
+import '../services/entitlements_service.dart';
+import '../services/api_client.dart';
+import '../models/profile_state.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
+import 'recipe_options_screen.dart';
 
 class PantryAiSuggestionsScreen extends StatefulWidget {
   final String scanId;
@@ -23,7 +29,63 @@ class PantryAiSuggestionsScreen extends StatefulWidget {
 
 class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
   final Map<String, Map<String, dynamic>> _choices = {};
+  final Map<String, GlobalKey> _itemKeys = {};
   bool _saving = false;
+
+  GlobalKey _keyFor(String id) {
+    return _itemKeys.putIfAbsent(id, () => GlobalKey());
+  }
+
+  bool _isLowConfidence(Map<String, dynamic> item) {
+    final conf = item['confidence_category']?.toString().toLowerCase().trim();
+    return conf == 'low';
+  }
+
+  void _jumpToFirstLowConfidence() {
+    for (final idx in _orderedIndices()) {
+      final raw = widget.items[idx];
+      if (raw is! Map) continue;
+      final item = raw.cast<String, dynamic>();
+      if (!_isLowConfidence(item)) continue;
+
+      final id = _idFor(item, idx);
+      final ctx = _itemKeys[id]?.currentContext;
+      if (ctx == null) return;
+
+      fireAndForget(Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+        alignment: 0.15,
+      ));
+      return;
+    }
+  }
+
+  List<int> _orderedIndices() {
+    final indexed = <int>[];
+    for (var i = 0; i < widget.items.length; i++) {
+      indexed.add(i);
+    }
+
+    int weightFor(dynamic raw) {
+      if (raw is! Map) return 1;
+      final item = raw.cast<String, dynamic>();
+      final conf = item['confidence_category']?.toString().toLowerCase().trim();
+      if (conf == 'low') return 0;
+      if (conf == 'medium') return 1;
+      return 2;
+    }
+
+    indexed.sort((a, b) {
+      final wa = weightFor(widget.items[a]);
+      final wb = weightFor(widget.items[b]);
+      if (wa != wb) return wa.compareTo(wb);
+      return a.compareTo(b);
+    });
+
+    return indexed;
+  }
 
   @override
   void initState() {
@@ -88,9 +150,9 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
 
   String _confidenceFor(Map<String, dynamic> item) {
     final raw = item['confidence_category']?.toString().toLowerCase().trim();
-    if (raw == 'high') return 'HIGH';
-    if (raw == 'medium') return 'MEDIUM';
-    return 'LOW';
+    if (raw == 'high') return 'High';
+    if (raw == 'medium') return 'Medium';
+    return 'Low';
   }
 
   String? _quantityGuessFor(Map<String, dynamic> item) {
@@ -117,9 +179,9 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
   Color _confidenceColor(BuildContext context, String label) {
     final cs = Theme.of(context).colorScheme;
     switch (label) {
-      case 'HIGH':
+      case 'High':
         return cs.tertiary;
-      case 'MEDIUM':
+      case 'Medium':
         return cs.secondary;
       default:
         return cs.error;
@@ -135,6 +197,34 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
     });
 
     fireAndForget(MetricsService.instance.recordEvent('pantry_ai_item_confirmed'));
+  }
+
+  void _chooseAlternative(String id, String name) {
+    setState(() {
+      _choices[id] = {
+        'action': 'modified',
+        'confirmed_name': name,
+      };
+    });
+
+    fireAndForget(MetricsService.instance.recordEvent('pantry_ai_suggestion_chosen'));
+  }
+
+  List<String> _suggestionsFor(Map<String, dynamic> item, String currentName) {
+    final raw = (item['close_alternatives'] ?? item['alternatives'] ?? item['candidates']);
+    if (raw is! List) return const <String>[];
+
+    final current = currentName.trim().toLowerCase();
+    final out = <String>[];
+    for (final r in raw) {
+      final s = r?.toString().trim();
+      if (s == null || s.isEmpty) continue;
+      if (s.trim().toLowerCase() == current) continue;
+      if (out.contains(s)) continue;
+      out.add(s);
+      if (out.length >= 3) break;
+    }
+    return out;
   }
 
   void _remove(String id) {
@@ -220,6 +310,9 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
     if (_saving) return;
     setState(() => _saving = true);
 
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
       fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
 
@@ -242,22 +335,74 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
                 .where((v) => v['action'] == 'confirmed' || v['action'] == 'modified')
                 .length;
 
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           SnackBar(content: Text('Saved $addedCount items to pantry')),
         );
 
-        Navigator.of(context).popUntil((route) => route.isFirst);
-        return;
+        // Fast value: immediately show 3–5 meal ideas after confirm.
+        try {
+          fireAndForget(MetricsService.instance.recordEvent('post_scan_meal_ideas_requested'));
+          final apiClient = Provider.of<ApiClient>(context, listen: false);
+          final profileState = Provider.of<ProfileState>(context, listen: false);
+          final service = CookNowService();
+
+          // Avoid interrupting the core scan->save flow: if the user has hit
+          // their daily suggestions limit, just skip meal ideas.
+          final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+          if (!mounted) return;
+          if (!gate.allowed) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Today\'s free meal ideas are used up. Upgrade to Pro for unlimited suggestions.',
+                ),
+              ),
+            );
+            navigator.popUntil((route) => route.isFirst);
+            return;
+          }
+
+          final options = await service.generateRecipeOptions(
+            apiClient: apiClient,
+            profileState: profileState,
+            maxOptions: 5,
+            avoidRecentRecipes: 3,
+          );
+
+          if (!mounted) return;
+
+          if (options.isEmpty) {
+            navigator.popUntil((route) => route.isFirst);
+            return;
+          }
+
+          await navigator.pushReplacement(
+            MaterialPageRoute(
+              settings: const RouteSettings(name: '/recipe_options'),
+              builder: (_) => RecipeOptionsScreen(
+                recipes: options,
+                showIngredientMatch: true,
+                titleOverride: 'Meals you can cook tonight',
+                skipSuggestionSessionGate: true,
+              ),
+            ),
+          );
+          return;
+        } catch (_) {
+          // If suggestions fail, fall back to returning home.
+          navigator.popUntil((route) => route.isFirst);
+          return;
+        }
       }
 
       final msg = res['error']?.toString() ?? 'Save failed';
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text(msg)),
       );
       setState(() => _saving = false);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('Save failed: $e')),
       );
       setState(() => _saving = false);
@@ -283,6 +428,29 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
       );
     }
 
+    final ordered = _orderedIndices();
+    final hasLow = widget.items.any((raw) {
+      if (raw is! Map) return false;
+      final item = raw.cast<String, dynamic>();
+      return _isLowConfidence(item);
+    });
+
+    var lowCount = 0;
+    var mediumCount = 0;
+    var highCount = 0;
+    for (final raw in widget.items) {
+      if (raw is! Map) continue;
+      final item = raw.cast<String, dynamic>();
+      final label = _confidenceFor(item);
+      if (label == 'High') {
+        highCount++;
+      } else if (label == 'Medium') {
+        mediumCount++;
+      } else {
+        lowCount++;
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Review ingredients'),
@@ -291,16 +459,42 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
         padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Low: $lowCount • Medium: $mediumCount • High: $highCount',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            if (hasLow) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    fireAndForget(MetricsService.instance.recordEvent('pantry_ai_jump_low_confidence'));
+                    _jumpToFirstLowConfidence();
+                  },
+                  icon: const Icon(Icons.arrow_downward),
+                  label: const Text('Review low confidence first'),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+            ],
             Expanded(
               child: ListView.separated(
                 itemCount: widget.items.length,
                 separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (context, index) {
-                  final raw = widget.items[index];
+                  final raw = widget.items[ordered[index]];
                   if (raw is! Map) return const SizedBox.shrink();
                   final item = raw.cast<String, dynamic>();
 
-                  final id = _idFor(item, index);
+                  final originalIndex = ordered[index];
+                  final id = _idFor(item, originalIndex);
                   final name = _labelFor(item);
                   final confidence = _confidenceFor(item);
                   final confColor = _confidenceColor(context, confidence);
@@ -312,75 +506,109 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
                   final isRemoved = action == 'rejected';
                   final isConfirmed = action == 'confirmed' || action == 'modified';
 
-                  return Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(AppSpacing.md),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  choice?['confirmed_name']?.toString() ?? name,
-                                  style: Theme.of(context).textTheme.titleMedium,
+                  final requiresEditForLow = confidence == 'Low' && action != 'modified';
+                  final canConfirm = !isRemoved && !requiresEditForLow;
+
+                  final suggestions = (confidence == 'High') ? const <String>[] : _suggestionsFor(item, name);
+
+                  return Container(
+                    key: _keyFor(id),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    choice?['confirmed_name']?.toString() ?? name,
+                                    style: Theme.of(context).textTheme.titleMedium,
+                                  ),
                                 ),
-                              ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: confColor.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: confColor.withAlpha(31),
+                                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: AppSpacing.sm,
+                                    vertical: AppSpacing.xs,
+                                  ),
+                                  child: Text(
+                                    confidence,
+                                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                          color: confColor,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
                                 ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: AppSpacing.sm,
-                                  vertical: AppSpacing.xs,
-                                ),
-                                child: Text(
-                                  confidence,
-                                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                        color: confColor,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                ),
+                              ],
+                            ),
+                            if (qty != null) ...[
+                              const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                'Qty: $qty',
+                                style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ],
-                          ),
-                          if (qty != null) ...[
-                            const SizedBox(height: AppSpacing.xs),
-                            Text(
-                              'Qty: $qty',
-                              style: Theme.of(context).textTheme.bodySmall,
+                            if (!isRemoved && suggestions.isNotEmpty) ...[
+                              const SizedBox(height: AppSpacing.sm),
+                              Text(
+                                'Suggestions',
+                                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              Wrap(
+                                spacing: AppSpacing.xs,
+                                runSpacing: AppSpacing.xs,
+                                children: suggestions
+                                    .map(
+                                      (s) => ActionChip(
+                                        label: Text(s),
+                                        onPressed: () => _chooseAlternative(id, s),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
+                            const SizedBox(height: AppSpacing.sm),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: canConfirm ? () => _confirm(id, name) : null,
+                                    icon: const Icon(Icons.check),
+                                    label: Text(
+                                      isConfirmed
+                                          ? 'Confirmed'
+                                          : (requiresEditForLow ? 'Pick or edit' : 'Confirm'),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.sm),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: isRemoved ? null : () => _edit(id, name),
+                                    icon: const Icon(Icons.edit),
+                                    label: const Text('Edit'),
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.sm),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => _remove(id),
+                                    icon: const Icon(Icons.close),
+                                    label: Text(isRemoved ? 'Removed' : 'Remove'),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
-                          const SizedBox(height: AppSpacing.sm),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: isRemoved ? null : () => _confirm(id, name),
-                                  icon: const Icon(Icons.check),
-                                  label: Text(isConfirmed ? 'Confirmed' : 'Confirm'),
-                                ),
-                              ),
-                              const SizedBox(width: AppSpacing.sm),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: isRemoved ? null : () => _edit(id, name),
-                                  icon: const Icon(Icons.edit),
-                                  label: const Text('Edit'),
-                                ),
-                              ),
-                              const SizedBox(width: AppSpacing.sm),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: () => _remove(id),
-                                  icon: const Icon(Icons.close),
-                                  label: Text(isRemoved ? 'Removed' : 'Remove'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   );

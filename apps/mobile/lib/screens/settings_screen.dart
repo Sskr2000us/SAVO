@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/cuisine_preference_service.dart';
+import '../services/entitlements_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import '../models/market_config_state.dart';
 import 'admin_market_screen.dart';
 
@@ -152,6 +155,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'American',
     'Middle Eastern',
   ];
+
+  bool _loadingCuisineLearning = true;
+  Map<String, int> _learnedCuisineCounts = const {};
+  Map<String, int> _manualCuisineOverrides = const {};
+
+  static String _normalizeCuisine(String input) {
+    final s = input.trim().toLowerCase();
+    if (s.isEmpty) return '';
+    return s.replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  String _displayCuisineNameFromNormalized(String normalized) {
+    if (normalized.isEmpty) return normalized;
+    for (final c in _availableCuisines) {
+      if (_normalizeCuisine(c) == normalized) return c;
+    }
+    return CuisinePreferenceService.instance.displayName(normalized);
+  }
+
+  Future<void> _loadCuisineLearning() async {
+    setState(() => _loadingCuisineLearning = true);
+    try {
+      final learned = await CuisinePreferenceService.instance.getLearnedCuisineCounts();
+      final overrides = await CuisinePreferenceService.instance.getManualCuisineOverrides();
+      if (!mounted) return;
+      setState(() {
+        _learnedCuisineCounts = learned;
+        _manualCuisineOverrides = overrides;
+        _loadingCuisineLearning = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingCuisineLearning = false);
+    }
+  }
   
   // Cooking skill level
   int _skillLevel = 2; // 1=Beginner, 2=Basic, 3=Intermediate, 4=Multi-step, 5=Advanced
@@ -167,6 +205,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadConfiguration();
+    // Local, best-effort learning from saves/cooking.
+    Future.microtask(_loadCuisineLearning);
   }
 
   Future<void> _handleSignOut() async {
@@ -417,6 +457,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _saveFamilyMembers() async {
+    final isPro = await EntitlementsService.instance.isPro();
+    if (!isPro && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade to family profiles',
+        reason: 'Family profiles are a Pro feature. Add preferences and allergens for each person to get safer, better plans.',
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
@@ -530,7 +581,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _addFamilyMember() {
+  Future<void> _addFamilyMember() async {
+    final isPro = await EntitlementsService.instance.isPro();
+    if (!isPro && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade to family profiles',
+        reason: 'Add family members to tailor plans and avoid allergens. Family profiles are included with Pro.',
+      );
+      return;
+    }
+
+    if (!mounted) return;
     setState(() {
       _familyMembers.add({
         'member_id': 'member_${DateTime.now().millisecondsSinceEpoch}',
@@ -677,6 +740,94 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text(
+                          'Detected from what you save/cook (auto-learning):',
+                          style: AppTypography.captionStyle(color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        if (_loadingCuisineLearning)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: LinearProgressIndicator(),
+                          )
+                        else if (_learnedCuisineCounts.isEmpty)
+                          Text(
+                            'No history yet. Save a recipe or start cooking to learn your cuisines.',
+                            style: AppTypography.captionStyle(color: AppColors.textSecondary),
+                          )
+                        else ...[
+                          ...(_learnedCuisineCounts.entries.toList()
+                                ..sort((a, b) => b.value.compareTo(a.value)))
+                              .take(5)
+                              .map((e) {
+                                final normalized = e.key;
+                                final display = _displayCuisineNameFromNormalized(normalized);
+                                final count = e.value;
+                                final override = (_manualCuisineOverrides[normalized] ?? 0).clamp(-1, 1);
+                                return ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  title: Text(display),
+                                  subtitle: Text('Signals: $count'),
+                                  trailing: DropdownButton<int>(
+                                    value: override,
+                                    items: const [
+                                      DropdownMenuItem(value: 1, child: Text('Like')),
+                                      DropdownMenuItem(value: 0, child: Text('Neutral')),
+                                      DropdownMenuItem(value: -1, child: Text('Dislike')),
+                                    ],
+                                    onChanged: (v) async {
+                                      final next = (v ?? 0).clamp(-1, 1);
+                                      setState(() {
+                                        final updated = Map<String, int>.from(_manualCuisineOverrides);
+                                        if (next == 0) {
+                                          updated.remove(normalized);
+                                        } else {
+                                          updated[normalized] = next;
+                                        }
+                                        _manualCuisineOverrides = updated;
+                                      });
+                                      await CuisinePreferenceService.instance.setManualOverride(
+                                        cuisine: normalized,
+                                        value: next,
+                                      );
+                                    },
+                                  ),
+                                );
+                              }),
+                          const SizedBox(height: AppSpacing.sm),
+                          Row(
+                            children: [
+                              TextButton.icon(
+                                onPressed: () {
+                                  final entries = _learnedCuisineCounts.entries.toList()
+                                    ..sort((a, b) => b.value.compareTo(a.value));
+                                  final detected = entries
+                                      .map((e) => _displayCuisineNameFromNormalized(e.key))
+                                      .where((s) => s.trim().isNotEmpty)
+                                      .take(5)
+                                      .toList();
+                                  if (detected.isEmpty) return;
+                                  setState(() {
+                                    _favoriteCuisines = detected;
+                                  });
+                                },
+                                icon: const Icon(Icons.auto_awesome),
+                                label: const Text('Use detected'),
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton.icon(
+                                onPressed: () async {
+                                  await CuisinePreferenceService.instance.resetLearned();
+                                  await _loadCuisineLearning();
+                                },
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Reset learning'),
+                              ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: AppSpacing.md),
                         Text(
                           'Select 1–5 cuisines you prefer. These will be sent to planning requests.',
                           style: AppTypography.captionStyle(color: AppColors.textSecondary),
@@ -918,7 +1069,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       _buildSectionHeader('Family Members (${_familyMembers.length})'),
                       ElevatedButton.icon(
-                        onPressed: _addFamilyMember,
+                        onPressed: () async {
+                          await _addFamilyMember();
+                        },
                         icon: const Icon(Icons.add),
                         label: const Text('Add Member'),
                         style: ElevatedButton.styleFrom(

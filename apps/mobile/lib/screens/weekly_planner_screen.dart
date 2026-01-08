@@ -4,7 +4,9 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
+import '../services/entitlements_service.dart';
 import '../models/planning.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'planning_results_screen.dart';
 
 class WeeklyPlannerScreen extends StatefulWidget {
@@ -177,6 +179,17 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
   }
 
   Future<void> _planWeekly() async {
+    final isPro = await EntitlementsService.instance.isPro();
+    if (!isPro && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade to weekly planning',
+        reason: 'Weekly planning is a Pro feature. Pro saves you time by generating a full week plus a shopping list in one tap.',
+      );
+      return;
+    }
+
     setState(() => _planning = true);
 
     try {
@@ -231,6 +244,7 @@ class _WeeklyPlannerScreenState extends State<WeeklyPlannerScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
+            settings: const RouteSettings(name: '/planning_results'),
             builder: (_) => PlanningResultsScreen(
               menuPlan: menuPlan,
               planType: 'weekly',

@@ -7,10 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
 import '../services/api_client.dart';
+import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'planning_results_screen.dart';
 import 'shopping_list_screen.dart';
 
@@ -233,6 +235,17 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
 
   Future<void> _swapItems() async {
     if (_swapping) return;
+
+    final gate = await EntitlementsService.instance.tryConsumeSwap();
+    if (!gate.allowed && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade for unlimited swaps',
+        reason: 'You\'ve used today\'s free swap. Pro unlocks unlimited swaps/regenerates so you can refine plans faster.',
+      );
+      return;
+    }
 
     setState(() {
       _swapping = true;

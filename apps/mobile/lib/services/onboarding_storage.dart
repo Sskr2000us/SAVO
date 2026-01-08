@@ -88,12 +88,14 @@ class OnboardingStorage {
   /// Get the next step in the onboarding flow
   static String? getNextStep(String currentStep) {
     final nextSteps = {
+      // US-05: two required onboarding steps.
       'LOGIN': 'HOUSEHOLD',
-      'HOUSEHOLD': 'ALLERGIES',
+      'HOUSEHOLD': 'DIETARY',
+      // Legacy steps (if cached) roll up into DIETARY/COMPLETE.
       'ALLERGIES': 'DIETARY',
-      'DIETARY': 'SPICE',
-      'SPICE': 'PANTRY',
-      'PANTRY': 'LANGUAGE',
+      'DIETARY': 'COMPLETE',
+      'SPICE': 'COMPLETE',
+      'PANTRY': 'COMPLETE',
       'LANGUAGE': 'COMPLETE',
       'COMPLETE': null, // Onboarding complete
     };

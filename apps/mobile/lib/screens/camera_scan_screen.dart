@@ -233,57 +233,59 @@ class _CameraScanScreenState extends State<CameraScanScreen> {
       color: isTopMatch ? Colors.green.shade50 : Colors.white,
       child: Padding(
         padding: EdgeInsets.all(16),
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        match.canonicalName,
+                        style: TextStyle(
+                          fontSize: isTopMatch ? 20 : 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        match.reasoning,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
                   children: [
-                    Text(
-                      match.canonicalName,
-                      style: TextStyle(
-                        fontSize: isTopMatch ? 20 : 16,
-                        fontWeight: FontWeight.bold,
+                    CircularProgressIndicator(
+                      value: match.confidence,
+                      backgroundColor: Colors.grey[300],
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        match.confidence > 0.8
+                            ? Colors.green
+                            : match.confidence > 0.6
+                                ? Colors.orange
+                                : Colors.red,
                       ),
                     ),
                     SizedBox(height: 4),
                     Text(
-                      match.reasoning,
+                      '${(match.confidence * 100).toStringAsFixed(0)}%',
                       style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[700],
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
                       ),
                     ),
                   ],
                 ),
-              ),
-              Column(
-                children: [
-                  CircularProgressIndicator(
-                    value: match.confidence,
-                    backgroundColor: Colors.grey[300],
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      match.confidence > 0.8
-                          ? Colors.green
-                          : match.confidence > 0.6
-                              ? Colors.orange
-                              : Colors.red,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    '${(match.confidence * 100).toStringAsFixed(0)}%',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

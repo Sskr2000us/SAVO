@@ -16,55 +16,31 @@ class OnboardingHouseholdScreen extends StatefulWidget {
 }
 
 class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
-  final List<Map<String, dynamic>> _members = [];
+  int _householdSize = 1;
   bool _isLoading = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadExistingMembers();
+    _loadExistingSize();
   }
 
-  void _loadExistingMembers() {
+  void _loadExistingSize() {
     final profileState = Provider.of<ProfileState>(context, listen: false);
-    if (profileState.members.isNotEmpty) {
-      setState(() {
-        _members.addAll(profileState.members.cast<Map<String, dynamic>>());
-      });
-    }
-  }
-
-  void _addMember() {
+    final count = profileState.members.length;
     setState(() {
-      _members.add({
-        'name': '',
-        'age': 30,
-        'role': 'adult',
-      });
+      _householdSize = count > 0 ? count.clamp(1, 8) : 1;
     });
   }
 
-  void _removeMember(int index) {
+  void _setHouseholdSize(int value) {
     setState(() {
-      _members.removeAt(index);
+      _householdSize = value.clamp(1, 8);
     });
   }
 
   Future<void> _handleNext() async {
-    if (_members.isEmpty) {
-      setState(() => _error = 'Please add at least one household member');
-      return;
-    }
-
-    // Validate all members have names
-    for (var i = 0; i < _members.length; i++) {
-      if (_members[i]['name']?.toString().trim().isEmpty ?? true) {
-        setState(() => _error = 'Please enter a name for all members');
-        return;
-      }
-    }
-
     setState(() {
       _isLoading = true;
       _error = null;
@@ -80,15 +56,17 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
         await profileService.createHouseholdProfile();
       }
 
-      // Create each family member
-      for (var member in _members) {
-        if (member['id'] == null) {
-          // New member
+      // Create placeholder members to match selected household size.
+      // Users can customize members later in Settings.
+      final existingCount = profileState.members.length;
+      if (existingCount < _householdSize) {
+        for (var i = existingCount; i < _householdSize; i++) {
+          final name = i == 0 ? 'Me' : 'Member ${i + 1}';
           await profileService.createFamilyMember(
-            name: member['name'],
-            age: member['age'] ?? 30,
-            allergens: [],
-            dietaryRestrictions: [],
+            name: name,
+            age: 30,
+            allergens: const [],
+            dietaryRestrictions: const [],
           );
         }
       }
@@ -130,29 +108,26 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
       final profileService = ProfileService(apiClient);
       final profileState = Provider.of<ProfileState>(context, listen: false);
 
-      // Only save if there are members
-      if (_members.isNotEmpty) {
-        // Create household and members
-        if (!profileState.hasHouseholdProfile()) {
-          await profileService.createHouseholdProfile();
-        }
+      if (!profileState.hasHouseholdProfile()) {
+        await profileService.createHouseholdProfile();
+      }
 
-        for (var member in _members) {
-          if (member['id'] == null && member['name']?.toString().trim().isNotEmpty == true) {
-            await profileService.createFamilyMember(
-              name: member['name'],
-              age: member['age'] ?? 30,
-              allergens: [],
-              dietaryRestrictions: [],
-            );
-          }
+      final existingCount = profileState.members.length;
+      if (existingCount < _householdSize) {
+        for (var i = existingCount; i < _householdSize; i++) {
+          final name = i == 0 ? 'Me' : 'Member ${i + 1}';
+          await profileService.createFamilyMember(
+            name: name,
+            age: 30,
+            allergens: const [],
+            dietaryRestrictions: const [],
+          );
         }
+      }
 
-        // Save progress
-        final userId = profileState.userId;
-        if (userId != null) {
-          await OnboardingStorage.saveLastStep('HOUSEHOLD', userId);
-        }
+      final userId = profileState.userId;
+      if (userId != null) {
+        await OnboardingStorage.saveLastStep('HOUSEHOLD', userId);
       }
 
       if (mounted) {
@@ -195,7 +170,7 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Step ${getStepNumber('HOUSEHOLD')} of 8',
+                    'Step ${getStepNumber('HOUSEHOLD')} of 2',
                     style: const TextStyle(
                       fontSize: 14,
                       color: Colors.grey,
@@ -203,114 +178,68 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Who lives in your household?',
+                    'How many people do you cook for?',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'This takes <10 seconds.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                  ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Add yourself and anyone else you cook for',
+                    'You can customize names, ages, and diets later in Settings.',
                     style: TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 32),
-                  
-                  // Member list
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _members.length,
-                    itemBuilder: (context, index) {
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
+
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Household size', style: TextStyle(fontSize: 16)),
+                          Row(
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextFormField(
-                                      initialValue: _members[index]['name'],
-                                      decoration: const InputDecoration(
-                                        labelText: 'Name',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      onChanged: (value) {
-                                        _members[index]['name'] = value;
-                                      },
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    onPressed: () => _removeMember(index),
-                                  ),
-                                ],
+                              IconButton(
+                                onPressed: _isLoading || _householdSize <= 1
+                                    ? null
+                                    : () => _setHouseholdSize(_householdSize - 1),
+                                icon: const Icon(Icons.remove_circle_outline),
                               ),
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextFormField(
-                                      initialValue:
-                                          _members[index]['age'].toString(),
-                                      decoration: const InputDecoration(
-                                        labelText: 'Age',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      keyboardType: TextInputType.number,
-                                      onChanged: (value) {
-                                        _members[index]['age'] =
-                                            int.tryParse(value) ?? 30;
-                                      },
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: DropdownButtonFormField<String>(
-                                      value: _members[index]['role'] ?? 'adult',
-                                      decoration: const InputDecoration(
-                                        labelText: 'Role',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: 'adult',
-                                          child: Text('Adult'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'child',
-                                          child: Text('Child'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'senior',
-                                          child: Text('Senior'),
-                                        ),
-                                      ],
-                                      onChanged: (value) {
-                                        setState(() {
-                                          _members[index]['role'] = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
+                              Text(
+                                '$_householdSize',
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                              IconButton(
+                                onPressed: _isLoading || _householdSize >= 8
+                                    ? null
+                                    : () => _setHouseholdSize(_householdSize + 1),
+                                icon: const Icon(Icons.add_circle_outline),
                               ),
                             ],
                           ),
-                        ),
-                      );
-                    },
+                        ],
+                      ),
+                    ),
                   ),
-                  
-                  // Add member button
-                  OutlinedButton.icon(
-                    onPressed: _addMember,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Member'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
+
+                  Text(
+                    'You can change this later in Settings.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ChoiceChip(
+                      label: const Text('Just me (recommended)'),
+                      selected: _householdSize == 1,
+                      onSelected: _isLoading ? null : (_) => _setHouseholdSize(1),
                     ),
                   ),
                   
@@ -320,7 +249,7 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
+                        color: Colors.red.withAlpha(26),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -341,7 +270,7 @@ class _OnboardingHouseholdScreenState extends State<OnboardingHouseholdScreen> {
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator()
-                        : const Text('Next: Allergies'),
+                        : const Text('Continue'),
                   ),
                 ],
               ),

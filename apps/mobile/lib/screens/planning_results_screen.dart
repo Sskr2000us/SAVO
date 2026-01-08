@@ -5,11 +5,15 @@ import 'package:provider/provider.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
+import '../services/cuisine_preference_service.dart';
 import '../services/scanning_service.dart';
+import '../services/saved_recipes_local_service.dart';
+import '../services/upsell_service.dart';
 import '../models/planning.dart';
 import '../models/cuisine.dart';
 import '../config/app_config.dart';
 import 'recipe_detail_screen.dart';
+import 'cook_mode_screen.dart';
 import 'shopping_list_screen.dart';
 import '../models/market_config_state.dart';
 
@@ -457,9 +461,13 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => RecipeDetailScreen(
+                            builder: (_) => CookModeScreen(
                               recipe: firstRecipe!,
+                              servings: firstRecipeServings,
                               baseServings: firstRecipeServings,
+                              showBackToOptions: true,
+                              backRouteName: '/planning_results',
+                              backLabel: 'Back to plan',
                             ),
                           ),
                         );
@@ -698,10 +706,14 @@ class _RecipeCardState extends State<_RecipeCard> {
 
       if (_isSaved) {
         await apiClient.delete('/recipes/saved/${Uri.encodeComponent(rid)}');
+        await SavedRecipesLocalService.instance.removeSavedRecipeById(rid);
       } else {
         await apiClient.post('/recipes/saved', {
           'recipe': widget.recipe.toJson(),
         });
+        // Preference signal: user saved this cuisine.
+        await CuisinePreferenceService.instance.recordSavedCuisine(widget.recipe.cuisine);
+        await SavedRecipesLocalService.instance.upsertSavedRecipe(widget.recipe);
       }
 
       if (!mounted) return;
@@ -710,6 +722,10 @@ class _RecipeCardState extends State<_RecipeCard> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(next ? 'Recipe saved.' : 'Recipe removed.')),
       );
+
+      if (next) {
+        await UpsellService.instance.recordRecipeSavedAndMaybeShow(context);
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

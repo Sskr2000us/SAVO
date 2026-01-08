@@ -194,13 +194,18 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Step ${getStepNumber('DIETARY')} of 8',
+                    'Step ${getStepNumber('DIETARY')} of 2',
                     style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'Any dietary restrictions?',
                     style: theme.textTheme.headlineMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'This takes <10 seconds.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -249,11 +254,17 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                           label: Text(optionLabels[option] ?? option),
                           selected: isSelected,
                           onSelected: (_) => _toggleRestriction(option),
-                          selectedColor: colorScheme.primary.withOpacity(0.22),
+                          selectedColor: colorScheme.primary.withAlpha(56),
                           checkmarkColor: colorScheme.primary,
                         );
                       }),
                     ],
+                  ),
+
+                  const SizedBox(height: 12),
+                  Text(
+                    'You can change this later in Settings.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
                   ),
                   
                   if (_error != null) ...[
@@ -261,7 +272,7 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: colorScheme.error.withOpacity(0.12),
+                        color: colorScheme.error.withAlpha(31),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -281,7 +292,7 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator()
-                        : const Text('Next: Spice Preference'),
+                        : const Text('Continue'),
                   ),
                 ],
               ),

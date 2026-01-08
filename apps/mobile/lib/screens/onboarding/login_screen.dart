@@ -6,11 +6,15 @@ import '../../services/profile_service.dart';
 import '../../services/api_client.dart';
 import '../../services/session_security_service.dart';
 import '../../services/onboarding_storage.dart';
-import 'onboarding_coordinator.dart';
 import 'signup_screen.dart';
 
 class OnboardingLoginScreen extends StatefulWidget {
-  const OnboardingLoginScreen({super.key});
+  final String? postLoginRoute;
+
+  const OnboardingLoginScreen({
+    super.key,
+    this.postLoginRoute,
+  });
 
   @override
   State<OnboardingLoginScreen> createState() => _OnboardingLoginScreenState();
@@ -120,7 +124,7 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
         // Navigate based on onboarding status
         if (status['completed'] == true) {
           // Existing user with complete profile -> go to home
-          Navigator.of(context).pushReplacementNamed('/home');
+          Navigator.of(context).pushReplacementNamed(widget.postLoginRoute ?? '/home');
         } else {
           // New user or incomplete onboarding -> continue setup
           Navigator.of(context).pushReplacementNamed('/onboarding');
@@ -230,7 +234,7 @@ class _OnboardingLoginScreenState extends State<OnboardingLoginScreen> {
         // Navigate based on onboarding status
         if (status['completed'] == true) {
           // Existing user with complete profile -> go to home
-          Navigator.of(context).pushReplacementNamed('/home');
+          Navigator.of(context).pushReplacementNamed(widget.postLoginRoute ?? '/home');
         } else {
           // New user or incomplete onboarding -> continue setup
           Navigator.of(context).pushReplacementNamed('/onboarding');

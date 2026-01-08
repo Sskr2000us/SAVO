@@ -1,7 +1,5 @@
-"""
-Search Service for Flutter Mobile App
-Provides multi-language, semantic, fuzzy, and voice search
-"""
+/// Search Service for Flutter Mobile App
+/// Provides multi-language, semantic, fuzzy, and voice search
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;

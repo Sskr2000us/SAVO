@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
+import '../services/entitlements_service.dart';
 import '../models/planning.dart';
 import '../models/cuisine.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'planning_results_screen.dart';
 
 class PartyPlannerScreen extends StatefulWidget {
@@ -79,6 +81,17 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
       return;
     }
 
+    final isPro = await EntitlementsService.instance.isPro();
+    if (!isPro && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade to family planning',
+        reason: 'Planning for groups and events is a Pro feature. Upgrade to generate menus faster and reduce waste with better shopping lists.',
+      );
+      return;
+    }
+
     setState(() => _planning = true);
 
     try {
@@ -133,6 +146,7 @@ class _PartyPlannerScreenState extends State<PartyPlannerScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
+            settings: const RouteSettings(name: '/planning_results'),
             builder: (_) => PlanningResultsScreen(
               menuPlan: menuPlan,
               planType: 'party',

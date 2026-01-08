@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../services/api_client.dart';
 import '../services/cook_session_storage.dart';
 import '../services/scanning_service.dart';
+import '../services/cuisine_preference_service.dart';
 import '../models/profile_state.dart';
 import '../models/planning.dart';
 import 'post_cook_feedback_screen.dart';
@@ -18,6 +19,9 @@ class CookModeScreen extends StatefulWidget {
   final String? preferredLanguageCode;
   final bool? startBilingual;
   final bool enablePostCookFeedback;
+  final bool showBackToOptions;
+  final String? backRouteName;
+  final String? backLabel;
 
   // Optional restore state (used for Resume Cooking)
   final int? initialStepIndex;
@@ -36,6 +40,9 @@ class CookModeScreen extends StatefulWidget {
     this.preferredLanguageCode,
     this.startBilingual,
     this.enablePostCookFeedback = false,
+    this.showBackToOptions = false,
+    this.backRouteName,
+    this.backLabel,
     this.initialStepIndex,
     this.initialStepSecondsRemaining,
     this.initialRecipeTotalSeconds,
@@ -50,6 +57,7 @@ class CookModeScreen extends StatefulWidget {
 }
 
 class _CookModeScreenState extends State<CookModeScreen> {
+  static const String _recipeOptionsRouteName = '/recipe_options';
   int _currentStepIndex = 0;
   Timer? _stepTimer;
   int _stepSecondsRemaining = 0;
@@ -108,6 +116,10 @@ class _CookModeScreenState extends State<CookModeScreen> {
     super.initState();
     _restoreInitialStateIfProvided();
     _startRecipeTimer();
+    // Preference signal: user started cooking this cuisine.
+    Future.microtask(
+      () => CuisinePreferenceService.instance.recordCookStartedCuisine(widget.recipe.cuisine),
+    );
     // Ensure a session exists even if user immediately leaves.
     Future.microtask(() => _persistSession(force: true));
   }
@@ -713,6 +725,13 @@ class _CookModeScreenState extends State<CookModeScreen> {
     return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
+  void _backToOptions() {
+    final target = (widget.backRouteName != null && widget.backRouteName!.trim().isNotEmpty)
+        ? widget.backRouteName!.trim()
+        : _recipeOptionsRouteName;
+    Navigator.of(context).popUntil((route) => route.settings.name == target || route.isFirst);
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentStep = widget.recipe.steps[_currentStepIndex];
@@ -731,8 +750,19 @@ class _CookModeScreenState extends State<CookModeScreen> {
         secondaryInstruction.isNotEmpty &&
         secondaryInstruction != primaryInstruction;
 
-    return Scaffold(
-      appBar: AppBar(
+    return PopScope(
+      canPop: !widget.showBackToOptions,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (widget.showBackToOptions) {
+          _backToOptions();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: widget.showBackToOptions
+              ? BackButton(onPressed: _backToOptions)
+              : null,
         title: Text(widget.recipe.recipeName['en']?.isNotEmpty == true
             ? widget.recipe.recipeName['en']!
             : 'Cook Mode'),
@@ -790,6 +820,22 @@ class _CookModeScreenState extends State<CookModeScreen> {
             LinearProgressIndicator(
               value: (_currentStepIndex + 1) / widget.recipe.steps.length,
             ),
+            if (widget.showBackToOptions)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: TextButton.icon(
+                    onPressed: _backToOptions,
+                    icon: const Icon(Icons.arrow_back),
+                    label: Text(
+                      (widget.backLabel != null && widget.backLabel!.trim().isNotEmpty)
+                          ? widget.backLabel!.trim()
+                          : 'Back to options',
+                    ),
+                  ),
+                ),
+              ),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -956,6 +1002,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 }

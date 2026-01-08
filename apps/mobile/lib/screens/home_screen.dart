@@ -5,9 +5,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../services/profile_service.dart';
+import '../services/entitlements_service.dart';
 import '../models/profile_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'plan_screen.dart';
 import 'cook_now_entry_screen.dart';
 import 'pantry_update_entry_screen.dart';
@@ -165,7 +167,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {
+                    onPressed: () async {
+                      final gate = await EntitlementsService.instance.tryConsumeScan();
+                      if (!gate.allowed && context.mounted) {
+                        await showProPaywallSheet(
+                          context,
+                          title: 'Upgrade to SAVO Pro',
+                          ctaLabel: 'Upgrade for unlimited scans',
+                          reason: 'You\'ve hit today\'s free scan limit. Upgrade to keep scanning and get unlimited suggestions.',
+                        );
+                        return;
+                      }
+
+                      if (!context.mounted) return;
                       Navigator.push(
                         context,
                         AppMotion.createRoute(const PantryUpdateEntryScreen()),

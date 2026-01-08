@@ -9,6 +9,7 @@ import 'screens/plan_screen.dart';
 import 'screens/cook_now_entry_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/landing_screen.dart';
+import 'screens/pantry_update_entry_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
 import 'screens/account_settings_screen.dart';
@@ -102,6 +103,7 @@ class _SavoAppState extends State<SavoApp> with WidgetsBindingObserver {
           '/login': (context) => const OnboardingLoginScreen(),
           '/onboarding': (context) => const OnboardingCoordinator(),
           '/home': (context) => const MainNavigationShell(),
+          '/scan': (context) => const PantryUpdateEntryScreen(),
         },
       ),
     );

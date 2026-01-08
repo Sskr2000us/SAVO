@@ -6,8 +6,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/planning.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
+import '../services/entitlements_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'planning_results_screen.dart';
 
 class DailyPlanScreen extends StatefulWidget {
@@ -230,6 +232,21 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
 
   Future<void> _generateDailyPlan() async {
     if (_generating) return;
+
+    // Free tier: allow generating, but limit regenerates.
+    if (_latest != null) {
+      final gate = await EntitlementsService.instance.tryConsumeRegenerate();
+      if (!gate.allowed && mounted) {
+        await showProPaywallSheet(
+          context,
+          title: 'Upgrade to SAVO Pro',
+          ctaLabel: 'Upgrade for unlimited regenerates',
+          reason: 'You\'ve used today\'s free regenerate. Pro unlocks unlimited regenerates plus weekly planning and shopping lists.',
+        );
+        return;
+      }
+    }
+
     setState(() {
       _generating = true;
       _error = null;

@@ -1,9 +1,67 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
+import '../services/entitlements_service.dart';
+import '../widgets/pro_paywall_sheet.dart';
+import 'onboarding/login_screen.dart';
+import 'pantry_update_entry_screen.dart';
 
 /// Modern landing screen with hero imagery and clear CTAs
-class LandingScreen extends StatelessWidget {
+class LandingScreen extends StatefulWidget {
   const LandingScreen({super.key});
+
+  @override
+  State<LandingScreen> createState() => _LandingScreenState();
+}
+
+class _LandingScreenState extends State<LandingScreen> {
+  final GlobalKey _howItWorksKey = GlobalKey();
+  bool _showHowItWorksExplainer = false;
+
+  void _seeHowItWorks() {
+    if (!_showHowItWorksExplainer) {
+      setState(() {
+        _showHowItWorksExplainer = true;
+      });
+    }
+    final ctx = _howItWorksKey.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+      alignment: 0.1,
+    );
+  }
+
+  Future<void> _startScanning() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => const OnboardingLoginScreen(postLoginRoute: '/scan'),
+        ),
+      );
+      return;
+    }
+
+    final gate = await EntitlementsService.instance.tryConsumeScan();
+    if (!gate.allowed && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade for unlimited scans',
+        reason: 'You\'ve hit today\'s free scan limit. Upgrade to keep scanning and get unlimited suggestions.',
+      );
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const PantryUpdateEntryScreen(),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,21 +138,69 @@ class LandingScreen extends StatelessWidget {
                               textAlign: TextAlign.center,
                             ),
                             Text(
-                              'Cook with what you have. Plan smarter. Waste less.',
+                              'Scan groceries → get meals you can cook tonight',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 color: cs.onSurface.withAlpha(220),
                                 height: 1.35,
                               ),
                               textAlign: TextAlign.center,
                             ),
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              'Takes ~30 seconds.',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: cs.onSurface.withAlpha(200),
+                                fontWeight: FontWeight.w700,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
                             const SizedBox(height: AppSpacing.md),
                             Text(
-                              'Scan your pantry, get personalized menus, and generate a shopping list in seconds.',
+                              'Confirm what you have, then pick a meal in minutes.',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                 color: cs.onSurface.withAlpha(190),
                                 height: 1.45,
                               ),
                               textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: AppSpacing.lg),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 54,
+                              child: FilledButton(
+                                onPressed: () => _startScanning(),
+                                child: const Text('Start scanning'),
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              'Works best with pantry staples enabled.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: cs.onSurfaceVariant,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _FlowStep(icon: Icons.camera_alt, label: 'Scan', color: cs.primary),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  child: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+                                ),
+                                _FlowStep(icon: Icons.check_circle_outline, label: 'Confirm', color: cs.primary),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  child: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+                                ),
+                                _FlowStep(icon: Icons.local_dining, label: 'Cook', color: cs.primary),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            TextButton(
+                              onPressed: _seeHowItWorks,
+                              child: const Text('See how it works'),
                             ),
                           ],
                         ),
@@ -107,11 +213,56 @@ class LandingScreen extends StatelessWidget {
             
             // Features section
             SliverToBoxAdapter(
+              key: _howItWorksKey,
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.xl),
                 child: Column(
                   children: [
                     const SizedBox(height: AppSpacing.lg),
+                    if (_showHowItWorksExplainer) ...[
+                      Container(
+                        padding: const EdgeInsets.all(AppSpacing.lg),
+                        decoration: BoxDecoration(
+                          color: cs.surface,
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
+                          boxShadow: AppShadows.card,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'How it works',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              '• Scan your groceries (photo or barcode).',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              '• Quickly confirm anything uncertain.',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              '• Get 3–5 meals you can cook tonight.',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            Text(
+                              'Privacy: no extra signup required to learn how it works.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
                     _FeatureCard(
                       icon: Icons.camera_alt,
                       title: 'Scan Ingredients',
@@ -132,18 +283,7 @@ class LandingScreen extends StatelessWidget {
                     const SizedBox(height: AppSpacing.xl),
                     
                     // CTA Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 54,
-                      child: FilledButton(
-                        onPressed: () {
-                          Navigator.of(context).pushNamed('/login');
-                        },
-                        child: const Text(
-                          'Get Started',
-                        ),
-                      ),
-                    ),
+                    // CTA already shown in hero for fast value.
                     
                     const SizedBox(height: AppSpacing.xl),
                   ],
@@ -219,6 +359,39 @@ class _FeatureCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _FlowStep extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _FlowStep({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: cs.onSurfaceVariant,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }

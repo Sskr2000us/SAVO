@@ -5,8 +5,10 @@ import 'package:provider/provider.dart';
 import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../services/cook_now_service.dart';
+import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../ui/ui_principles.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'recipe_options_screen.dart';
 
 class CookNowEntryScreen extends StatefulWidget {
@@ -54,6 +56,9 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
   }
 
   Future<void> _deleteSavedPlan() async {
+    final apiClient = Provider.of<ApiClient>(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -75,18 +80,17 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
     if (confirmed != true) return;
 
     try {
-      final apiClient = Provider.of<ApiClient>(context, listen: false);
       await apiClient.delete('/plan/latest?plan_type=daily');
       if (!mounted) return;
       setState(() {
         _hasSavedPlan = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Plan removed.')),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('Failed to remove plan: $e')),
       );
     }
@@ -94,6 +98,19 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
 
   Future<void> _generate() async {
     if (_generating) return;
+
+    // Free tier: limit daily suggestion sessions.
+    final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+    if (!gate.allowed && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade for unlimited suggestions',
+        reason: 'You\'ve used today\'s free recipe suggestions. Pro unlocks unlimited daily suggestions plus weekly planning and shopping lists.',
+      );
+      return;
+    }
+
     setState(() {
       _generating = true;
       _error = null;
@@ -126,7 +143,11 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
 
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => RecipeOptionsScreen(recipes: options),
+          settings: const RouteSettings(name: '/recipe_options'),
+          builder: (_) => RecipeOptionsScreen(
+            recipes: options,
+            skipSuggestionSessionGate: true,
+          ),
         ),
       );
 

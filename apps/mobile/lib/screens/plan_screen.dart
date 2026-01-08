@@ -4,8 +4,11 @@ import 'package:flutter/foundation.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
+import '../services/entitlements_service.dart';
+import '../widgets/pro_paywall_sheet.dart';
 import 'daily_plan_screen.dart';
 import 'party_setup_screen.dart';
+import 'weekly_planner_screen.dart';
 
 class PlanScreen extends StatefulWidget {
   const PlanScreen({super.key});
@@ -76,6 +79,35 @@ class _PlanScreenState extends State<PlanScreen> {
             ),
             const SizedBox(height: AppSpacing.md),
             SavoCard(
+              elevated: true,
+              onTap: () async {
+                final isPro = await EntitlementsService.instance.isPro();
+                if (!isPro && context.mounted) {
+                  await showProPaywallSheet(
+                    context,
+                    title: 'Upgrade to SAVO Pro',
+                    ctaLabel: 'Upgrade to weekly planning',
+                    reason: 'Weekly planning is a Pro feature. Generate a full week and a shopping list in one tap.',
+                  );
+                  return;
+                }
+
+                if (!context.mounted) return;
+                Navigator.push(
+                  context,
+                  AppMotion.createRoute(const WeeklyPlannerScreen()),
+                );
+              },
+              child: const Row(
+                children: [
+                  Icon(Icons.calendar_view_week_outlined),
+                  SizedBox(width: AppSpacing.md),
+                  Expanded(child: Text('Weekly plan (Pro)')),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SavoCard(
               onTap: () {
                 Navigator.push(
                   context,
@@ -86,7 +118,7 @@ class _PlanScreenState extends State<PlanScreen> {
               },
               child: const Row(
                 children: [
-                  const SizedBox(width: AppSpacing.md),
+                  SizedBox(width: AppSpacing.md),
                   Icon(Icons.festival_outlined),
                   SizedBox(width: AppSpacing.md),
                   Expanded(child: Text('Festival')),

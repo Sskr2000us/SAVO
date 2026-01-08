@@ -1,25 +1,73 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
 import '../services/api_client.dart';
+import '../services/cuisine_preference_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
+import '../services/saved_recipes_local_service.dart';
+import '../services/upsell_service.dart';
 import 'cook_mode_screen.dart';
 import 'plan_screen.dart';
 
 class CookNowRecipeDetailScreen extends StatefulWidget {
   final Recipe recipe;
+  final bool? assumeStaples;
 
-  const CookNowRecipeDetailScreen({super.key, required this.recipe});
+  const CookNowRecipeDetailScreen({super.key, required this.recipe, this.assumeStaples});
 
   @override
   State<CookNowRecipeDetailScreen> createState() => _CookNowRecipeDetailScreenState();
 }
 
 class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
+  static const String _prefsAssumeStaplesKey = 'savo.assume_pantry_staples';
+
+  static const Set<String> _pantryStaples = {
+    'salt',
+    'pepper',
+    'black pepper',
+    'olive oil',
+    'oil',
+    'vegetable oil',
+    'butter',
+    'flour',
+    'sugar',
+    'garlic',
+    'garlic powder',
+    'onion',
+    'onion powder',
+    'vinegar',
+    'soy sauce',
+    'baking powder',
+    'baking soda',
+  };
+
+  static String _normalizeIngredientName(String input) {
+    return input
+        .replaceAll('_', ' ')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .toLowerCase();
+  }
+
+  static String _missingRowName(dynamic row) {
+    if (row is Map) {
+      return (row['name'] ?? row['ingredient'] ?? row['canonical_name'] ?? '').toString();
+    }
+    return row?.toString() ?? '';
+  }
+
   bool _checking = true;
   Map<String, dynamic>? _sufficiency;
+  bool _assumeStaples = true;
+
+  bool _checkingSaved = true;
+  bool _savingToggle = false;
+  bool _isSaved = false;
 
   String _stripIngredientDumpSuffix(String input) {
     var s = (input).trim();
@@ -102,7 +150,100 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.assumeStaples != null) {
+      _assumeStaples = widget.assumeStaples!;
+    } else {
+      _loadAssumeStaplesPref();
+    }
+    _loadSavedStatus();
     _check();
+  }
+
+  Future<void> _loadSavedStatus() async {
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final rid = widget.recipe.recipeId.trim();
+      if (rid.isEmpty) return;
+
+      final response = await apiClient.get(
+        '/recipes/saved/exists?recipe_id=${Uri.encodeComponent(rid)}',
+      );
+
+      if (!mounted) return;
+      if (response is Map && response['saved'] == true) {
+        setState(() => _isSaved = true);
+      }
+    } catch (_) {
+      // Best-effort only.
+    } finally {
+      if (mounted) setState(() => _checkingSaved = false);
+    }
+  }
+
+  Future<void> _toggleSaved() async {
+    if (_savingToggle) return;
+    final rid = widget.recipe.recipeId.trim();
+    if (rid.isEmpty) return;
+
+    setState(() => _savingToggle = true);
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      if (_isSaved) {
+        await apiClient.delete('/recipes/saved/${Uri.encodeComponent(rid)}');
+        await SavedRecipesLocalService.instance.removeSavedRecipeById(rid);
+      } else {
+        await apiClient.post('/recipes/saved', {
+          'recipe': widget.recipe.toJson(),
+        });
+        // Preference signal: user saved this cuisine.
+        await CuisinePreferenceService.instance.recordSavedCuisine(widget.recipe.cuisine);
+        await SavedRecipesLocalService.instance.upsertSavedRecipe(widget.recipe);
+      }
+
+      if (!mounted) return;
+      final next = !_isSaved;
+      setState(() => _isSaved = next);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(next ? 'Recipe saved.' : 'Recipe removed.')),
+      );
+
+      if (next) {
+        await UpsellService.instance.recordRecipeSavedAndMaybeShow(context);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update saved recipe: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingToggle = false);
+    }
+  }
+
+  Future<void> _loadAssumeStaplesPref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getBool(_prefsAssumeStaplesKey);
+      if (!mounted) return;
+      setState(() {
+        _assumeStaples = v ?? true;
+      });
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  Future<void> _setAssumeStaplesPref(bool value) async {
+    setState(() {
+      _assumeStaples = value;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefsAssumeStaplesKey, value);
+    } catch (_) {
+      // Best-effort.
+    }
   }
 
   List<Map<String, dynamic>> _recipeIngredientsPayload() {
@@ -152,17 +293,52 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     }
   }
 
-  Set<String> _missingNameSet() {
-    final result = _sufficiency;
-    if (result == null || result['success'] != true) return <String>{};
-    final raw = result['missing'];
-    if (raw is! List) return <String>{};
-    return raw
-        .whereType<Map>()
-        .map((m) => Map<String, dynamic>.from(m))
-        .map((m) => (m['name'] ?? m['ingredient'] ?? '').toString().trim().toLowerCase())
+  List<String> _whyBulletsFor(
+    Recipe recipe, {
+    String? matchSummary,
+  }) {
+    final bullets = <String>[];
+
+    final ms = matchSummary?.trim();
+    if (ms != null && ms.isNotEmpty) {
+      bullets.add(ms);
+    }
+
+    final used = recipe.ingredientsUsed
+        .map((i) => i.canonicalName.replaceAll('_', ' ').trim())
         .where((s) => s.isNotEmpty)
-        .toSet();
+        .toList();
+
+    if (used.isNotEmpty) {
+      final top = used.take(6).toList();
+      final suffix = used.length > 6 ? '…' : '';
+      bullets.add('Uses: ${top.join(', ')}$suffix');
+    } else {
+      bullets.add("Built from what's in your pantry");
+    }
+
+    final di = recipe.dietaryInformation;
+    final tags = <String>[];
+    if (di != null && di.isNotEmpty) {
+      for (final e in di.entries) {
+        final key = e.key.toString().trim();
+        final value = e.value;
+        if (key.isEmpty) continue;
+        if (value is bool && value == true) {
+          tags.add(_prettyName(key.replaceAll('_', ' ')));
+        }
+      }
+    }
+
+    if (tags.isNotEmpty) {
+      final top = tags.take(3).toList();
+      final suffix = tags.length > 3 ? '…' : '';
+      bullets.add('Respects: ${top.join(' • ')}$suffix');
+    } else {
+      bullets.add('Respects: No restrictions');
+    }
+
+    return bullets;
   }
 
   @override
@@ -175,21 +351,43 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     final secondaryLang = _secondaryLanguageKey(recipe.recipeName);
     final secondaryTitle = secondaryLang != null ? recipe.recipeName[secondaryLang] : null;
 
-    final missingSet = _missingNameSet();
-
-    final missing = <Map<String, dynamic>>[];
+    final missingAll = <Map<String, dynamic>>[];
     final rawMissing = _sufficiency != null ? _sufficiency!['missing'] : null;
     if (rawMissing is List) {
       for (final row in rawMissing) {
-        if (row is Map) missing.add(Map<String, dynamic>.from(row));
+        if (row is Map) missingAll.add(Map<String, dynamic>.from(row));
       }
     }
 
+    final missingStaples = <Map<String, dynamic>>[];
+    final missingNonStaples = <Map<String, dynamic>>[];
+    for (final m in missingAll) {
+      final name = _normalizeIngredientName(_missingRowName(m));
+      if (name.isEmpty) {
+        missingNonStaples.add(m);
+        continue;
+      }
+      if (_pantryStaples.contains(name)) {
+        missingStaples.add(m);
+      } else {
+        missingNonStaples.add(m);
+      }
+    }
+
+    final missingForDisplay = _assumeStaples ? missingNonStaples : missingAll;
+    final missingSet = missingForDisplay
+        .map((m) => _normalizeIngredientName(_missingRowName(m)))
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
     final have = recipe.ingredientsUsed.where((i) {
-      final name = i.canonicalName.trim().toLowerCase();
+      final name = _normalizeIngredientName(i.canonicalName);
       if (name.isEmpty) return true;
       return !missingSet.contains(name);
     }).toList();
+
+    final totalForMatch = recipe.ingredientsUsed.length;
+    final matchSummary = totalForMatch > 0 ? 'You already have ${have.length}/$totalForMatch ingredients' : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -211,17 +409,51 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Why this recipe?',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  ..._whyBulletsFor(recipe, matchSummary: matchSummary).map(
+                    (t) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text('• $t', style: theme.textTheme.bodyMedium),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           _SectionTitle(text: 'Ingredients', color: cs.primary),
           const SizedBox(height: 8),
+          if (recipe.ingredientsUsed.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilterChip(
+                label: const Text('Assume staples'),
+                selected: _assumeStaples,
+                onSelected: (v) {
+                  fireAndForget(_setAssumeStaplesPref(v));
+                },
+              ),
+            ),
+          if (recipe.ingredientsUsed.isNotEmpty) const SizedBox(height: 8),
           if (_checking)
             Text('Checking what you have…', style: theme.textTheme.bodyMedium)
           else if (recipe.ingredientsUsed.isEmpty)
             Text('No ingredients listed.', style: theme.textTheme.bodyMedium)
           else if (_sufficiency != null && _sufficiency!['success'] == true) ...[
-            if (missing.isNotEmpty) ...[
+            if (missingForDisplay.isNotEmpty) ...[
               Text('Missing', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
-              ...missing.map((m) {
+              ...missingForDisplay.map((m) {
                 final name = (m['name'] ?? m['ingredient'] ?? 'Ingredient').toString().trim();
                 final qty = m['quantity'];
                 final unit = (m['unit'] ?? '').toString().trim();
@@ -236,6 +468,18 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text('• $name$suffix', style: theme.textTheme.bodyMedium?.copyWith(color: cs.error)),
+                );
+              }),
+              const SizedBox(height: 12),
+            ],
+            if (_assumeStaples && missingStaples.isNotEmpty) ...[
+              Text('Assumed staples', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              ...missingStaples.map((m) {
+                final name = (m['name'] ?? m['ingredient'] ?? 'Ingredient').toString().trim();
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Text('• $name', style: theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
                 );
               }),
               const SizedBox(height: 12),
@@ -412,6 +656,7 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
                       servings: 4,
                       baseServings: 4,
                       enablePostCookFeedback: true,
+                      showBackToOptions: true,
                     ),
                   ),
                 );
@@ -422,7 +667,18 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton(
+            child: OutlinedButton.icon(
+              onPressed: (_checkingSaved || _savingToggle) ? null : _toggleSaved,
+              icon: _savingToggle
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Icon(_isSaved ? Icons.bookmark : Icons.bookmark_border),
+              label: Text(_isSaved ? 'Saved' : 'Save'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const PlanScreen()),

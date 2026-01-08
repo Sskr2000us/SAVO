@@ -32,7 +32,7 @@ class DecisionIntelligenceService {
   /// Evaluate entire inventory and get prioritized recommendations
   Future<List<DecisionResult>> evaluateInventory({int limit = 10}) async {
     try {
-      final data = await apiClient.post(
+      final Object? data = await apiClient.post(
         '/api/decision/evaluate-inventory',
         {'limit': limit},
       );

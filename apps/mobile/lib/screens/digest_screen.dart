@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../services/daily_habit_service.dart';
 
 /// Daily Digest Screen
 /// Displays morning/evening digest with personalized recommendations
