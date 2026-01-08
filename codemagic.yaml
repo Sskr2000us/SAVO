@@ -66,12 +66,14 @@ workflows:
           # Codemagic clones can be shallow and rebuilds of the same commit
           # (or builds from different branches) can reuse/decrease commit counts,
           # causing App Store Connect to reject the upload.
-          if [ -n "$CM_BUILD_NUMBER" ]; then
-            DERIVED_BUILD_NUMBER=$((10000 + CM_BUILD_NUMBER))
+          CODEMAGIC_BUILD_NUMBER="${CM_BUILD_NUMBER:-${BUILD_NUMBER:-}}"
+          if [ -n "$CODEMAGIC_BUILD_NUMBER" ]; then
+            DERIVED_BUILD_NUMBER=$((10000 + CODEMAGIC_BUILD_NUMBER))
           else
-            DERIVED_BUILD_NUMBER=$(git rev-list --count HEAD)
+            # Last-resort fallback (shouldn't happen in Codemagic).
+            DERIVED_BUILD_NUMBER=$((10000 + $(git rev-list --count HEAD)))
           fi
-          echo "Using iOS build number: $DERIVED_BUILD_NUMBER (CM_BUILD_NUMBER=$CM_BUILD_NUMBER)"
+          echo "Using iOS build number: $DERIVED_BUILD_NUMBER (CM_BUILD_NUMBER=$CM_BUILD_NUMBER, BUILD_NUMBER=$BUILD_NUMBER)"
           flutter build ipa --release \
             --build-number="$DERIVED_BUILD_NUMBER" \
             --export-options-plist="$HOME/export_options.plist"
@@ -137,7 +139,7 @@ workflows:
             --app "$APP_CENTER_OWNER/$APP_CENTER_IOS_APP" \
             --file "$IPA_PATH" \
             --group Collaborators \
-            --release-notes "Build: $CM_BUILD_NUMBER | Commit: $CM_COMMIT | Branch: $CM_BRANCH
+            --release-notes "Build: ${CM_BUILD_NUMBER:-$BUILD_NUMBER} | Commit: $CM_COMMIT | Branch: $CM_BRANCH
           
           Continuous single-item scanning:
           - Auto-capture with 3-second intervals
