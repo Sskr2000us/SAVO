@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -331,6 +332,60 @@ async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_
     except Exception:
         # Best-effort only.
         pass
+    return payload
+
+
+def _recipe_image_proxy_url(*, recipe_name: str, cuisine: str) -> str:
+    name = (recipe_name or "").strip()
+    if not name:
+        return ""
+    # Keep it short; the proxy endpoint also bounds inputs.
+    name_q = quote(name[:120])
+    cuisine_q = quote((cuisine or "general")[:60])
+    return f"/recipes/image/proxy?recipe_name={name_q}&cuisine={cuisine_q}"
+
+
+async def _enrich_plan_payload_with_image_urls(payload: Any) -> Any:
+    """Attach image_url to each recipe option.
+
+    Requirement: images come from LLM reasoning (implemented server-side in /recipes/image/proxy).
+    We only attach the proxy URL here; the proxy does the expensive work on-demand.
+    """
+
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    selected_cuisine = payload.get("selected_cuisine") if isinstance(payload.get("selected_cuisine"), str) else ""
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list):
+                continue
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                # If already present, respect it.
+                if isinstance(opt.get("image_url"), str) and opt.get("image_url"):
+                    continue
+
+                name = _recipe_name_text(opt.get("recipe_name"))
+                if not name:
+                    continue
+                cuisine = opt.get("cuisine") if isinstance(opt.get("cuisine"), str) else selected_cuisine
+                opt["image_url"] = _recipe_image_proxy_url(recipe_name=name, cuisine=str(cuisine or "general"))
+
     return payload
 
 
@@ -1001,9 +1056,20 @@ def _catalog_entry_to_recipe_option(entry: dict[str, Any], *, pantry_set: set[st
         if not item:
             continue
         nm = _canonicalize_inventory_name_for_planning(item)
-        amt = _parse_amount_to_float(ing.get("amount"))
+        amt_raw = ing.get("amount")
+        amt = _parse_amount_to_float(amt_raw)
         unit = str(ing.get("unit") or "").strip()
-        row = {"inventory_id": "", "canonical_name": nm, "amount": float(amt), "unit": unit or "pcs"}
+        notes = str(ing.get("notes") or "").strip()
+        # Keep both numeric amount (for scaling/math) and the original textual amount for display.
+        amount_display = str(amt_raw).strip() if amt_raw is not None else ""
+        row = {
+            "inventory_id": "",
+            "canonical_name": nm,
+            "amount": float(amt),
+            "unit": unit or "pcs",
+            "amount_display": amount_display,
+            "notes": notes,
+        }
         if nm in pantry_set or _is_assumed(nm):
             ingredients_used.append(row)
         else:
@@ -1012,6 +1078,8 @@ def _catalog_entry_to_recipe_option(entry: dict[str, Any], *, pantry_set: set[st
                     "canonical_name": nm,
                     "amount": float(amt),
                     "unit": unit or "pcs",
+                    "amount_display": amount_display,
+                    "notes": notes,
                     "reason": "Required for an authentic version of this dish.",
                 }
             )
@@ -3936,6 +4004,11 @@ async def post_daily(
                             except Exception:
                                 pass
 
+                            try:
+                                existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload)
+                            except Exception:
+                                pass
+
                             # Best-effort: persist enriched payload so subsequent calls are fast.
                             try:
                                 existing_id = existing.get("id")
@@ -4188,6 +4261,12 @@ async def post_daily(
     except Exception:
         pass
 
+    # Best-effort: attach image URLs (proxy endpoint handles LLM reasoning + CORS-safe bytes).
+    try:
+        result = await _enrich_plan_payload_with_image_urls(result)
+    except Exception:
+        pass
+
     # Persist successful plan
     if isinstance(result, dict) and result.get("status") == "ok":
         try:
@@ -4330,6 +4409,12 @@ async def get_latest_plan(
     # Best-effort: attach vetted YouTube references for saved plans too.
     try:
         payload = await _enrich_plan_payload_with_youtube_references(payload)
+    except Exception:
+        pass
+
+    # Best-effort: attach image URLs for saved plans too.
+    try:
+        payload = await _enrich_plan_payload_with_image_urls(payload)
     except Exception:
         pass
 
@@ -4551,6 +4636,11 @@ async def post_party(
                     existing_payload = _coerce_menu_headers(existing_payload)
                     try:
                         existing_payload = await _enrich_plan_payload_with_youtube_references(existing_payload)
+                    except Exception:
+                        pass
+
+                    try:
+                        existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload)
                     except Exception:
                         pass
 
@@ -4855,6 +4945,16 @@ async def post_weekly(
         # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
         try:
             result = await _enrich_plan_payload_with_youtube_references(result)
+        except Exception:
+            pass
+
+        try:
+            result = await _enrich_plan_payload_with_image_urls(result)
+        except Exception:
+            pass
+
+        try:
+            result = await _enrich_plan_payload_with_image_urls(result)
         except Exception:
             pass
 

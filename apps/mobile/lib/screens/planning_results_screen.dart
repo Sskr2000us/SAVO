@@ -8,6 +8,7 @@ import '../services/api_client.dart';
 import '../services/scanning_service.dart';
 import '../models/planning.dart';
 import '../models/cuisine.dart';
+import '../config/app_config.dart';
 import 'recipe_detail_screen.dart';
 import 'shopping_list_screen.dart';
 import '../models/market_config_state.dart';
@@ -629,12 +630,26 @@ class _RecipeCardState extends State<_RecipeCard> {
     return stripped.isEmpty ? 'Recipe' : stripped;
   }
 
-  String? get _coverImageUrl {
-    final refs = widget.recipe.youtubeReferences;
-    if (refs.isNotEmpty) return refs.first.thumbnailUrl;
+  String? _absoluteImageUrl(String? raw) {
+    final v = (raw ?? '').trim();
+    if (v.isEmpty) return null;
+    if (v.startsWith('/')) return '${Config.apiBaseUrl}$v';
+    return v;
+  }
 
-    // Flutter web fetches NetworkImage via XHR, which often fails for Unsplash due to CORS.
-    if (kIsWeb) return null;
+  String? get _coverImageUrl {
+    final fromPlan = _absoluteImageUrl(widget.recipe.imageUrl);
+    if (fromPlan != null) return fromPlan;
+
+    // Flutter web: avoid Unsplash CORS by using our backend proxy.
+    if (kIsWeb) {
+      final name = _sanitizeTitle(widget.recipe.getLocalizedName('en')).trim();
+      if (name.isEmpty) return null;
+      final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+      final url =
+          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+      return '${Config.apiBaseUrl}$url';
+    }
 
     final name = _sanitizeTitle(widget.recipe.getLocalizedName('en')).trim();
     if (name.isEmpty) {

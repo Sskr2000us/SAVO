@@ -137,8 +137,9 @@ workflows:
       app_store_connect:
         # Upload IPA to App Store Connect/TestFlight.
         auth: integration
-        # Internal testing does not require beta review submission.
-        submit_to_testflight: false
+        # Upload to TestFlight so the build shows up in App Store Connect.
+        # (App Store submission/release still typically requires metadata + review in App Store Connect.)
+        submit_to_testflight: true
     artifacts:
       - apps/mobile/build/ios/ipa/*.ipa
       - apps/mobile/build/ios/ipa/**/*.ipa

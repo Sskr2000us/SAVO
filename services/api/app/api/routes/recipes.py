@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 import html as _html
 
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from uuid import uuid4
@@ -21,6 +21,7 @@ from fastapi import Depends
 from app.core.llm_client import get_reasoning_client
 from app.core.database import get_db_client
 from app.core.database import get_full_profile, get_inventory
+from app.core.recipe_images import build_llm_image_query
 
 router = APIRouter()
 public_router = APIRouter()
@@ -982,6 +983,7 @@ class RecipeImageResponse(BaseModel):
     recipe_name: str
     image_url: str
     source: str = Field(default="unsplash", description="Image source provider")
+    image_query: Optional[str] = Field(default=None, description="Search query used to find the image")
 
 
 @router.post("/image", response_model=RecipeImageResponse)
@@ -998,15 +1000,14 @@ async def get_recipe_image(req: RecipeImageRequest):
     try:
         # Use Unsplash Source API (no key required for basic usage)
         # Format: https://source.unsplash.com/featured/?food,pasta,italian
-        
-        # Clean recipe name for search query
-        query_parts = [
-            "food",
-            req.cuisine.lower() if req.cuisine != "general" else "",
-            req.recipe_name.lower().replace(" ", ",")
-        ]
-        query = ",".join(p for p in query_parts if p)
-        
+        #
+        # Per product requirement, the *query* should come from LLM reasoning when available.
+        query = await build_llm_image_query(
+            recipe_name=req.recipe_name,
+            cuisine=req.cuisine,
+            ingredients=None,
+        )
+
         # Unsplash featured random image (1200x800)
         image_url = f"https://source.unsplash.com/1200x800/?{query}"
         
@@ -1020,7 +1021,8 @@ async def get_recipe_image(req: RecipeImageRequest):
         return RecipeImageResponse(
             recipe_name=req.recipe_name,
             image_url=image_url,
-            source="unsplash"
+            source="llm+unsplash",
+            image_query=query,
         )
         
     except Exception as e:
@@ -1035,3 +1037,46 @@ async def get_recipe_image_by_name(recipe_name: str, cuisine: str = "general"):
     """Get recipe image by name (GET endpoint for convenience)"""
     req = RecipeImageRequest(recipe_name=recipe_name, cuisine=cuisine)
     return await get_recipe_image(req)
+
+
+@router.get("/image/proxy")
+async def proxy_recipe_image(
+    recipe_name: str,
+    cuisine: str = "general",
+):
+    """CORS-safe recipe image bytes.
+
+    Flutter web often fetches images via XHR/canvas and can hit CORS issues with Unsplash.
+    This endpoint fetches the upstream image server-side and returns the bytes from our domain.
+    """
+    name = (recipe_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="recipe_name is required")
+
+    # Keep inputs bounded.
+    if len(name) > 120:
+        name = name[:120]
+    cuisine_clean = (cuisine or "general").strip()
+    if len(cuisine_clean) > 60:
+        cuisine_clean = cuisine_clean[:60]
+
+    query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_clean, ingredients=None)
+    upstream_url = f"https://source.unsplash.com/1200x800/?{query}"
+
+    timeout = httpx.Timeout(8.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        try:
+            resp = await client.get(upstream_url, headers={"Accept": "image/*"})
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch upstream image: {e}")
+
+    if resp.status_code >= 400 or not resp.content:
+        raise HTTPException(status_code=502, detail="Upstream image provider returned an error")
+
+    content_type = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip() or "image/jpeg"
+    headers = {
+        # Cache for 1 day; the upstream is random-ish but stable enough for UX.
+        "Cache-Control": "public, max-age=86400",
+    }
+
+    return Response(content=resp.content, media_type=content_type, headers=headers)

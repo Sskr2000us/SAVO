@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/planning.dart';
+import '../config/app_config.dart';
 import '../services/metrics_service.dart';
 import 'cook_now_recipe_detail_screen.dart';
 
@@ -223,10 +225,19 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   }
 
   String? _imageUrl(Recipe recipe) {
-    final refs = recipe.youtubeReferences;
-    if (refs.isNotEmpty) {
-      final url = refs.first.thumbnailUrl;
-      if (url.trim().isNotEmpty) return url;
+    final raw = (recipe.imageUrl ?? '').trim();
+    if (raw.isNotEmpty) {
+      if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+      return raw;
+    }
+
+    if (kIsWeb) {
+      final name = recipe.getLocalizedName('en').trim();
+      if (name.isEmpty) return null;
+      final cuisine = recipe.cuisine.trim().isEmpty ? 'general' : recipe.cuisine.trim();
+      final url =
+          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+      return '${Config.apiBaseUrl}$url';
     }
 
     final name = recipe.getLocalizedName('en').trim();

@@ -69,6 +69,27 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     return amount.toStringAsFixed(1);
   }
 
+  String _formatIngredientSuffix({
+    required String amountText,
+    required String unit,
+    required String notes,
+  }) {
+    final hasQty = amountText.trim().isNotEmpty;
+    final hasUnit = unit.trim().isNotEmpty;
+    final hasNotes = notes.trim().isNotEmpty;
+
+    final qtyPart = hasQty ? amountText.trim() : '';
+    final unitPart = hasUnit ? unit.trim() : '';
+    final qtyUnit = [qtyPart, unitPart].where((s) => s.isNotEmpty).join(' ');
+
+    final suffixParts = <String>[];
+    if (qtyUnit.isNotEmpty) suffixParts.add(qtyUnit);
+    if (hasNotes) suffixParts.add('(${notes.trim()})');
+
+    if (suffixParts.isEmpty) return '';
+    return ' — ${suffixParts.join(' ')}';
+  }
+
   String? _secondaryLanguageKey(Map<String, String> localized) {
     for (final e in localized.entries) {
       final key = e.key.trim().toLowerCase();
@@ -92,6 +113,8 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
             'name': i.canonicalName.trim(),
             'quantity': i.amount,
             'unit': i.unit,
+            'amount_display': i.amountDisplay,
+            'notes': i.notes,
           },
         )
         .toList();
@@ -202,10 +225,14 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
                 final name = (m['name'] ?? m['ingredient'] ?? 'Ingredient').toString().trim();
                 final qty = m['quantity'];
                 final unit = (m['unit'] ?? '').toString().trim();
-                final qtyText = (qty is num && qty != 0)
-                    ? (qty % 1 == 0 ? qty.toInt().toString() : qty.toStringAsFixed(1))
-                    : (qty?.toString().trim().isNotEmpty == true ? qty.toString().trim() : '');
-                final suffix = qtyText.isEmpty ? '' : ' — $qtyText${unit.isNotEmpty ? ' $unit' : ''}';
+                final amountDisplay = (m['amount_display'] ?? m['amountDisplay'] ?? '').toString().trim();
+                final notes = (m['notes'] ?? '').toString().trim();
+                final qtyText = amountDisplay.isNotEmpty
+                    ? amountDisplay
+                    : ((qty is num && qty != 0)
+                        ? (qty % 1 == 0 ? qty.toInt().toString() : qty.toStringAsFixed(1))
+                        : (qty?.toString().trim().isNotEmpty == true ? qty.toString().trim() : ''));
+                final suffix = _formatIngredientSuffix(amountText: qtyText, unit: unit, notes: notes);
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text('• $name$suffix', style: theme.textTheme.bodyMedium?.copyWith(color: cs.error)),
@@ -217,12 +244,16 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
               Text('You have', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
               ...have.map((i) {
-                final name = i.canonicalName.trim().isNotEmpty ? i.canonicalName.trim() : 'Ingredient';
-                final amount = i.amount;
+                final name = i.canonicalName.trim().isNotEmpty ? _prettyName(i.canonicalName.trim()) : 'Ingredient';
                 final unit = i.unit.trim();
-                final suffix = (amount == 0 && unit.isEmpty)
-                    ? ''
-                    : ' — ${amount.toString()}${unit.isNotEmpty ? ' $unit' : ''}';
+                final amountText = (i.amountDisplay ?? '').trim().isNotEmpty
+                    ? (i.amountDisplay ?? '').trim()
+                    : _formatAmount(i.amount);
+                final suffix = _formatIngredientSuffix(
+                  amountText: amountText,
+                  unit: unit,
+                  notes: (i.notes ?? '').trim(),
+                );
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text('• $name$suffix', style: theme.textTheme.bodyMedium),
@@ -232,11 +263,15 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
           ] else ...[
             ...recipe.ingredientsUsed.map((i) {
               final name = i.canonicalName.trim().isNotEmpty ? _prettyName(i.canonicalName.trim()) : 'Ingredient';
-              final amount = i.amount;
               final unit = i.unit.trim();
-              final suffix = (amount == 0 && unit.isEmpty)
-                  ? ''
-                  : ' — ${_formatAmount(amount)}${unit.isNotEmpty ? ' $unit' : ''}';
+              final amountText = (i.amountDisplay ?? '').trim().isNotEmpty
+                  ? (i.amountDisplay ?? '').trim()
+                  : _formatAmount(i.amount);
+              final suffix = _formatIngredientSuffix(
+                amountText: amountText,
+                unit: unit,
+                notes: (i.notes ?? '').trim(),
+              );
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Text('• $name$suffix', style: theme.textTheme.bodyMedium),

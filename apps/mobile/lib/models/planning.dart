@@ -88,6 +88,7 @@ class Course {
 class Recipe {
   final String recipeId;
   final Map<String, String> recipeName;
+  final String? imageUrl;
   final String cuisine;
   final String difficulty;
   final EstimatedTimes estimatedTimes;
@@ -106,6 +107,7 @@ class Recipe {
   Recipe({
     required this.recipeId,
     required this.recipeName,
+    this.imageUrl,
     required this.cuisine,
     required this.difficulty,
     required this.estimatedTimes,
@@ -169,6 +171,9 @@ class Recipe {
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
       recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
+      imageUrl: (json['image_url'] ?? '').toString().trim().isEmpty
+          ? null
+          : (json['image_url'] ?? '').toString().trim(),
       cuisine: json['cuisine'] ?? '',
       difficulty: json['difficulty'] ?? 'easy',
       estimatedTimes: EstimatedTimes.fromJson(json['estimated_times'] ?? {}),
@@ -217,6 +222,7 @@ class Recipe {
     return {
       'recipe_id': recipeId,
       'recipe_name': recipeName,
+      if (imageUrl != null) 'image_url': imageUrl,
       'cuisine': cuisine,
       'difficulty': difficulty,
       'estimated_times': estimatedTimes.toJson(),
@@ -239,12 +245,16 @@ class NewIngredientOptional {
   final String canonicalName;
   final double amount;
   final String unit;
+  final String? amountDisplay;
+  final String? notes;
   final String reason;
 
   NewIngredientOptional({
     required this.canonicalName,
     required this.amount,
     required this.unit,
+    this.amountDisplay,
+    this.notes,
     required this.reason,
   });
 
@@ -253,6 +263,10 @@ class NewIngredientOptional {
       canonicalName: (json['canonical_name'] ?? '').toString(),
       amount: (json['amount'] ?? 0).toDouble(),
       unit: (json['unit'] ?? '').toString(),
+      amountDisplay: (json['amount_display'] ?? '').toString().trim().isEmpty
+          ? null
+          : (json['amount_display'] ?? '').toString().trim(),
+      notes: (json['notes'] ?? '').toString().trim().isEmpty ? null : (json['notes'] ?? '').toString().trim(),
       reason: (json['reason'] ?? '').toString(),
     );
   }
@@ -262,6 +276,8 @@ class NewIngredientOptional {
       'canonical_name': canonicalName,
       'amount': amount,
       'unit': unit,
+      if (amountDisplay != null) 'amount_display': amountDisplay,
+      if (notes != null) 'notes': notes,
       'reason': reason,
     };
   }
@@ -300,12 +316,16 @@ class RecipeIngredient {
   final String canonicalName;
   final double amount;
   final String unit;
+  final String? amountDisplay;
+  final String? notes;
 
   RecipeIngredient({
     required this.inventoryId,
     required this.canonicalName,
     required this.amount,
     required this.unit,
+    this.amountDisplay,
+    this.notes,
   });
 
   factory RecipeIngredient.fromJson(Map<String, dynamic> json) {
@@ -314,6 +334,10 @@ class RecipeIngredient {
       canonicalName: json['canonical_name'] ?? '',
       amount: (json['amount'] ?? 0).toDouble(),
       unit: json['unit'] ?? '',
+      amountDisplay: (json['amount_display'] ?? '').toString().trim().isEmpty
+          ? null
+          : (json['amount_display'] ?? '').toString().trim(),
+      notes: (json['notes'] ?? '').toString().trim().isEmpty ? null : (json['notes'] ?? '').toString().trim(),
     );
   }
 
@@ -323,6 +347,8 @@ class RecipeIngredient {
       'canonical_name': canonicalName,
       'amount': amount,
       'unit': unit,
+      if (amountDisplay != null) 'amount_display': amountDisplay,
+      if (notes != null) 'notes': notes,
     };
   }
 }

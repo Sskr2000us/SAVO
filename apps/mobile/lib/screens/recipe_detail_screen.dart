@@ -280,9 +280,19 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       for (final ing in recipe.ingredientsUsed) {
         final name = _titleCaseWords(ing.canonicalName.trim().isEmpty ? 'Ingredient' : ing.canonicalName);
         final unit = ing.unit.trim();
-        final amount = _formatAmount(ing.amount * scalingFactor);
+        final notes = (ing.notes ?? '').trim();
+
+        // Prefer the original textual amount for display when not scaling (keeps 1/2, 1/4, etc.).
+        String amount;
+        if (scalingFactor == 1.0) {
+          final raw = (ing.amountDisplay ?? '').trim();
+          amount = raw.isNotEmpty ? raw : _formatAmount(ing.amount);
+        } else {
+          amount = _formatAmount(ing.amount * scalingFactor);
+        }
+
         final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
-        buffer.writeln('- **$name:** $qty');
+        buffer.writeln('- **$name:** $qty${notes.isNotEmpty ? ' ($notes)' : ''}');
       }
     }
     buffer.writeln('');
@@ -292,11 +302,19 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       for (final ing in recipe.newIngredientsOptional) {
         final name = _titleCaseWords(ing.canonicalName.trim().isEmpty ? 'Ingredient' : ing.canonicalName);
         final unit = ing.unit.trim();
-        final amount = _formatAmount(ing.amount * scalingFactor);
+        final notes = (ing.notes ?? '').trim();
+
+        String amount;
+        if (scalingFactor == 1.0) {
+          final raw = (ing.amountDisplay ?? '').trim();
+          amount = raw.isNotEmpty ? raw : _formatAmount(ing.amount);
+        } else {
+          amount = _formatAmount(ing.amount * scalingFactor);
+        }
         final qty = [amount, unit].where((x) => x.isNotEmpty).join(' ');
         final reason = ing.reason.trim();
         buffer.writeln(
-          '- **$name:** $qty${reason.isNotEmpty ? ' _(Reason: $reason)_' : ''}',
+          '- **$name:** $qty${notes.isNotEmpty ? ' ($notes)' : ''}${reason.isNotEmpty ? ' _(Reason: $reason)_' : ''}',
         );
       }
       buffer.writeln('');
