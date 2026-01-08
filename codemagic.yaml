@@ -61,7 +61,13 @@ workflows:
       - name: Build IPA
         script: |
           cd apps/mobile
-          flutter build ipa --release --export-options-plist="$HOME/export_options.plist"
+          # App Store Connect requires CFBundleVersion to be strictly increasing.
+          # Derive a monotonic build number from git history to avoid duplicates.
+          DERIVED_BUILD_NUMBER=$(git rev-list --count HEAD)
+          echo "Using iOS build number: $DERIVED_BUILD_NUMBER"
+          flutter build ipa --release \
+            --build-number="$DERIVED_BUILD_NUMBER" \
+            --export-options-plist="$HOME/export_options.plist"
 
       - name: Verify IPA output
         script: |
