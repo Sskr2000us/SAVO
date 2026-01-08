@@ -26,6 +26,8 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   String _currentStep = 'centering';  // centering, analyzing, confirming
   String _detectedItem = '';
   String _estimatedQuantity = '';
+
+  DateTime? _nextAutoCaptureAllowedAt;
   
   final ScanningService _scanningService = ScanningService();
 
@@ -71,6 +73,8 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
 
   void _startFocusDetection() {
     _focusCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      final allowAt = _nextAutoCaptureAllowedAt;
+      if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
       if (_isInFocus() && !_isProcessing && mounted) {
         await _autoCaptureSingleItem();
       }
@@ -134,6 +138,17 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
               _estimatedQuantity = '';
             });
             _showError('Couldn\'t identify item. Hold steady and try again.');
+
+            // Retry sooner for unknown items (don’t wait full 3s).
+            _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
+            if (_autoCapture && mounted) {
+              Future.delayed(const Duration(milliseconds: 950), () {
+                if (!mounted) return;
+                if (_isProcessing) return;
+                if (_currentStep != 'centering') return;
+                _autoCaptureSingleItem();
+              });
+            }
             return;
           }
 
@@ -159,7 +174,9 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
             }
             
             // Reset to centering state
-            Future.delayed(const Duration(seconds: 1), () {
+            // Give the user a moment to see what was detected/saved.
+            _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(seconds: 3));
+            Future.delayed(const Duration(seconds: 3), () {
               if (mounted) {
                 setState(() {
                   _currentStep = 'centering';
@@ -177,6 +194,9 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
             _currentStep = 'centering';
           });
           _showError(result['error'] ?? 'Analysis failed');
+
+          // Back off a bit (but still retry faster than the normal 3s loop).
+          _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
         }
       }
     } catch (e) {
@@ -185,6 +205,8 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
         _currentStep = 'centering';
       });
       _showError('Failed to scan item: $e');
+
+      _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
     } finally {
       if (mounted) {
         setState(() {
@@ -233,7 +255,12 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           
           // Resume auto-capture
           if (_autoCapture && mounted) {
-            _startFocusDetection();
+            // Small delay so the user isn’t rushed into the next capture.
+            _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(seconds: 2));
+            Future.delayed(const Duration(seconds: 2), () {
+              if (!mounted) return;
+              _startFocusDetection();
+            });
           }
         },
         onReject: () {

@@ -123,6 +123,9 @@ class _IngredientConfirmationScreenState
             ),
           );
 
+          // Give a moment for the user to see confirmation before navigating away.
+          await Future.delayed(const Duration(milliseconds: 900));
+
           // Navigate back to home (pop twice: confirmation + camera)
           Navigator.of(context).pop();
           Navigator.of(context).pop();
