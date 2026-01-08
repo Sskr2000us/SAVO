@@ -12,7 +12,7 @@ from time import perf_counter
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import httpx
 
@@ -345,7 +345,44 @@ def _recipe_image_proxy_url(*, recipe_name: str, cuisine: str) -> str:
     return f"/recipes/image/proxy?recipe_name={name_q}&cuisine={cuisine_q}"
 
 
-async def _enrich_plan_payload_with_image_urls(payload: Any) -> Any:
+def _public_base_url_from_request(request: Request) -> str:
+    """Best-effort external base URL.
+
+    Render/other proxies may terminate TLS and forward proto/host via headers.
+    Flutter mobile/web needs absolute URLs for Image.network.
+    """
+    env_base = (os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if env_base:
+        return env_base
+
+    proto = (request.headers.get("x-forwarded-proto") or "").strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").strip()
+    if not proto:
+        proto = request.url.scheme
+    if not host:
+        # Fallback; may be empty in rare cases.
+        host = request.url.netloc
+
+    proto = proto.split(",")[0].strip() or request.url.scheme
+    host = host.split(",")[0].strip() or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _make_absolute_url(*, request: Request, url: str) -> str:
+    v = (url or "").strip()
+    if not v:
+        return ""
+    if v.startswith("http://") or v.startswith("https://"):
+        return v
+    if not v.startswith("/"):
+        return v
+    base = _public_base_url_from_request(request)
+    if not base:
+        return v
+    return f"{base}{v}"
+
+
+async def _enrich_plan_payload_with_image_urls(payload: Any, request: Optional[Request] = None) -> Any:
     """Attach image_url to each recipe option.
 
     Requirement: images come from LLM reasoning (implemented server-side in /recipes/image/proxy).
@@ -376,15 +413,19 @@ async def _enrich_plan_payload_with_image_urls(payload: Any) -> Any:
             for opt in opts:
                 if not isinstance(opt, dict):
                     continue
-                # If already present, respect it.
-                if isinstance(opt.get("image_url"), str) and opt.get("image_url"):
+                existing = opt.get("image_url")
+                # If already present, respect it, but normalize to absolute if needed.
+                if isinstance(existing, str) and existing.strip():
+                    if request is not None and existing.strip().startswith("/"):
+                        opt["image_url"] = _make_absolute_url(request=request, url=existing)
                     continue
 
                 name = _recipe_name_text(opt.get("recipe_name"))
                 if not name:
                     continue
                 cuisine = opt.get("cuisine") if isinstance(opt.get("cuisine"), str) else selected_cuisine
-                opt["image_url"] = _recipe_image_proxy_url(recipe_name=name, cuisine=str(cuisine or "general"))
+                img = _recipe_image_proxy_url(recipe_name=name, cuisine=str(cuisine or "general"))
+                opt["image_url"] = _make_absolute_url(request=request, url=img) if request is not None else img
 
     return payload
 
@@ -2797,11 +2838,13 @@ def _recipe_dedupe_key(recipe: Any) -> Optional[str]:
     if isinstance(rn, dict):
         en = rn.get("en")
         if isinstance(en, str) and en.strip():
-            return f"name:{en.strip().lower()}"
+            return f"name:{_normalize_title_key(en)}"
+    if isinstance(rn, str) and rn.strip():
+        return f"name:{_normalize_title_key(rn)}"
 
     name = recipe.get("name")
     if isinstance(name, str) and name.strip():
-        return f"name:{name.strip().lower()}"
+        return f"name:{_normalize_title_key(name)}"
 
     rid = recipe.get("recipe_id") or recipe.get("id")
     if isinstance(rid, str) and rid.strip():
@@ -2870,6 +2913,109 @@ def _dedupe_menu_plan_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             course["recipe_options"] = new_opts
 
     payload["menus"] = menus
+    return payload
+
+
+def _tighten_ingredients_used_in_payload(payload: Dict[str, Any], *, max_ingredients: int = 10) -> Dict[str, Any]:
+    """Best-effort cleanup to avoid huge/unused ingredient lists from LLM output."""
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return payload
+
+    menus = payload.get("menus")
+    if not isinstance(menus, list) or not menus:
+        return payload
+
+    staples = {
+        "salt",
+        "pepper",
+        "black_pepper",
+        "water",
+        "oil",
+        "olive_oil",
+        "vegetable_oil",
+        "canola_oil",
+        "butter",
+        "ghee",
+    }
+
+    def _step_text(opt: dict[str, Any]) -> str:
+        steps = opt.get("steps")
+        if not isinstance(steps, list):
+            return ""
+        parts: list[str] = []
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            instr = s.get("instruction")
+            if isinstance(instr, str) and instr.strip():
+                parts.append(instr.strip())
+            elif isinstance(instr, dict):
+                v = instr.get("en")
+                if isinstance(v, str) and v.strip():
+                    parts.append(v.strip())
+                else:
+                    for vv in instr.values():
+                        if isinstance(vv, str) and vv.strip():
+                            parts.append(vv.strip())
+                            break
+        return " ".join(parts).lower()
+
+    def _ingredient_name(it: Any) -> str:
+        if isinstance(it, str):
+            return it.strip()
+        if isinstance(it, dict):
+            for k in ("canonical_name", "name", "ingredient", "ingredient_name"):
+                v = it.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        return ""
+
+    for menu in menus:
+        if not isinstance(menu, dict):
+            continue
+        courses = menu.get("courses")
+        if not isinstance(courses, list):
+            continue
+        for course in courses:
+            if not isinstance(course, dict):
+                continue
+            opts = course.get("recipe_options")
+            if not isinstance(opts, list):
+                continue
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                ings = opt.get("ingredients_used")
+                if not isinstance(ings, list) or len(ings) <= max_ingredients:
+                    continue
+
+                text = _step_text(opt)
+                kept: list[Any] = []
+                seen_names: set[str] = set()
+                for it in ings:
+                    nm = _ingredient_name(it)
+                    if not nm:
+                        continue
+                    canon = _canonicalize_inventory_name_for_planning(nm)
+                    key = canon.lower() or nm.lower()
+                    if key in seen_names:
+                        continue
+                    is_staple = canon in staples
+                    # Very simple matching: check canonical tokenized name in step text.
+                    needle = canon.replace("_", " ")
+                    mentioned = bool(text and needle and needle in text)
+                    if is_staple or mentioned:
+                        kept.append(it)
+                        seen_names.add(key)
+                    if len(kept) >= max_ingredients:
+                        break
+
+                # If we couldn't match anything, at least cap the list deterministically.
+                if not kept:
+                    kept = [it for it in ings if isinstance(it, (dict, str))][:max_ingredients]
+
+                opt["ingredients_used"] = kept
+
     return payload
 
 
@@ -3897,6 +4043,7 @@ def _build_planning_context(
 @router.post("/daily", response_model=MenuPlanResponse)
 async def post_daily(
     req: DailyPlanRequest,
+    request: Request,
     user_id: str = Depends(get_current_user),
     force_regenerate: bool = False,
 ):
@@ -4005,7 +4152,13 @@ async def post_daily(
                                 pass
 
                             try:
-                                existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload)
+                                existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload, request=request)
+                            except Exception:
+                                pass
+
+                            # Best-effort: keep ingredient lists compact even for cached plans.
+                            try:
+                                existing_payload = _tighten_ingredients_used_in_payload(existing_payload)
                             except Exception:
                                 pass
 
@@ -4224,6 +4377,10 @@ async def post_daily(
     # Clean up recipe titles so UI never shows ingredient dumps in the name.
     result = _sanitize_recipe_names_in_payload(result)
 
+    # Best-effort: keep ingredient lists compact + relevant.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _tighten_ingredients_used_in_payload(result)
+
     # Enforce: recipes must be real cuisine dishes, and major ingredients must match pantry.
     # When needed, fill missing options from the curated recipe catalog.
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -4263,7 +4420,7 @@ async def post_daily(
 
     # Best-effort: attach image URLs (proxy endpoint handles LLM reasoning + CORS-safe bytes).
     try:
-        result = await _enrich_plan_payload_with_image_urls(result)
+        result = await _enrich_plan_payload_with_image_urls(result, request=request)
     except Exception:
         pass
 
@@ -4380,6 +4537,7 @@ async def post_daily(
 
 @router.get("/latest", response_model=MenuPlanResponse)
 async def get_latest_plan(
+    request: Request,
     user_id: str = Depends(get_current_user),
     plan_type: str = "daily",
 ):
@@ -4414,7 +4572,13 @@ async def get_latest_plan(
 
     # Best-effort: attach image URLs for saved plans too.
     try:
-        payload = await _enrich_plan_payload_with_image_urls(payload)
+        payload = await _enrich_plan_payload_with_image_urls(payload, request=request)
+    except Exception:
+        pass
+
+    # Best-effort: keep ingredient lists compact for saved plans too.
+    try:
+        payload = _tighten_ingredients_used_in_payload(payload)
     except Exception:
         pass
 
@@ -4499,6 +4663,7 @@ def _is_dinner_time(time_str: str, meal_times: dict) -> bool:
 @router.post("/party", response_model=MenuPlanResponse)
 async def post_party(
     req: PartyPlanRequest,
+    request: Request,
     user_id: str = Depends(get_current_user),
     force_regenerate: bool = False,
 ):
@@ -4640,7 +4805,12 @@ async def post_party(
                         pass
 
                     try:
-                        existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload)
+                        existing_payload = await _enrich_plan_payload_with_image_urls(existing_payload, request=request)
+                    except Exception:
+                        pass
+
+                    try:
+                        existing_payload = _tighten_ingredients_used_in_payload(existing_payload)
                     except Exception:
                         pass
 
@@ -4725,6 +4895,9 @@ async def post_party(
     # Clean up recipe titles so UI never shows ingredient dumps in the name.
     result = _sanitize_recipe_names_in_payload(result)
 
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _tighten_ingredients_used_in_payload(result)
+
     # Vet recipes (safety + minimum completeness) before showing to the user.
     try:
         pantry_set = {
@@ -4748,6 +4921,12 @@ async def post_party(
     # This never fails the plan and only runs when YOUTUBE_API_KEY is configured.
     try:
         result = await _enrich_plan_payload_with_youtube_references(result)
+    except Exception:
+        pass
+
+    # Best-effort: attach image URLs.
+    try:
+        result = await _enrich_plan_payload_with_image_urls(result, request=request)
     except Exception:
         pass
 
@@ -4823,6 +5002,7 @@ async def post_party(
 @router.post("/weekly", response_model=MenuPlanResponse)
 async def post_weekly(
     req: WeeklyPlanRequest,
+    request: Request,
     user_id: str = Depends(get_current_user),
 ):
     """Generate weekly meal plan with configurable horizon"""
@@ -4901,6 +5081,9 @@ async def post_weekly(
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _dedupe_menu_plan_payload(result)
 
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _tighten_ingredients_used_in_payload(result)
+
     # Best-effort: vet recipe options for safety/completeness.
     if isinstance(result, dict) and result.get("status") == "ok":
         try:
@@ -4949,12 +5132,7 @@ async def post_weekly(
             pass
 
         try:
-            result = await _enrich_plan_payload_with_image_urls(result)
-        except Exception:
-            pass
-
-        try:
-            result = await _enrich_plan_payload_with_image_urls(result)
+            result = await _enrich_plan_payload_with_image_urls(result, request=request)
         except Exception:
             pass
 
