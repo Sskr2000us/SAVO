@@ -65,6 +65,9 @@ from app.core.ingredient_combinations import (
     generate_combination_recipe_prompt,
     IngredientCombinationEngine
 )
+from app.core.llm_client import get_reasoning_client
+from app.core.llm_utils import generate_json_with_retries
+from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
 from app.core.meal_courses import (
     plan_full_course_meal,
     generate_meal_prompt,
@@ -5897,9 +5900,6 @@ async def generate_combination_recipe(
             "safety_validation": {validation results}
         }
     """
-    from app.services.llm import get_llm_client
-    import json
-    
     if not ingredients or len(ingredients) < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -5969,18 +5969,24 @@ async def generate_combination_recipe(
             detail="Could not generate recipe prompt for this combination"
         )
     
-    # Call LLM
+    # Call LLM (robust JSON + repair retry)
     try:
-        llm = get_llm_client()
-        llm_response = await llm.generate(
-            prompt=prompt,
-            temperature=0.7,
-            max_tokens=2000
+        task = get_task("generate_single_recipe")
+        schema = get_schema(task.get("output_schema_ref") or "RECIPE_SCHEMA_V1")
+        system_prompt = "\n".join(get_system_prompt_lines() + (task.get("prompt") or []))
+
+        llm = get_reasoning_client()
+        recipe = await generate_json_with_retries(
+            client=llm,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            schema=schema,
+            max_attempts=2,
+            repair_hint="single recipe",
         )
-        
-        # Parse recipe (assuming JSON response)
-        recipe = json.loads(llm_response)
-        
+
     except Exception as e:
         logger.error(f"LLM generation failed: {e}")
         raise HTTPException(
@@ -6095,9 +6101,6 @@ async def generate_full_course_meal(
             "prep_strategy": {cooking order and timing}
         }
     """
-    from app.services.llm import get_llm_client
-    import json
-    
     # Validate meal style
     valid_styles = ["casual", "standard", "formal", "italian", "french", "indian", "chinese", "japanese"]
     if meal_style.lower() not in valid_styles:
@@ -6143,19 +6146,26 @@ async def generate_full_course_meal(
     
     # Generate recipes for each course
     courses_generated = []
-    llm = get_llm_client()
+
+    task = get_task("generate_single_recipe")
+    schema = get_schema(task.get("output_schema_ref") or "RECIPE_SCHEMA_V1")
+    system_prompt = "\n".join(get_system_prompt_lines() + (task.get("prompt") or []))
+
+    llm = get_reasoning_client()
     
     for course_data in meal_plan["courses"]:
         try:
             # Generate recipe using course-specific prompt
-            llm_response = await llm.generate(
-                prompt=course_data["prompt"],
-                temperature=0.7,
-                max_tokens=2000
+            recipe = await generate_json_with_retries(
+                client=llm,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": course_data["prompt"]},
+                ],
+                schema=schema,
+                max_attempts=2,
+                repair_hint="single recipe",
             )
-            
-            # Parse recipe
-            recipe = json.loads(llm_response)
             
             # Validate safety
             is_safe, violations = await validate_recipe_safety(recipe, profile)

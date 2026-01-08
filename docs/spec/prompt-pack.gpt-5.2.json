@@ -42,6 +42,105 @@
         },
         "additionalProperties": false
       },
+      "RECIPE_COLLECTION_MARKDOWN_SCHEMA": {
+        "type": "object",
+        "required": ["markdown"],
+        "properties": {
+          "markdown": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "RECIPE_SCHEMA_V1": {
+        "type": "object",
+        "required": [
+          "recipe_id",
+          "recipe_name",
+          "cuisine",
+          "difficulty",
+          "estimated_times",
+          "cooking_method",
+          "ingredients_used",
+          "steps",
+          "nutrition_per_serving",
+          "leftover_forecast"
+        ],
+        "properties": {
+          "recipe_id": { "type": "string" },
+          "recipe_name": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "cuisine": { "type": "string" },
+          "difficulty": { "type": "string" },
+          "estimated_times": {
+            "type": "object",
+            "required": ["prep_minutes", "cook_minutes", "total_minutes"],
+            "properties": {
+              "prep_minutes": { "type": "integer" },
+              "cook_minutes": { "type": "integer" },
+              "total_minutes": { "type": "integer" }
+            },
+            "additionalProperties": false
+          },
+          "cooking_method": { "type": "string" },
+          "ingredients_used": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["inventory_id", "canonical_name", "amount", "unit"],
+              "properties": {
+                "inventory_id": { "type": "string" },
+                "canonical_name": { "type": "string" },
+                "amount": { "type": "number" },
+                "unit": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "new_ingredients_optional": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["canonical_name", "amount", "unit", "reason"],
+              "properties": {
+                "canonical_name": { "type": "string" },
+                "amount": { "type": "number" },
+                "unit": { "type": "string" },
+                "reason": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["step", "instruction", "time_minutes", "tips"],
+              "properties": {
+                "step": { "type": "integer" },
+                "instruction": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                },
+                "time_minutes": { "type": "integer" },
+                "tips": { "type": "array", "items": { "type": "string" } }
+              },
+              "additionalProperties": false
+            }
+          },
+          "nutrition_per_serving": { "type": "object" },
+          "health_benefits": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "health_fit": { "type": "object" },
+          "leftover_forecast": { "type": "object" },
+          "preservation_guidance": { "type": "object" },
+          "youtube_references": { "type": "array" },
+          "agent_mode": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
       "NORMALIZATION_OUTPUT_SCHEMA": {
         "type": "object",
         "required": ["normalized_inventory", "staples_policy_applied"],
@@ -648,6 +747,33 @@
             "  - Prefer expiring ingredients in earlier days",
             "Include shopping_suggestions aggregated across all days for efficient grocery planning (max 10 items).",
             "If chef_tips/cultural_context/dietary_information fields are present in the schema, keep them minimal: chef_tips max 2 short bullets; cultural_context strings <= 80 chars; dietary_information allergens/religious_compatibility lists should be concise."
+          ]
+        },
+        {
+          "id": "TASK_GENERATE_SINGLE_RECIPE",
+          "name": "generate_single_recipe",
+          "input_bindings": [],
+          "output_schema_ref": "RECIPE_SCHEMA_V1",
+          "prompt": [
+            "Generate ONE recipe object.",
+            "Return JSON that matches the recipe schema exactly.",
+            "Be concise and fast: keep strings short; steps <= 8; tips <= 4; avoid extra verbosity.",
+            "Respect dietary restrictions, allergens, and safety constraints if provided in the user request.",
+            "Prefer using the provided ingredients; if optional ingredients are needed, keep them minimal and justify them in new_ingredients_optional[].reason."
+          ]
+        },
+        {
+          "id": "TASK_GENERATE_RECIPE_COLLECTION_MARKDOWN",
+          "name": "generate_recipe_collection_markdown",
+          "input_bindings": ["{{INVENTORY}}", "{{APP_CONFIGURATION}}", "{{OUTPUT_LANGUAGE}}", "{{MEASUREMENT_SYSTEM}}"],
+          "output_schema_ref": "RECIPE_COLLECTION_MARKDOWN_SCHEMA",
+          "prompt": [
+            "Generate a Markdown document in EXACTLY the style of ALL_RECIPES_COMPLETE.md.",
+            "Include: title, generated-by line, ingredients line, cooking level, total recipes, separator, then numbered recipe sections (## 1., ## 2., ...).",
+            "If a secondary language is provided, include bilingual titles and bilingual instructions.",
+            "For each recipe include: Cuisine, Language, Difficulty, Time (Prep/Cook), Servings, Ingredients, Instructions, Nutrition (per serving), Health Benefits, Chef's Tips, Cultural Context, Dietary Information.",
+            "End with a comparison summary table like the file.",
+            "Return JSON only with key 'markdown'."
           ]
         },
         {
