@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'dart:convert';
@@ -760,6 +761,9 @@ class _RecipeCardState extends State<_RecipeCard> {
     final cs = theme.colorScheme;
     final title = _sanitizeTitle(widget.recipe.getLocalizedName('en'));
 
+    final refs = widget.recipe.youtubeReferences;
+    final hasVideo = refs.isNotEmpty;
+
     final expected = widget.recipe.leftoverForecast['expected_leftover_servings'];
     final num? expectedNum = expected is num ? expected : num.tryParse(expected?.toString() ?? '');
     final bool makesLeftovers = expectedNum != null && expectedNum > 0;
@@ -786,14 +790,20 @@ class _RecipeCardState extends State<_RecipeCard> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Image.network(
-                      _coverImageUrl ?? 'https://source.unsplash.com/featured/?food',
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
+                    if (_coverImageUrl != null)
+                      Image.network(
+                        _coverImageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: cs.surfaceVariant,
+                          child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
+                        ),
+                      )
+                    else
+                      Container(
                         color: cs.surfaceVariant,
                         child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
                       ),
-                    ),
                     Positioned(
                       top: 6,
                       right: 6,
@@ -816,6 +826,28 @@ class _RecipeCardState extends State<_RecipeCard> {
                         ),
                       ),
                     ),
+                    if (hasVideo)
+                      Positioned(
+                        top: 6,
+                        left: 6,
+                        child: Material(
+                          color: cs.surfaceVariant.withOpacity(0.9),
+                          shape: const CircleBorder(),
+                          child: IconButton(
+                            tooltip: 'Watch video'
+                                '${refs.first.title.trim().isNotEmpty ? ": ${refs.first.title.trim()}" : ""}',
+                            onPressed: () async {
+                              final vid = refs.first.videoId.trim();
+                              if (vid.isEmpty) return;
+                              final uri = Uri.parse('https://www.youtube.com/watch?v=$vid');
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(uri, mode: LaunchMode.externalApplication);
+                              }
+                            },
+                            icon: Icon(Icons.play_circle_fill, color: cs.onSurfaceVariant),
+                          ),
+                        ),
+                      ),
                     // Subtle scrim for readability.
                     Container(
                       decoration: BoxDecoration(

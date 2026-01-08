@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/planning.dart';
 import '../services/metrics_service.dart';
@@ -83,6 +84,8 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                 final title = _prettyName(recipe.getLocalizedName('en'));
                 final why = _whyItWorks(recipe);
                 final imageUrl = _imageUrl(recipe);
+                final refs = recipe.youtubeReferences;
+                final hasVideo = refs.isNotEmpty;
 
                 return Card(
                   clipBehavior: Clip.antiAlias,
@@ -120,6 +123,28 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                 Container(
                                   color: cs.surfaceVariant,
                                   child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
+                                ),
+                              if (hasVideo)
+                                Positioned(
+                                  top: 8,
+                                  left: 8,
+                                  child: Material(
+                                    color: cs.surfaceVariant.withOpacity(0.9),
+                                    shape: const CircleBorder(),
+                                    child: IconButton(
+                                      tooltip: 'Watch video'
+                                          '${refs.first.title.trim().isNotEmpty ? ": ${refs.first.title.trim()}" : ""}',
+                                      onPressed: () async {
+                                        final vid = refs.first.videoId.trim();
+                                        if (vid.isEmpty) return;
+                                        final uri = Uri.parse('https://www.youtube.com/watch?v=$vid');
+                                        if (await canLaunchUrl(uri)) {
+                                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                        }
+                                      },
+                                      icon: Icon(Icons.play_circle_fill, color: cs.onSurfaceVariant),
+                                    ),
+                                  ),
                                 ),
                               Container(
                                 decoration: BoxDecoration(

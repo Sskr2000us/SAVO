@@ -465,6 +465,67 @@ def _vet_and_filter_menu_payload(
 
     catalog = _get_recipe_catalog_index()
 
+    def _course_hint(header: str) -> str:
+        h = (header or "").strip().lower()
+        if "dessert" in h:
+            return "dessert"
+        if "side" in h:
+            return "side"
+        if "main" in h or "entree" in h:
+            return "main"
+        return ""
+
+    def _extract_pref_tokens(profile: dict[str, Any]) -> tuple[set[str], set[str]]:
+        likes: set[str] = set()
+        dislikes: set[str] = set()
+        for member in (profile or {}).get("members", []) or []:
+            if not isinstance(member, dict):
+                continue
+            raw_likes = member.get("food_preferences")
+            if isinstance(raw_likes, list):
+                for v in raw_likes:
+                    t = _normalize_title_key(str(v))
+                    if t and len(t) > 2:
+                        likes.add(t)
+            raw_dislikes = member.get("food_dislikes")
+            if isinstance(raw_dislikes, list):
+                for v in raw_dislikes:
+                    t = _normalize_title_key(str(v))
+                    if t and len(t) > 2:
+                        dislikes.add(t)
+        return likes, dislikes
+
+    like_tokens, dislike_tokens = _extract_pref_tokens(profile_dict)
+
+    def _title_requires_core_pantry(title: str) -> bool:
+        """If dish name implies a core ingredient, require it to exist in pantry."""
+        if pantry_set is None or not pantry_set:
+            return True
+        title_k = _normalize_title_key(title)
+        if not title_k:
+            return True
+        core = {
+            "paneer": ["paneer"],
+            "chicken": ["chicken"],
+            "mutton": ["mutton", "lamb"],
+            "lamb": ["lamb", "mutton"],
+            "beef": ["beef"],
+            "pork": ["pork"],
+            "fish": ["fish", "salmon", "tuna", "cod"],
+            "shrimp": ["shrimp", "prawn"],
+            "prawn": ["shrimp", "prawn"],
+            "egg": ["egg"],
+            "tofu": ["tofu"],
+        }
+        required: list[str] = []
+        for k, subs in core.items():
+            if k in title_k:
+                required.extend(subs)
+        if not required:
+            return True
+        pantry_join = " | ".join(sorted(pantry_set))
+        return any((needle and needle in pantry_join) for needle in required)
+
     def _opt_uses_pantry(opt: dict[str, Any]) -> bool:
         if pantry_set is None:
             return True
@@ -499,7 +560,7 @@ def _vet_and_filter_menu_payload(
             return True
         return _catalog_has_recipe_name(catalog, cuisine=cuisine, recipe_title=title)
 
-    def _fill_from_catalog(*, cuisine: str, limit: int) -> list[dict[str, Any]]:
+    def _fill_from_catalog(*, cuisine: str, limit: int, course_header: str, exclude_titles: set[str]) -> list[dict[str, Any]]:
         if not isinstance(catalog, dict) or not catalog:
             return []
         return _pick_catalog_recipes(
@@ -507,17 +568,24 @@ def _vet_and_filter_menu_payload(
             cuisine=cuisine,
             pantry_set=pantry_set or set(),
             limit=limit,
+            course_hint=_course_hint(course_header),
+            exclude_title_keys=exclude_titles,
+            like_tokens=like_tokens,
+            dislike_tokens=dislike_tokens,
         )
 
     for menu in menus:
         if not isinstance(menu, dict):
             continue
+        # Prevent the same dish showing up in multiple courses.
+        menu_used_titles: set[str] = set()
         courses = menu.get("courses")
         if not isinstance(courses, list):
             continue
         for course in courses:
             if not isinstance(course, dict):
                 continue
+            course_header = str(course.get("course_header") or "").strip()
             opts = course.get("recipe_options")
             if not isinstance(opts, list) or not opts:
                 continue
@@ -535,6 +603,16 @@ def _vet_and_filter_menu_payload(
                 if not _opt_is_real_cuisine_recipe(opt):
                     removed_any = True
                     continue
+
+                title = _recipe_name_text(opt.get("recipe_name"))
+                if title and not _title_requires_core_pantry(title):
+                    removed_any = True
+                    continue
+                title_k = _normalize_title_key(title)
+                if title_k and title_k in menu_used_titles:
+                    removed_any = True
+                    continue
+
                 try:
                     is_safe, _violations = validate_recipe_safety(opt, profile_dict)
                 except Exception:
@@ -550,7 +628,18 @@ def _vet_and_filter_menu_payload(
                 cuisine = str(payload.get("selected_cuisine") or "").strip()
                 if not cuisine and isinstance(kept, list) and kept and isinstance(kept[0], dict):
                     cuisine = str(kept[0].get("cuisine") or "").strip()
-                fill = _fill_from_catalog(cuisine=cuisine or "", limit=max(0, min_needed - len(kept)))
+                exclude = set(menu_used_titles)
+                for o in kept:
+                    if isinstance(o, dict):
+                        tk = _normalize_title_key(_recipe_name_text(o.get("recipe_name")))
+                        if tk:
+                            exclude.add(tk)
+                fill = _fill_from_catalog(
+                    cuisine=cuisine or "",
+                    limit=max(0, min_needed - len(kept)),
+                    course_header=course_header,
+                    exclude_titles=exclude,
+                )
                 if fill:
                     course["recipe_options"] = kept + fill
                     payload["_catalog_fill_applied"] = True
@@ -558,6 +647,14 @@ def _vet_and_filter_menu_payload(
                     would_break = True
             else:
                 course["recipe_options"] = kept
+
+            final_opts = course.get("recipe_options")
+            if isinstance(final_opts, list):
+                for o in final_opts:
+                    if isinstance(o, dict):
+                        tk = _normalize_title_key(_recipe_name_text(o.get("recipe_name")))
+                        if tk:
+                            menu_used_titles.add(tk)
 
     if removed_any:
         payload["_vetting_applied"] = True
@@ -978,7 +1075,14 @@ def _catalog_entry_to_recipe_option(entry: dict[str, Any], *, pantry_set: set[st
 
 
 def _pick_catalog_recipes(
-    catalog: dict[str, Any], *, cuisine: str, pantry_set: set[str], limit: int
+    catalog: dict[str, Any], *,
+    cuisine: str,
+    pantry_set: set[str],
+    limit: int,
+    course_hint: str = "",
+    exclude_title_keys: Optional[set[str]] = None,
+    like_tokens: Optional[set[str]] = None,
+    dislike_tokens: Optional[set[str]] = None,
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
@@ -1011,8 +1115,109 @@ def _pick_catalog_recipes(
 
     pantry_groups = {g for g in [_major_group(x) for x in pantry_set] if g}
 
+    def _title_key(entry: dict[str, Any]) -> str:
+        rn = entry.get("recipe_name")
+        title = ""
+        if isinstance(rn, dict):
+            title = str(rn.get("en") or next(iter(rn.values()), "") or "")
+        elif isinstance(rn, str):
+            title = rn
+        return _normalize_title_key(title)
+
+    def _title_requires_pantry_core(title_k: str) -> bool:
+        """If a dish name implies a core ingredient (paneer/chicken/etc), require it in pantry."""
+        if not pantry_set:
+            return True
+        # keyword -> acceptable pantry substrings
+        core = {
+            "paneer": ["paneer"],
+            "chicken": ["chicken"],
+            "mutton": ["mutton", "lamb"],
+            "lamb": ["lamb", "mutton"],
+            "beef": ["beef"],
+            "pork": ["pork"],
+            "fish": ["fish", "salmon", "tuna", "cod"],
+            "shrimp": ["shrimp", "prawn"],
+            "prawn": ["shrimp", "prawn"],
+            "egg": ["egg"],
+            "tofu": ["tofu"],
+        }
+        required: list[str] = []
+        for k, subs in core.items():
+            if k in title_k:
+                required.extend(subs)
+        if not required:
+            return True
+
+        pantry_join = " | ".join(sorted(pantry_set))
+        for needle in required:
+            if needle and needle in pantry_join:
+                return True
+        return False
+
+    dessert_kw = {
+        "dessert",
+        "kheer",
+        "payasam",
+        "halwa",
+        "pudding",
+        "gulab",
+        "jamun",
+        "laddu",
+        "ladoo",
+        "barfi",
+        "burfi",
+        "rasgulla",
+        "kulfi",
+        "sweet",
+        "cake",
+        "cookie",
+    }
+    side_kw = {
+        "raita",
+        "salad",
+        "chutney",
+        "pickle",
+        "papad",
+        "papadam",
+        "naan",
+        "roti",
+        "paratha",
+        "bread",
+        "rice",
+        "pulao",
+        "jeera",
+        "dal",
+        "dahi",
+        "yogurt",
+        "soup",
+    }
+
+    def _fits_course(title_k: str) -> bool:
+        h = (course_hint or "").strip().lower()
+        if not h:
+            return True
+        has_dessert = any(k in title_k for k in dessert_kw)
+        has_side = any(k in title_k for k in side_kw)
+        if h == "dessert":
+            return has_dessert
+        if h == "side":
+            # Avoid desserts for side slots.
+            return has_side and not has_dessert
+        if h == "main":
+            # Avoid obvious desserts/sides for mains.
+            return (not has_dessert) and (not has_side)
+        return True
+
     def _score(entry: dict[str, Any]) -> int:
         score = 0
+        title_k = _title_key(entry)
+        if title_k and like_tokens:
+            if any(t in title_k for t in like_tokens):
+                score += 4
+        if title_k and dislike_tokens:
+            if any(t in title_k for t in dislike_tokens):
+                score -= 8
         for ing in entry.get("ingredients") or []:
             if not isinstance(ing, dict):
                 continue
@@ -1026,9 +1231,25 @@ def _pick_catalog_recipes(
             g = _major_group(nm)
             if g and g in pantry_groups:
                 score += 1
+            if like_tokens and any(t in nm for t in like_tokens):
+                score += 1
+            if dislike_tokens and any(t in nm for t in dislike_tokens):
+                score -= 2
         return score
 
-    ranked = sorted([e for e in entries if isinstance(e, dict)], key=_score, reverse=True)
+    ranked = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        title_k = _title_key(e)
+        if exclude_title_keys and title_k and title_k in exclude_title_keys:
+            continue
+        if title_k and not _fits_course(title_k):
+            continue
+        if title_k and not _title_requires_pantry_core(title_k):
+            continue
+        ranked.append(e)
+    ranked.sort(key=_score, reverse=True)
     picked: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for e in ranked:
@@ -4344,7 +4565,7 @@ async def post_party(
                             existing_payload,
                             profile_dict=profile_dict,
                             pantry_canonical_names=pantry_set,
-                            min_options_per_course=1,
+                            min_options_per_course=3,
                         )
                     except Exception:
                         pass
@@ -4425,7 +4646,7 @@ async def post_party(
             result,
             profile_dict=profile_dict,
             pantry_canonical_names=pantry_set,
-            min_options_per_course=1,
+            min_options_per_course=3,
         )
     except Exception:
         pass

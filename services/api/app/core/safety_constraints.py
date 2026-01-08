@@ -376,11 +376,50 @@ def validate_recipe_safety(recipe: Dict[str, Any], profile: Dict[str, Any]) -> T
     """
     violations = []
     
-    # Get ingredients as lowercase text
+    # Build a searchable ingredients text from multiple possible schemas:
+    # - LLM outputs sometimes use `ingredients`
+    # - Planning payload uses `ingredients_used` and `new_ingredients_optional`
+    # - Catalog fallback follows planning payload schema
+    parts: List[str] = []
+
+    try:
+        rn = recipe.get("recipe_name")
+        if isinstance(rn, str):
+            parts.append(rn)
+        elif isinstance(rn, dict):
+            for v in rn.values():
+                if isinstance(v, str) and v.strip():
+                    parts.append(v)
+    except Exception:
+        pass
+
     ingredients = recipe.get("ingredients", [])
-    ingredients_text = " ".join(str(ing).lower() for ing in ingredients)
+    if isinstance(ingredients, list):
+        parts.extend([str(ing) for ing in ingredients])
+
+    used = recipe.get("ingredients_used")
+    if isinstance(used, list):
+        for ing in used:
+            if isinstance(ing, dict):
+                nm = (ing.get("canonical_name") or ing.get("name") or "").strip()
+                if nm:
+                    parts.append(nm)
+            else:
+                parts.append(str(ing))
+
+    optional = recipe.get("new_ingredients_optional")
+    if isinstance(optional, list):
+        for ing in optional:
+            if isinstance(ing, dict):
+                nm = (ing.get("canonical_name") or ing.get("name") or "").strip()
+                if nm:
+                    parts.append(nm)
+            else:
+                parts.append(str(ing))
+
+    ingredients_text = " ".join(p.lower() for p in parts if isinstance(p, str))
     
-    # Check allergens in ingredients
+    # Check allergens
     all_allergens = set()
     for member in profile.get("members", []):
         all_allergens.update(member.get("allergens", []))

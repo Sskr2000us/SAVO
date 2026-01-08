@@ -152,6 +152,325 @@
   },
   {
     "recipe_name": {
+      "en": "Chicken Biryani",
+      "hi": "चिकन बिरयानी"
+    },
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 4,
+    "total_time_minutes": 75,
+    "prep_time_minutes": 25,
+    "cook_time_minutes": 50,
+    "difficulty": "intermediate",
+    "ingredients": [
+      {"item": "chicken", "amount": "700", "unit": "g", "notes": "bone-in pieces preferred"},
+      {"item": "basmati rice", "amount": "2", "unit": "cups", "notes": "soaked 30 min"},
+      {"item": "onion", "amount": "3", "unit": "large", "notes": "sliced"},
+      {"item": "tomato", "amount": "2", "unit": "medium", "notes": "chopped"},
+      {"item": "yogurt", "amount": "3/4", "unit": "cup", "notes": "plain"},
+      {"item": "ginger-garlic paste", "amount": "2", "unit": "tbsp", "notes": ""},
+      {"item": "biryani masala", "amount": "2", "unit": "tbsp", "notes": ""},
+      {"item": "garam masala", "amount": "1", "unit": "tsp", "notes": ""},
+      {"item": "mint leaves", "amount": "1/4", "unit": "cup", "notes": "chopped"},
+      {"item": "cilantro", "amount": "1/4", "unit": "cup", "notes": "chopped"},
+      {"item": "ghee", "amount": "3", "unit": "tbsp", "notes": "or oil"},
+      {"item": "whole spices (bay leaf, cardamom, cloves)", "amount": "1", "unit": "set", "notes": "optional"}
+    ],
+    "instructions": {
+      "en": [
+        "Marinate chicken with yogurt, biryani masala, ginger-garlic paste, and salt for at least 20 minutes.",
+        "Heat ghee/oil in a heavy pot. Fry onions until deep golden; reserve a handful for garnish.",
+        "Add tomatoes and cook until they soften and the oil begins to separate.",
+        "Add marinated chicken and cook on medium heat until the chicken is mostly cooked (12–15 minutes).",
+        "Boil water with salt and whole spices. Add soaked rice and parboil until about 70% cooked; drain.",
+        "Layer rice and chicken masala in the pot, finishing with rice on top.",
+        "Top with reserved fried onions, mint, and cilantro. Cover tightly.",
+        "Cook on low heat (dum) for 20–25 minutes.",
+        "Rest 5 minutes, then gently fluff and serve with raita."
+      ],
+      "hi": [
+        "चिकन को दही, बिरयानी मसाला, अदरक-लहसुन पेस्ट और नमक के साथ कम से कम 20 मिनट मैरीनेट करें।",
+        "घी/तेल गरम करें और प्याज को गहरा सुनहरा होने तक भूनें; थोड़ा गार्निश के लिए रखें।",
+        "टमाटर डालकर नरम होने तक पकाएं।",
+        "मैरीनेट किया चिकन डालकर 12–15 मिनट तक पकाएं।",
+        "नमक और साबुत मसालों के साथ पानी उबालें, चावल 70% पकने तक उबालकर छान लें।",
+        "बर्तन में चावल और चिकन मसाला परतों में लगाएं।",
+        "ऊपर से प्याज, पुदीना, धनिया डालकर ढक दें।",
+        "कम आंच पर 20–25 मिनट दम पर पकाएं।",
+        "5 मिनट आराम दें, फिर रायता के साथ परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 560, "protein_g": 32, "carbohydrates_g": 62, "fat_g": 18, "fiber_g": 4, "calcium_mg": 180, "iron_mg": 4.0},
+    "health_benefits": {
+      "chicken": "Lean protein supports muscle repair and satiety",
+      "basmati rice": "Provides sustained energy; naturally gluten-free",
+      "yogurt": "Adds probiotics and tenderness to marinades"
+    },
+    "tips": [
+      "Parboil rice only to 70% so it finishes on dum.",
+      "Seal the lid well (foil or dough) for better dum steaming.",
+      "Adjust heat to avoid burning the bottom layer."
+    ],
+    "cultural_context": {"origin": "Classic celebratory dish across many Indian regions", "occasions": "Parties, festivals", "serving_suggestions": "Serve with raita and salad"},
+    "dietary_info": {"vegetarian": false, "vegan": false, "gluten_free": true, "dairy": true, "allergens": ["dairy"], "religious": ["Halal-possible", "Non-vegetarian"]}
+  },
+  {
+    "recipe_name": {
+      "en": "Vegetable Biryani",
+      "hi": "सब्ज़ी बिरयानी"
+    },
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 4,
+    "total_time_minutes": 60,
+    "prep_time_minutes": 20,
+    "cook_time_minutes": 40,
+    "difficulty": "easy",
+    "ingredients": [
+      {"item": "basmati rice", "amount": "2", "unit": "cups", "notes": "soaked 20–30 min"},
+      {"item": "mixed vegetables", "amount": "3", "unit": "cups", "notes": "carrot, peas, beans, potato"},
+      {"item": "onion", "amount": "2", "unit": "large", "notes": "sliced"},
+      {"item": "tomato", "amount": "2", "unit": "medium", "notes": "chopped"},
+      {"item": "yogurt", "amount": "1/2", "unit": "cup", "notes": "optional"},
+      {"item": "ginger-garlic paste", "amount": "1", "unit": "tbsp", "notes": ""},
+      {"item": "biryani masala", "amount": "2", "unit": "tbsp", "notes": ""},
+      {"item": "mint leaves", "amount": "1/4", "unit": "cup", "notes": "chopped"},
+      {"item": "cilantro", "amount": "1/4", "unit": "cup", "notes": "chopped"},
+      {"item": "ghee", "amount": "2", "unit": "tbsp", "notes": "or oil"}
+    ],
+    "instructions": {
+      "en": [
+        "Heat ghee/oil and sauté onions until golden.",
+        "Add ginger-garlic paste and cook for 30 seconds.",
+        "Add tomatoes and cook until soft.",
+        "Add mixed vegetables, biryani masala, and salt; cook 6–8 minutes.",
+        "Boil water with salt. Parboil soaked rice until 70% cooked; drain.",
+        "Layer rice and vegetable masala, finishing with rice on top.",
+        "Top with mint and cilantro, cover tightly.",
+        "Cook on low heat for 15–20 minutes. Rest 5 minutes and serve."
+      ],
+      "hi": [
+        "घी/तेल गरम करके प्याज सुनहरा होने तक भूनें।",
+        "अदरक-लहसुन पेस्ट डालकर 30 सेकंड पकाएं।",
+        "टमाटर डालकर नरम होने तक पकाएं।",
+        "मिक्स सब्ज़ियां, बिरयानी मसाला और नमक डालकर 6–8 मिनट पकाएं।",
+        "पानी में नमक डालकर उबालें, चावल 70% पकाकर छान लें।",
+        "चावल और सब्ज़ी मसाला परतों में लगाएं।",
+        "ऊपर से पुदीना/धनिया डालकर ढक दें।",
+        "कम आंच पर 15–20 मिनट पकाएं और परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 420, "protein_g": 10, "carbohydrates_g": 74, "fat_g": 10, "fiber_g": 6, "calcium_mg": 120, "iron_mg": 3.0},
+    "health_benefits": {"vegetables": "Fiber and micronutrients support gut health and immunity", "basmati rice": "Energy for active days"},
+    "tips": ["Use any vegetables you already have.", "Keep rice slightly undercooked before dum."],
+    "cultural_context": {"origin": "Home-style vegetarian biryani", "occasions": "Family meals, parties", "serving_suggestions": "Serve with raita and salad"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": true, "dairy": true, "allergens": ["dairy"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {"en": "Cucumber Raita", "hi": "खीरा रायता"},
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 4,
+    "total_time_minutes": 10,
+    "prep_time_minutes": 10,
+    "cook_time_minutes": 0,
+    "difficulty": "easy",
+    "ingredients": [
+      {"item": "yogurt", "amount": "2", "unit": "cups", "notes": "plain"},
+      {"item": "cucumber", "amount": "1", "unit": "large", "notes": "grated or finely diced"},
+      {"item": "salt", "amount": "1/2", "unit": "tsp", "notes": "to taste"},
+      {"item": "cumin powder", "amount": "1/2", "unit": "tsp", "notes": ""},
+      {"item": "cilantro", "amount": "2", "unit": "tbsp", "notes": "chopped"}
+    ],
+    "instructions": {
+      "en": [
+        "Whisk yogurt until smooth.",
+        "Stir in cucumber, salt, and cumin.",
+        "Top with cilantro and chill 5 minutes before serving."
+      ],
+      "hi": [
+        "दही को अच्छी तरह फेंट लें।",
+        "खीरा, नमक और जीरा पाउडर मिलाएं।",
+        "धनिया डालकर ठंडा करके परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 120, "protein_g": 6, "carbohydrates_g": 8, "fat_g": 6, "fiber_g": 1, "calcium_mg": 200, "iron_mg": 0.2},
+    "health_benefits": {"yogurt": "Probiotics support digestion", "cucumber": "Hydrating and cooling"},
+    "tips": ["Add a pinch of roasted cumin for extra aroma."],
+    "cultural_context": {"origin": "Popular cooling side served with spicy mains", "occasions": "Everyday, parties", "serving_suggestions": "Pairs well with biryani"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": true, "dairy": true, "allergens": ["dairy"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {"en": "Jeera Rice", "hi": "जीरा राइस"},
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 4,
+    "total_time_minutes": 25,
+    "prep_time_minutes": 5,
+    "cook_time_minutes": 20,
+    "difficulty": "easy",
+    "ingredients": [
+      {"item": "basmati rice", "amount": "1.5", "unit": "cups", "notes": "rinsed"},
+      {"item": "cumin seeds", "amount": "1", "unit": "tsp", "notes": ""},
+      {"item": "ghee", "amount": "1", "unit": "tbsp", "notes": "or oil"},
+      {"item": "salt", "amount": "1/2", "unit": "tsp", "notes": "to taste"}
+    ],
+    "instructions": {
+      "en": [
+        "Rinse rice until water runs mostly clear.",
+        "Heat ghee and toast cumin for 20 seconds.",
+        "Add rice, water, and salt; bring to a boil.",
+        "Cover and simmer on low until rice is tender (12–15 minutes).",
+        "Rest 5 minutes, then fluff and serve."
+      ],
+      "hi": [
+        "चावल धो लें।",
+        "घी में जीरा 20 सेकंड भूनें।",
+        "चावल, पानी और नमक डालकर उबालें।",
+        "ढककर धीमी आंच पर 12–15 मिनट पकाएं।",
+        "5 मिनट रखकर फुलाएं और परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 260, "protein_g": 5, "carbohydrates_g": 54, "fat_g": 4, "fiber_g": 1, "calcium_mg": 10, "iron_mg": 0.7},
+    "health_benefits": {"cumin": "May aid digestion", "rice": "Simple, comforting energy source"},
+    "tips": ["Use a tight-fitting lid for fluffy rice."],
+    "cultural_context": {"origin": "Common accompaniment for North Indian curries", "occasions": "Everyday, parties", "serving_suggestions": "Serve with dal or curry"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": true, "dairy": true, "allergens": ["dairy"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {"en": "Garlic Naan", "hi": "गार्लिक नान"},
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 4,
+    "total_time_minutes": 60,
+    "prep_time_minutes": 45,
+    "cook_time_minutes": 15,
+    "difficulty": "intermediate",
+    "ingredients": [
+      {"item": "all-purpose flour", "amount": "2.5", "unit": "cups", "notes": ""},
+      {"item": "yogurt", "amount": "1/2", "unit": "cup", "notes": ""},
+      {"item": "baking powder", "amount": "1", "unit": "tsp", "notes": ""},
+      {"item": "salt", "amount": "1", "unit": "tsp", "notes": ""},
+      {"item": "garlic", "amount": "3", "unit": "cloves", "notes": "minced"},
+      {"item": "butter", "amount": "2", "unit": "tbsp", "notes": "melted"}
+    ],
+    "instructions": {
+      "en": [
+        "Mix flour, baking powder, and salt.",
+        "Add yogurt and enough water to form a soft dough; rest 30 minutes.",
+        "Divide into balls and roll into ovals.",
+        "Cook on a hot skillet until bubbles form; flip and cook the other side.",
+        "Brush with butter and top with garlic. Serve warm."
+      ],
+      "hi": [
+        "मैदा, बेकिंग पाउडर और नमक मिलाएं।",
+        "दही और थोड़ा पानी डालकर नरम आटा गूंधें; 30 मिनट रखें।",
+        "लोई बनाकर बेल लें।",
+        "गरम तवे पर दोनों तरफ सेकें।",
+        "मक्खन और लहसुन लगाकर गरम परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 320, "protein_g": 9, "carbohydrates_g": 52, "fat_g": 9, "fiber_g": 2, "calcium_mg": 120, "iron_mg": 2.0},
+    "health_benefits": {"garlic": "Adds flavor; traditionally valued for heart health"},
+    "tips": ["For quicker naan, use store-bought naan and toast with garlic butter."],
+    "cultural_context": {"origin": "Popular restaurant-style bread", "occasions": "Parties", "serving_suggestions": "Serve with curries"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": false, "dairy": true, "allergens": ["gluten", "dairy"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {"en": "Rice Kheer (Indian Rice Pudding)", "hi": "चावल की खीर"},
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 6,
+    "total_time_minutes": 45,
+    "prep_time_minutes": 5,
+    "cook_time_minutes": 40,
+    "difficulty": "easy",
+    "ingredients": [
+      {"item": "milk", "amount": "1.5", "unit": "liters", "notes": "whole milk"},
+      {"item": "rice", "amount": "1/3", "unit": "cup", "notes": "rinsed"},
+      {"item": "sugar", "amount": "1/3", "unit": "cup", "notes": "to taste"},
+      {"item": "cardamom", "amount": "1/2", "unit": "tsp", "notes": "powder"},
+      {"item": "nuts (almonds/cashews)", "amount": "2", "unit": "tbsp", "notes": "chopped"}
+    ],
+    "instructions": {
+      "en": [
+        "Simmer milk in a heavy pot.",
+        "Add rinsed rice and cook on low, stirring occasionally, until rice is soft.",
+        "Add sugar and cardamom; simmer 5 minutes.",
+        "Garnish with nuts and serve warm or chilled."
+      ],
+      "hi": [
+        "दूध को धीमी आंच पर उबालें।",
+        "धोए हुए चावल डालकर नरम होने तक पकाएं।",
+        "चीनी और इलायची डालकर 5 मिनट पकाएं।",
+        "मेवे डालकर गरम या ठंडा परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 210, "protein_g": 7, "carbohydrates_g": 30, "fat_g": 7, "fiber_g": 0.5, "calcium_mg": 220, "iron_mg": 0.4},
+    "health_benefits": {"milk": "Calcium supports bones", "cardamom": "Aromatic spice traditionally used after meals"},
+    "tips": ["Stir frequently to prevent sticking."],
+    "cultural_context": {"origin": "Classic festive dessert across India", "occasions": "Festivals, parties", "serving_suggestions": "Serve chilled in summer"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": true, "dairy": true, "allergens": ["dairy", "nuts"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {"en": "Gulab Jamun", "hi": "गुलाब जामुन"},
+    "cuisine": "Indian",
+    "cuisine_code": "indian",
+    "language": "English",
+    "language_code": "en-US",
+    "servings": 6,
+    "total_time_minutes": 50,
+    "prep_time_minutes": 20,
+    "cook_time_minutes": 30,
+    "difficulty": "intermediate",
+    "ingredients": [
+      {"item": "milk powder", "amount": "1", "unit": "cup", "notes": ""},
+      {"item": "all-purpose flour", "amount": "2", "unit": "tbsp", "notes": ""},
+      {"item": "baking soda", "amount": "1/4", "unit": "tsp", "notes": ""},
+      {"item": "milk", "amount": "2", "unit": "tbsp", "notes": "as needed"},
+      {"item": "sugar", "amount": "1.5", "unit": "cups", "notes": "for syrup"},
+      {"item": "water", "amount": "1.5", "unit": "cups", "notes": "for syrup"},
+      {"item": "cardamom", "amount": "1/2", "unit": "tsp", "notes": ""},
+      {"item": "oil", "amount": "as needed", "unit": "", "notes": "for frying"}
+    ],
+    "instructions": {
+      "en": [
+        "Simmer sugar and water with cardamom to make a light syrup; keep warm.",
+        "Mix milk powder, flour, and baking soda.",
+        "Add milk little by little to make a soft dough; rest 10 minutes.",
+        "Shape small smooth balls.",
+        "Fry on low heat until deep golden.",
+        "Soak hot jamuns in warm syrup for at least 20 minutes before serving."
+      ],
+      "hi": [
+        "चीनी, पानी और इलायची से चाशनी बनाकर गरम रखें।",
+        "मिल्क पाउडर, मैदा और बेकिंग सोडा मिलाएं।",
+        "दूध डालकर नरम आटा बनाएं; 10 मिनट रखें।",
+        "छोटी गोलियां बनाएं।",
+        "धीमी आंच पर सुनहरा भूरा होने तक तलें।",
+        "गरम चाशनी में 20 मिनट भिगोकर परोसें।"
+      ]
+    },
+    "nutrition": {"calories_kcal": 260, "protein_g": 6, "carbohydrates_g": 40, "fat_g": 9, "fiber_g": 0.5, "calcium_mg": 140, "iron_mg": 0.6},
+    "health_benefits": {"cardamom": "Aromatic spice commonly used in desserts"},
+    "tips": ["Keep fry oil on low to cook through without burning."],
+    "cultural_context": {"origin": "Beloved Indian dessert", "occasions": "Celebrations", "serving_suggestions": "Serve warm or at room temperature"},
+    "dietary_info": {"vegetarian": true, "vegan": false, "gluten_free": false, "dairy": true, "allergens": ["dairy", "gluten"], "religious": ["Vegetarian"]}
+  },
+  {
+    "recipe_name": {
       "en": "Paneer-Stuffed Tomatoes with Rice (Gemista)",
       "el": "Ντομάτες Γεμιστές με Πανίρ"
     },
