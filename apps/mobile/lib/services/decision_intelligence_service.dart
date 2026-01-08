@@ -1,10 +1,13 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
+
+import 'api_client.dart';
 
 /// Decision Intelligence Service
 /// Provides auto-action recommendations with confidence scoring
 class DecisionIntelligenceService {
-  final _supabase = Supabase.instance.client;
+  final ApiClient apiClient;
+
+  DecisionIntelligenceService(this.apiClient);
 
   /// Evaluate a single ingredient and get recommendation
   Future<DecisionResult> evaluateIngredient(
@@ -12,19 +15,15 @@ class DecisionIntelligenceService {
     Map<String, dynamic>? context,
   }) async {
     try {
-      final response = await _supabase.functions.invoke(
-        'decision-evaluate-ingredient',
-        body: {
+      final data = await apiClient.post(
+        '/api/decision/evaluate-ingredient',
+        {
           'ingredient_id': ingredientId,
           'context': context ?? {},
         },
       );
 
-      if (response.data == null) {
-        throw Exception('No data received from server');
-      }
-
-      return DecisionResult.fromJson(response.data as Map<String, dynamic>);
+      return DecisionResult.fromJson(data);
     } catch (e) {
       throw Exception('Failed to evaluate ingredient: $e');
     }
@@ -33,17 +32,14 @@ class DecisionIntelligenceService {
   /// Evaluate entire inventory and get prioritized recommendations
   Future<List<DecisionResult>> evaluateInventory({int limit = 10}) async {
     try {
-      final response = await _supabase.functions.invoke(
-        'decision-evaluate-inventory',
-        body: {'limit': limit},
+      final data = await apiClient.post(
+        '/api/decision/evaluate-inventory',
+        {'limit': limit},
       );
 
-      if (response.data == null) {
-        return [];
-      }
-
-      final List<dynamic> data = response.data as List<dynamic>;
-      return data
+      final List<dynamic> list =
+          data is List ? List<dynamic>.from(data) : const <dynamic>[];
+      return list
           .map((item) => DecisionResult.fromJson(item as Map<String, dynamic>))
           .toList();
     } catch (e) {
@@ -57,22 +53,18 @@ class DecisionIntelligenceService {
     int limit = 10,
   }) async {
     try {
-      final params = StringBuffer();
+      final params = <String, String>{
+        'limit': limit.toString(),
+      };
       if (actionTypes != null && actionTypes.isNotEmpty) {
-        params.write('action_types=${actionTypes.join(",")}');
-      }
-      params.write('${params.isEmpty ? "" : "&"}limit=$limit');
-
-      final response = await _supabase.functions.invoke(
-        'decision-recommended-actions?$params',
-        method: HttpMethod.get,
-      );
-
-      if (response.data == null) {
-        return [];
+        params['action_types'] = actionTypes.join(',');
       }
 
-      return List<Map<String, dynamic>>.from(response.data as List);
+      final uri = Uri(path: '/api/decision/recommended-actions', queryParameters: params);
+      final data = await apiClient.get(uri.toString());
+
+      if (data is! List) return [];
+      return List<Map<String, dynamic>>.from(data);
     } catch (e) {
       throw Exception('Failed to get recommended actions: $e');
     }
@@ -86,9 +78,9 @@ class DecisionIntelligenceService {
     String? feedbackNotes,
   }) async {
     try {
-      await _supabase.functions.invoke(
-        'decision-apply-action',
-        body: {
+      await apiClient.post(
+        '/api/decision/apply-action',
+        {
           'action_id': actionId,
           'user_response': userResponse,
           if (userFinalAction != null) 'user_final_action': userFinalAction,
@@ -103,16 +95,8 @@ class DecisionIntelligenceService {
   /// Get decision statistics
   Future<Map<String, dynamic>> getStats({int days = 30}) async {
     try {
-      final response = await _supabase.functions.invoke(
-        'decision-stats?days=$days',
-        method: HttpMethod.get,
-      );
-
-      if (response.data == null) {
-        return {};
-      }
-
-      return response.data as Map<String, dynamic>;
+      final data = await apiClient.get('/api/decision/stats?days=$days');
+      return data is Map<String, dynamic> ? data : {};
     } catch (e) {
       throw Exception('Failed to get stats: $e');
     }

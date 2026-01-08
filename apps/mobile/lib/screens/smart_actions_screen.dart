@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../services/api_client.dart';
 import '../services/decision_intelligence_service.dart';
 
 /// Smart Actions Screen
@@ -11,7 +14,8 @@ class SmartActionsScreen extends StatefulWidget {
 }
 
 class _SmartActionsScreenState extends State<SmartActionsScreen> {
-  final _service = DecisionIntelligenceService();
+  DecisionIntelligenceService? _service;
+  bool _started = false;
   List<DecisionResult> _actions = [];
   bool _loading = true;
   String? _error;
@@ -19,7 +23,18 @@ class _SmartActionsScreenState extends State<SmartActionsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadActions();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _service ??=
+        DecisionIntelligenceService(Provider.of<ApiClient>(context, listen: false));
+
+    if (!_started) {
+      _started = true;
+      _loadActions();
+    }
   }
 
   Future<void> _loadActions() async {
@@ -29,7 +44,10 @@ class _SmartActionsScreenState extends State<SmartActionsScreen> {
     });
 
     try {
-      final actions = await _service.evaluateInventory(limit: 20);
+      final service = _service;
+      if (service == null) return;
+
+      final actions = await service.evaluateInventory(limit: 20);
       setState(() {
         _actions = actions;
         _loading = false;
@@ -147,7 +165,10 @@ class _SmartActionsScreenState extends State<SmartActionsScreen> {
     }
 
     try {
-      await _service.provideFeedback(
+      final service = _service;
+      if (service == null) return;
+
+      await service.provideFeedback(
         actionId: action.actionId!,
         userResponse: response,
       );
@@ -355,21 +376,36 @@ class DecisionStatsScreen extends StatefulWidget {
 }
 
 class _DecisionStatsScreenState extends State<DecisionStatsScreen> {
-  final _service = DecisionIntelligenceService();
+  DecisionIntelligenceService? _service;
+  bool _started = false;
   Map<String, dynamic>? _stats;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadStats();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _service ??=
+        DecisionIntelligenceService(Provider.of<ApiClient>(context, listen: false));
+
+    if (!_started) {
+      _started = true;
+      _loadStats();
+    }
   }
 
   Future<void> _loadStats() async {
     setState(() => _loading = true);
 
     try {
-      final stats = await _service.getStats(days: 30);
+      final service = _service;
+      if (service == null) return;
+
+      final stats = await service.getStats(days: 30);
       setState(() {
         _stats = stats;
         _loading = false;

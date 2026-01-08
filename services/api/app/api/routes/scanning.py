@@ -759,7 +759,21 @@ async def confirm_ingredients(
                 rejected_count += 1
             
             # Update detected ingredient
-            db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
+            try:
+                db.table("detected_ingredients").update(update_data).eq("id", detected_id).execute()
+            except Exception as e:
+                # Some deployments have an older trigger/function that tries to insert
+                # `scan_id` into `user_pantry` even though the table schema uses
+                # `source_scan_id`. That trigger runs on detected_ingredients updates,
+                # and it can block the whole confirmation flow.
+                msg = str(e)
+                if 'user_pantry' in msg and 'scan_id' in msg and 'does not exist' in msg:
+                    logger.warning(
+                        "Skipping detected_ingredients update due to legacy pantry trigger schema mismatch: %s",
+                        msg,
+                    )
+                else:
+                    raise
 
         # Latest-scan semantics (safer): after upserting the confirmed items for this scan,
         # mark older scan-sourced raw items in the same storage location inactive.

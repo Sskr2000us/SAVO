@@ -2,9 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../services/metrics_service.dart';
+import '../services/scanning_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
-import 'pantry_review_screen.dart';
 
 class PantryAiSuggestionsScreen extends StatefulWidget {
   final String scanId;
@@ -23,6 +23,7 @@ class PantryAiSuggestionsScreen extends StatefulWidget {
 
 class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
   final Map<String, Map<String, dynamic>> _choices = {};
+  bool _saving = false;
 
   @override
   void initState() {
@@ -188,10 +189,86 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
     fireAndForget(MetricsService.instance.recordEvent('pantry_ai_item_edited'));
   }
 
+  List<Map<String, dynamic>> _buildConfirmations() {
+    final confirmations = <Map<String, dynamic>>[];
+
+    for (var index = 0; index < widget.items.length; index++) {
+      final raw = widget.items[index];
+      if (raw is! Map) continue;
+      final item = raw.cast<String, dynamic>();
+      final id = _idFor(item, index);
+
+      final choice = _choices[id];
+      final action = choice?['action']?.toString() ?? 'rejected';
+
+      final json = <String, dynamic>{
+        'detected_id': id,
+        'action': action,
+      };
+
+      final confirmedName = choice?['confirmed_name']?.toString();
+      if (confirmedName != null && confirmedName.trim().isNotEmpty) {
+        json['confirmed_name'] = confirmedName.trim();
+      }
+      confirmations.add(json);
+    }
+
+    return confirmations;
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+
+    try {
+      fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
+
+      final svc = ScanningService();
+      final res = await svc.confirmIngredients(
+        scanId: widget.scanId,
+        confirmations: _buildConfirmations(),
+      );
+
+      if (!mounted) return;
+
+      if (res['success'] == true) {
+        fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
+        fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
+
+        final added = res['pantry_items_added'];
+        final addedCount = (added is num)
+            ? added.toInt()
+            : _choices.values
+                .where((v) => v['action'] == 'confirmed' || v['action'] == 'modified')
+                .length;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Saved $addedCount items to pantry')),
+        );
+
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        return;
+      }
+
+      final msg = res['error']?.toString() ?? 'Save failed';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+      setState(() => _saving = false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+      setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (kDebugMode || kProfileMode) {
-      // Flow B requires explicit review before save.
+      // Explicit user review exists on this screen (confirm/edit/remove),
+      // followed by a single Save action.
       SavoUiGuards.warnIfAiConfirmationNotExplicit(
         flow: 'SnapPantry',
         surface: 'PantryAISuggestions',
@@ -314,19 +391,8 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    AppMotion.createRoute(
-                      PantryReviewScreen(
-                        scanId: widget.scanId,
-                        choices: _choices,
-                        totalItems: widget.items.length,
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Review before save'),
+                onPressed: _saving ? null : _save,
+                child: Text(_saving ? 'Saving…' : 'Save to inventory'),
               ),
             ),
           ],
