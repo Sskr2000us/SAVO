@@ -35,6 +35,7 @@ class InventoryItemCreate(BaseModel):
     display_name: str = Field(..., description="User-friendly display name")
     category: Optional[str] = Field(None, description="vegetables, dairy, meat, etc")
     subcategory: Optional[str] = Field(None, description="leafy, root, rice, millets, powders, etc")
+    cuisine: Optional[str] = Field(None, description="indian, italian, mexican, middle_east, south_east_asian, global")
     
     quantity: float = Field(..., gt=0, description="Quantity")
     unit: str = Field(..., description="Unit of measurement")
@@ -68,6 +69,7 @@ class InventoryItemUpdate(BaseModel):
     display_name: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
+    cuisine: Optional[str] = None
     
     quantity: Optional[float] = Field(None, gt=0)
     unit: Optional[str] = None

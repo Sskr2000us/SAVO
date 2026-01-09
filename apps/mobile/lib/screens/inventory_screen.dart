@@ -25,9 +25,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   bool _showInactiveItems = false;
 
+  String? _selectedCuisine;
+
   static const String _prefsShowInactiveKey = 'savo.inventory.show_inactive_items';
 
   static const List<String> _storageOptions = ['pantry', 'fridge', 'freezer', 'counter'];
+
+  static const List<String> _cuisineOptions = [
+    'indian',
+    'italian',
+    'mexican',
+    'middle_east',
+    'south_east_asian',
+    'global',
+  ];
 
   // Storage -> Category -> Subcategories
   static const Map<String, Map<String, List<String>>> _inventoryTaxonomy = {
@@ -382,9 +393,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return cleaned[0].toUpperCase() + cleaned.substring(1);
   }
 
-  List<List<InventoryItem>> _findDuplicateGroups() {
+  List<List<InventoryItem>> _findDuplicateGroups([List<InventoryItem>? items]) {
     final Map<String, List<InventoryItem>> groups = {};
-    for (final item in _items) {
+    for (final item in (items ?? _items)) {
       final key = item.canonicalName.trim().toLowerCase();
       if (key.isEmpty) continue;
       groups.putIfAbsent(key, () => []).add(item);
@@ -500,6 +511,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     String? category = _cleanOptional(item.category);
     String? subcategory = _cleanOptional(item.subcategory);
+    String? cuisine = _cleanOptional(item.cuisine);
 
     double qty = item.quantity;
     String unit = item.unit;
@@ -594,6 +606,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               subcategory = value;
                             });
                           },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: cuisine,
+                    decoration: const InputDecoration(
+                      labelText: 'Cuisine (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _cuisineOptions
+                        .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
+                        .toList(),
+                    onChanged: (value) {
+                      setModalState(() {
+                        cuisine = value;
+                      });
+                    },
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -737,6 +765,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               'canonical_name': _canonicalizeName(display),
                               'category': _cleanOptional(category),
                               'subcategory': _cleanOptional(subcategory),
+                              'cuisine': _cleanOptional(cuisine),
                               'quantity': qty,
                               'unit': unit,
                               'storage_location': storage,
@@ -782,95 +811,180 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   void _showAddItemDialog() {
     final nameController = TextEditingController();
-    final categoryController = TextEditingController();
     final quantityController = TextEditingController();
     final unitController = TextEditingController();
     String selectedStorage = 'fridge';
     String selectedState = 'raw';
+    String? category;
+    String? subcategory;
+    String? cuisine;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Item'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Name'),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Add Item'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(labelText: 'Name'),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: category,
+                      decoration: const InputDecoration(
+                        labelText: 'Category (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _categoryOptionsForStorage(selectedStorage, includeValue: category)
+                          .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
+                          .toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          category = value;
+                          subcategory = null;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: subcategory,
+                      decoration: const InputDecoration(
+                        labelText: 'Subcategory (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: (category == null)
+                          ? const <DropdownMenuItem<String>>[]
+                          : _subcategoryOptionsFor(selectedStorage, category!, includeValue: subcategory)
+                              .map((sc) => DropdownMenuItem(value: sc, child: Text(_prettyName(sc))))
+                              .toList(),
+                      onChanged: (category == null)
+                          ? null
+                          : (value) {
+                              setDialogState(() {
+                                subcategory = value;
+                              });
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: cuisine,
+                      decoration: const InputDecoration(
+                        labelText: 'Cuisine (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _cuisineOptions
+                          .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
+                          .toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          cuisine = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: quantityController,
+                      decoration: const InputDecoration(labelText: 'Quantity'),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: unitController,
+                      decoration: const InputDecoration(labelText: 'Unit'),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedStorage,
+                      decoration: const InputDecoration(labelText: 'Storage'),
+                      items: _storageOptions.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedStorage = value ?? 'fridge';
+                          final validCategories = _categoryOptionsForStorage(selectedStorage);
+                          if (category != null && !validCategories.contains(category)) {
+                            category = null;
+                            subcategory = null;
+                          }
+                          if (category != null) {
+                            final validSubcategories = _subcategoryOptionsFor(selectedStorage, category!);
+                            if (subcategory != null && !validSubcategories.contains(subcategory)) {
+                              subcategory = null;
+                            }
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedState,
+                      decoration: const InputDecoration(labelText: 'State'),
+                      items: const ['raw', 'cooked', 'prepared', 'leftover', 'frozen']
+                          .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                          .toList(),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedState = value ?? 'raw';
+                        });
+                      },
+                    ),
+                  ],
+                ),
               ),
-              TextField(
-                controller: categoryController,
-                decoration: const InputDecoration(labelText: 'Category (optional)'),
-              ),
-              TextField(
-                controller: quantityController,
-                decoration: const InputDecoration(labelText: 'Quantity'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: unitController,
-                decoration: const InputDecoration(labelText: 'Unit'),
-              ),
-              DropdownButtonFormField<String>(
-                value: selectedStorage,
-                decoration: const InputDecoration(labelText: 'Storage'),
-                items: ['pantry', 'fridge', 'freezer', 'counter']
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
-                onChanged: (value) {
-                  selectedStorage = value ?? 'fridge';
-                },
-              ),
-              DropdownButtonFormField<String>(
-                value: selectedState,
-                decoration: const InputDecoration(labelText: 'State'),
-                items: ['raw', 'cooked', 'prepared', 'leftover', 'frozen']
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
-                onChanged: (value) {
-                  selectedState = value ?? 'raw';
-                },
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final item = {
-                'canonical_name': nameController.text,
-                'display_name': nameController.text,
-                'category': categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
-                'quantity': double.tryParse(quantityController.text) ?? 1.0,
-                'unit': unitController.text,
-                'storage_location': selectedStorage,  // Match database field name
-                'item_state': selectedState,  // Match database field name
-              };
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final display = nameController.text.trim();
+                    if (display.isEmpty) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Name cannot be empty.')),
+                      );
+                      return;
+                    }
 
-              try {
-                final apiClient = Provider.of<ApiClient>(context, listen: false);
-                // Use database endpoint with user header
-                await apiClient.post('/inventory-db/items', item);
-                Navigator.pop(context);
-                _loadInventory();
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error adding to database: $e')),
-                  );
-                }
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
+                    final item = {
+                      'canonical_name': _canonicalizeName(display),
+                      'display_name': display,
+                      'category': _cleanOptional(category),
+                      'subcategory': _cleanOptional(subcategory),
+                      'cuisine': _cleanOptional(cuisine),
+                      'quantity': double.tryParse(quantityController.text) ?? 1.0,
+                      'unit': unitController.text,
+                      'storage_location': selectedStorage, // Match database field name
+                      'item_state': selectedState, // Match database field name
+                    };
+
+                    try {
+                      final apiClient = Provider.of<ApiClient>(context, listen: false);
+                      await apiClient.post('/inventory-db/items', item);
+                      if (!context.mounted) return;
+                      Navigator.pop(context);
+                      _loadInventory();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Error adding to database: $e')),
+                        );
+                      }
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -894,10 +1008,26 @@ class _InventoryScreenState extends State<InventoryScreen> {
       );
     }
 
-    final duplicateGroups = _findDuplicateGroups();
-    final expiring = _items.where((i) => i.isExpiringSoon).toList();
-    final notExpiring = _items.where((i) => !i.isExpiringSoon).toList();
+    final filteredItems = (_selectedCuisine == null)
+      ? _items
+      : _items.where((i) => (i.cuisine ?? '').trim() == _selectedCuisine).toList();
+
+    final duplicateGroups = _findDuplicateGroups(filteredItems);
+    final expiring = filteredItems.where((i) => i.isExpiringSoon).toList();
+    final notExpiring = filteredItems.where((i) => !i.isExpiringSoon).toList();
     notExpiring.sort((a, b) => a.displayLabel.toLowerCase().compareTo(b.displayLabel.toLowerCase()));
+
+    final cuisineOptions = filteredItems.isEmpty
+      ? _cuisineOptions
+      : (() {
+        final present = filteredItems
+          .map((i) => (i.cuisine ?? '').trim())
+          .where((c) => c.isNotEmpty)
+          .toSet()
+          .toList();
+        present.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        return present;
+        })();
 
     final Map<String, List<InventoryItem>> byStorage = {
       'pantry': [],
@@ -1043,6 +1173,35 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
                           await _loadInventory();
                         },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: DropdownButtonFormField<String>(
+                          value: _selectedCuisine,
+                          decoration: const InputDecoration(
+                            labelText: 'Cuisine filter',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: [
+                            const DropdownMenuItem<String>(value: null, child: Text('All')),
+                            ...cuisineOptions.map(
+                              (c) => DropdownMenuItem<String>(value: c, child: Text(_prettyName(c))),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedCuisine = value;
+                            });
+                          },
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),

@@ -4,6 +4,7 @@ class InventoryItem {
   final String? displayName;
   final String? category;
   final String? subcategory;
+  final String? cuisine;
   final double quantity;
   final String unit;
   final String state; // raw, cooked, leftover, frozen
@@ -29,6 +30,7 @@ class InventoryItem {
     this.displayName,
     this.category,
     this.subcategory,
+    this.cuisine,
     required this.quantity,
     required this.unit,
     this.state = 'raw',
@@ -96,6 +98,7 @@ class InventoryItem {
       displayName: json['display_name'],
       category: json['category']?.toString(),
       subcategory: json['subcategory']?.toString(),
+      cuisine: json['cuisine']?.toString(),
       quantity: (json['quantity'] ?? 0).toDouble(),
       unit: json['unit'] ?? '',
       // inventory-db uses `item_state` and `storage_location`
@@ -123,6 +126,7 @@ class InventoryItem {
       'display_name': displayName,
       'category': category,
       'subcategory': subcategory,
+      'cuisine': cuisine,
       'quantity': quantity,
       'unit': unit,
       'state': state,
