@@ -1,34 +1,41 @@
 import 'package:flutter/material.dart';
 
-/// Quick confirmation card for continuous scanning
 class QuickConfirmationCard extends StatefulWidget {
   final Map<String, dynamic> ingredient;
-  final Function(Map<String, dynamic>) onConfirm;
+  final ValueChanged<Map<String, dynamic>> onConfirm;
   final VoidCallback onReject;
 
   const QuickConfirmationCard({
-    Key? key,
+    super.key,
     required this.ingredient,
     required this.onConfirm,
     required this.onReject,
-  }) : super(key: key);
+  });
 
   @override
-  _QuickConfirmationCardState createState() => _QuickConfirmationCardState();
+  State<QuickConfirmationCard> createState() => _QuickConfirmationCardState();
 }
 
 class _QuickConfirmationCardState extends State<QuickConfirmationCard> {
-  late TextEditingController _quantityController;
+  late final TextEditingController _quantityController;
   late String _selectedUnit;
+  late String _selectedName;
+
   bool _isConfirming = false;
+  bool _showAlternatives = false;
+  bool _showAdjust = false;
 
   @override
   void initState() {
     super.initState();
+
+    final initialName = (widget.ingredient['detected_name'] ?? widget.ingredient['name'] ?? 'Unknown').toString();
+    _selectedName = initialName;
+
     _quantityController = TextEditingController(
-      text: (widget.ingredient['quantity'] ?? 1.0).toString(),
+      text: (widget.ingredient['quantity'] ?? widget.ingredient['estimated_quantity'] ?? 1.0).toString(),
     );
-    _selectedUnit = widget.ingredient['unit'] ?? 'pieces';
+    _selectedUnit = (widget.ingredient['unit'] ?? 'pieces').toString();
   }
 
   @override
@@ -37,71 +44,80 @@ class _QuickConfirmationCardState extends State<QuickConfirmationCard> {
     super.dispose();
   }
 
-  Color _getConfidenceColor() {
-    final confidence = widget.ingredient['confidence'] ?? 0.0;
-    if (confidence >= 0.8) return Colors.green;
-    if (confidence >= 0.5) return Colors.orange;
+  double _confidence() {
+    final raw = widget.ingredient['confidence'];
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw?.toString() ?? '') ?? 0.0;
+  }
+
+  Color _confidenceColor(double c) {
+    if (c >= 0.8) return Colors.green;
+    if (c >= 0.5) return Colors.orange;
     return Colors.red;
   }
 
-  String _getConfidenceLabel() {
-    final confidence = widget.ingredient['confidence'] ?? 0.0;
-    final percent = (confidence * 100).toInt();
-    if (confidence >= 0.8) return '$percent% confident ✓';
-    if (confidence >= 0.5) return '$percent% somewhat sure';
+  String _confidenceLabel(double c) {
+    final percent = (c * 100).clamp(0, 100).toInt();
+    if (c >= 0.8) return '$percent% confident';
+    if (c >= 0.5) return '$percent% somewhat sure';
     return '$percent% uncertain';
   }
 
-  void _handleConfirm() async {
+  List<String> _alternatives() {
+    final raw = widget.ingredient['close_alternatives'];
+    if (raw is! List) return const [];
+
+    final out = <String>[];
+    for (final alt in raw) {
+      if (alt is Map) {
+        final name = (alt['name'] ?? alt['detected_name'] ?? '').toString().trim();
+        if (name.isNotEmpty) out.add(name);
+      } else {
+        final name = alt.toString().trim();
+        if (name.isNotEmpty) out.add(name);
+      }
+    }
+    return out;
+  }
+
+  Future<void> _confirm() async {
     if (_isConfirming) return;
 
-    final name = (widget.ingredient['detected_name'] ?? '').toString().trim();
+    final name = _selectedName.toString().trim();
     if (name.isEmpty || name.toLowerCase() == 'unknown') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not identify item. Please rescan.')),
+        const SnackBar(content: Text('Could not identify item. Please retake.')),
       );
       return;
     }
 
-    setState(() {
-      _isConfirming = true;
-    });
+    setState(() => _isConfirming = true);
 
-    try {
-      final confirmedData = {
-        'name': name,
-        'canonical_name': widget.ingredient['canonical_name'],
-        'quantity': double.tryParse(_quantityController.text) ?? 1.0,
-        'unit': _selectedUnit,
-        'confidence': widget.ingredient['confidence'],
-      };
+    final qty = double.tryParse(_quantityController.text) ?? 1.0;
+    final unit = _selectedUnit.trim().isEmpty ? 'pieces' : _selectedUnit.trim();
 
-      widget.onConfirm(confirmedData);
-    } catch (e) {
-      debugPrint('Confirmation error: $e');
-      setState(() {
-        _isConfirming = false;
-      });
-    }
+    final confirmed = Map<String, dynamic>.from(widget.ingredient);
+    confirmed['name'] = name;
+    confirmed['detected_name'] = name;
+    confirmed['quantity'] = qty <= 0 ? 1.0 : qty;
+    confirmed['unit'] = unit;
+    confirmed['confidence'] = _confidence();
+
+    widget.onConfirm(confirmed);
   }
 
   @override
   Widget build(BuildContext context) {
-    final confidence = widget.ingredient['confidence'] ?? 0.0;
-    final closeAlternatives = widget.ingredient['close_alternatives'] as List? ?? [];
+    final c = _confidence();
+    final alternatives = _alternatives();
 
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
+        borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
       ),
       child: Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
         child: SingleChildScrollView(
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -109,180 +125,124 @@ class _QuickConfirmationCardState extends State<QuickConfirmationCard> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header
-                Row(
-                  children: [
-                    const Text(
-                      'Quick Confirm',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: widget.onReject,
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Ingredient name
-                Text(
-                  widget.ingredient['detected_name'] ?? 'Unknown',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                
+                const Text('Is this correct?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 14),
+                Text(_selectedName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                
-                // Confidence badge
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _getConfidenceColor().withOpacity(0.2),
+                    color: _confidenceColor(c).withOpacity(0.2),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _getConfidenceColor(),
-                      width: 1,
-                    ),
+                    border: Border.all(color: _confidenceColor(c), width: 1),
                   ),
                   child: Text(
-                    _getConfidenceLabel(),
-                    style: TextStyle(
-                      color: _getConfidenceColor(),
-                      fontWeight: FontWeight.w600,
-                    ),
+                    _confidenceLabel(c),
+                    style: TextStyle(color: _confidenceColor(c), fontWeight: FontWeight.w600),
                   ),
                 ),
-                
-                const SizedBox(height: 20),
-                
-                // Quantity input
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
-                      flex: 2,
-                      child: TextField(
-                        controller: _quantityController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: InputDecoration(
-                          labelText: 'Quantity',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
+                      child: FilledButton(
+                        onPressed: _isConfirming ? null : _confirm,
+                        child: _isConfirming
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Yes'),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                     Expanded(
-                      flex: 1,
-                      child: DropdownButtonFormField<String>(
-                        value: _selectedUnit,
-                        decoration: InputDecoration(
-                          labelText: 'Unit',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'pieces', child: Text('pieces')),
-                          DropdownMenuItem(value: 'grams', child: Text('g')),
-                          DropdownMenuItem(value: 'kg', child: Text('kg')),
-                          DropdownMenuItem(value: 'ml', child: Text('ml')),
-                          DropdownMenuItem(value: 'liters', child: Text('L')),
-                          DropdownMenuItem(value: 'oz', child: Text('oz')),
-                          DropdownMenuItem(value: 'lbs', child: Text('lbs')),
-                          DropdownMenuItem(value: 'cups', child: Text('cups')),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() {
-                              _selectedUnit = value;
-                            });
-                          }
-                        },
+                      child: OutlinedButton(
+                        onPressed: _isConfirming
+                            ? null
+                            : () => setState(() {
+                                  _showAlternatives = !_showAlternatives;
+                                }),
+                        child: const Text('Pick other'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextButton(
+                        onPressed: _isConfirming ? null : widget.onReject,
+                        child: const Text('Retake'),
                       ),
                     ),
                   ],
                 ),
-                
-                // Close alternatives (if medium/low confidence)
-                if (confidence < 0.8 && closeAlternatives.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Or did you mean:',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey,
-                    ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: () => setState(() => _showAdjust = !_showAdjust),
+                    child: Text(_showAdjust ? 'Hide quantity' : 'Adjust quantity'),
                   ),
+                ),
+                if (_showAdjust) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: TextField(
+                          controller: _quantityController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: InputDecoration(
+                            labelText: 'Quantity',
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 1,
+                        child: DropdownButtonFormField<String>(
+                          value: _selectedUnit,
+                          decoration: InputDecoration(
+                            labelText: 'Unit',
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 'pieces', child: Text('pieces')),
+                            DropdownMenuItem(value: 'grams', child: Text('g')),
+                            DropdownMenuItem(value: 'kg', child: Text('kg')),
+                            DropdownMenuItem(value: 'ml', child: Text('ml')),
+                            DropdownMenuItem(value: 'liters', child: Text('L')),
+                            DropdownMenuItem(value: 'oz', child: Text('oz')),
+                            DropdownMenuItem(value: 'lbs', child: Text('lbs')),
+                            DropdownMenuItem(value: 'cups', child: Text('cups')),
+                          ],
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _selectedUnit = value);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_showAlternatives && alternatives.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Text('Or did you mean:', style: TextStyle(fontSize: 14, color: Colors.grey)),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
-                    children: closeAlternatives.take(4).map((alt) {
-                      final altName = alt['name'] ?? alt;
+                    children: alternatives.take(6).map((altName) {
                       return ActionChip(
-                        label: Text(altName.toString()),
+                        label: Text(altName),
                         onPressed: () {
-                          widget.ingredient['detected_name'] = altName.toString();
-                          setState(() {});
+                          setState(() {
+                            _selectedName = altName;
+                          });
                         },
                       );
                     }).toList(),
                   ),
                 ],
-                
-                const SizedBox(height: 24),
-                
-                // Action buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _isConfirming ? null : widget.onReject,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: const Text('Reject'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton(
-                        onPressed: _isConfirming ? null : _handleConfirm,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF4CAF50),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: _isConfirming
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                ),
-                              )
-                            : const Text('✓ Confirm & Continue'),
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),

@@ -13,6 +13,27 @@ import 'pending_scan_sync_service.dart';
 class ScanningService {
   final String baseUrl = Config.apiBaseUrl;
 
+  String _canonicalizeName(String raw) {
+    var s = raw.trim();
+    s = s.replaceAll('_', ' ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    // Remove a few common packaging/marketing suffixes.
+    s = s.replaceAll(RegExp(r'\b(organic|fresh|natural|premium|classic|original)\b', caseSensitive: false), ' ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    // Small, low-risk synonym unifications.
+    final lower = s.toLowerCase();
+    if (lower == 'scallion' || lower == 'scallions' || lower == 'spring onion' || lower == 'spring onions') {
+      return 'green onion';
+    }
+    if (lower == 'garbanzo' || lower == 'garbanzo beans') {
+      return 'chickpeas';
+    }
+
+    return s;
+  }
+
   String _normalizeUnit(String? unit) {
     final u = (unit ?? '').trim().toLowerCase();
     if (u.isEmpty) return 'pieces';
@@ -743,7 +764,7 @@ class ScanningService {
       final request = http.MultipartRequest('POST', uri);
       request.headers['Authorization'] = 'Bearer $token';
 
-      final name = ingredientName.trim();
+      final name = _canonicalizeName(ingredientName);
       if (name.isEmpty) {
         return {
           'success': false,

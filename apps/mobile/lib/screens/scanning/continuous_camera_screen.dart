@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../../services/scanning_service.dart';
+import '../../services/barcode_lookup_service.dart';
+import 'barcode_scan_screen.dart';
 import '../../widgets/quick_confirmation_card.dart';
 
 /// Continuous single-item scanning screen (optimized UX)
@@ -14,6 +17,9 @@ class ContinuousCameraScanScreen extends StatefulWidget {
 }
 
 class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen> {
+  static const String _prefsScanTypeKey = 'savo.scan.single_item.scan_type';
+  static const String _prefsAutoCaptureKey = 'savo.scan.single_item.auto_capture';
+
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _isInitialized = false;
@@ -27,14 +33,44 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   String _detectedItem = '';
   String _estimatedQuantity = '';
 
+  String? _qualityHint;
+  DateTime? _qualityHintUntil;
+
   DateTime? _nextAutoCaptureAllowedAt;
   
   final ScanningService _scanningService = ScanningService();
+  final BarcodeLookupService _barcodeLookup = BarcodeLookupService();
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
+    _loadPrefs().whenComplete(_initializeCamera);
+  }
+
+  Future<void> _loadPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedType = prefs.getString(_prefsScanTypeKey);
+      final savedAuto = prefs.getBool(_prefsAutoCaptureKey);
+      if (savedType != null && savedType.trim().isNotEmpty) {
+        _scanType = savedType.trim();
+      }
+      if (savedAuto != null) {
+        _autoCapture = savedAuto;
+      }
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  Future<void> _savePrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsScanTypeKey, _scanType);
+      await prefs.setBool(_prefsAutoCaptureKey, _autoCapture);
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   @override
@@ -72,10 +108,12 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   }
 
   void _startFocusDetection() {
-    _focusCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+    _focusCheckTimer = Timer.periodic(const Duration(milliseconds: 450), (timer) async {
       final allowAt = _nextAutoCaptureAllowedAt;
       if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
-      if (_isInFocus() && !_isProcessing && mounted) {
+      if (!mounted) return;
+      if (_currentStep != 'centering') return;
+      if (_isInFocus() && !_isProcessing) {
         await _autoCaptureSingleItem();
       }
     });
@@ -100,6 +138,45 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     await _captureSingleItem();
   }
 
+  void _setQualityHint(String message, {Duration duration = const Duration(seconds: 2)}) {
+    if (!mounted) return;
+    setState(() {
+      _qualityHint = message;
+      _qualityHintUntil = DateTime.now().add(duration);
+    });
+  }
+
+  String? _extractQualityHint(Map<String, dynamic>? metadataOrDetail) {
+    if (metadataOrDetail == null) return null;
+
+    // Backend may return quality_issues or issues.
+    final issues = (metadataOrDetail['quality_issues'] ?? metadataOrDetail['issues']);
+    if (issues is List && issues.isNotEmpty) {
+      final set = issues.map((e) => e.toString().toLowerCase()).toSet();
+      if (set.any((x) => x.contains('dark') || x.contains('low_light'))) {
+        return 'Too dark — turn on a light';
+      }
+      if (set.any((x) => x.contains('blur') || x.contains('shaky'))) {
+        return 'Too blurry — hold steady';
+      }
+      if (set.any((x) => x.contains('far') || x.contains('small'))) {
+        return 'Too far — move closer';
+      }
+      if (set.any((x) => x.contains('glare') || x.contains('reflect'))) {
+        return 'Glare — tilt the item slightly';
+      }
+    }
+
+    return null;
+  }
+
+  Future<Map<String, dynamic>> _scanOnce() async {
+    // Capture image
+    final XFile image = await _cameraController!.takePicture();
+    final File imageFile = File(image.path);
+    return _scanningService.scanSingleItem(imageFile: imageFile, scanType: _scanType);
+  }
+
   Future<void> _captureSingleItem() async {
     if (_cameraController == null || !_cameraController!.value.isInitialized || _isProcessing) {
       return;
@@ -113,20 +190,30 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     });
 
     try {
-      // Capture image
-      final XFile image = await _cameraController!.takePicture();
-      final File imageFile = File(image.path);
-
       // Analyze with backend
-      final result = await _scanningService.scanSingleItem(
-        imageFile: imageFile,
-        scanType: _scanType,
-      );
+      final result = await _scanOnce();
 
       if (mounted) {
         if (result['success'] == true) {
           final ingredient = result['ingredient'];
           final autoSaved = result['auto_saved'] ?? false;
+          final metadata = (result['metadata'] is Map)
+              ? Map<String, dynamic>.from(result['metadata'])
+              : (ingredient is Map && ingredient['metadata'] is Map)
+                  ? Map<String, dynamic>.from(ingredient['metadata'])
+                  : null;
+
+          final qualityHint = _extractQualityHint(metadata);
+          if (qualityHint != null) {
+            setState(() {
+              _currentStep = 'centering';
+              _detectedItem = '';
+              _estimatedQuantity = '';
+            });
+            _setQualityHint(qualityHint);
+            _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
+            return;
+          }
 
           final detectedName = (ingredient is Map ? (ingredient['detected_name'] ?? '') : '').toString().trim();
           final confRaw = (ingredient is Map) ? ingredient['confidence'] : null;
@@ -152,19 +239,55 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
             return;
           }
 
+          // Multi-frame voting for borderline detections.
+          var votedIngredient = (ingredient is Map) ? Map<String, dynamic>.from(ingredient) : <String, dynamic>{};
+          if (!autoSaved && conf >= 0.55 && conf < 0.80) {
+            try {
+              // Small delay to allow a steadier frame.
+              await Future.delayed(const Duration(milliseconds: 550));
+              final second = await _scanOnce();
+              if (second['success'] == true && second['ingredient'] is Map) {
+                final ing2 = Map<String, dynamic>.from(second['ingredient']);
+                final n2 = (ing2['detected_name'] ?? '').toString().trim();
+                final c2raw = ing2['confidence'];
+                final c2 = (c2raw is num) ? c2raw.toDouble() : double.tryParse(c2raw?.toString() ?? '');
+                if (n2.isNotEmpty && n2.toLowerCase() != 'unknown' && c2 != null) {
+                  if (n2.toLowerCase() == detectedName.toLowerCase()) {
+                    votedIngredient = votedIngredient..['confidence'] = ((conf + c2) / 2.0);
+                  } else {
+                    // Offer the second guess as an alternative.
+                    final alts = <dynamic>[];
+                    if (votedIngredient['close_alternatives'] is List) {
+                      alts.addAll((votedIngredient['close_alternatives'] as List));
+                    }
+                    alts.insert(0, {'name': n2, 'confidence': c2});
+                    votedIngredient['close_alternatives'] = alts;
+                    // If second scan is much stronger, prefer it.
+                    if (c2 > conf + 0.12) {
+                      votedIngredient['detected_name'] = n2;
+                      votedIngredient['confidence'] = c2;
+                    }
+                  }
+                }
+              }
+            } catch (_) {
+              // Best-effort only.
+            }
+          }
+
           // Update UI with detected item and quantity
           setState(() {
             _detectedItem = detectedName;
-            final qty = ingredient['quantity'];
-            final unit = ingredient['unit'] ?? '';
+            final qty = votedIngredient['quantity'] ?? (ingredient is Map ? ingredient['quantity'] : null);
+            final unit = votedIngredient['unit'] ?? (ingredient is Map ? (ingredient['unit'] ?? '') : '');
             _estimatedQuantity = qty != null ? '$qty $unit' : '';
             _currentStep = 'confirming';
           });
 
           if (autoSaved) {
             // High confidence - just show success and continue
-            _onIngredientConfirmed(ingredient);
-            _showSuccessSnackbar('${ingredient['detected_name']} ($_estimatedQuantity) added!');
+            _onIngredientConfirmed(votedIngredient);
+            _showSuccessSnackbar('${votedIngredient['detected_name']} ($_estimatedQuantity) added!');
             
             // Dismiss onboarding after first success
             if (_showOnboarding) {
@@ -187,13 +310,16 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
             });
           } else {
             // Show confirmation modal
-            _showQuickConfirmation(ingredient);
+            _showQuickConfirmation(votedIngredient);
           }
         } else {
           setState(() {
             _currentStep = 'centering';
           });
           _showError(result['error'] ?? 'Analysis failed');
+
+          final hint = _extractQualityHint(result);
+          if (hint != null) _setQualityHint(hint);
 
           // Back off a bit (but still retry faster than the normal 3s loop).
           _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
@@ -205,6 +331,8 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
         _currentStep = 'centering';
       });
       _showError('Failed to scan item: $e');
+
+      _setQualityHint('Hold steady and try again');
 
       _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
     } finally {
@@ -372,9 +500,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   String _getStatusText() {
     switch (_currentStep) {
       case 'centering':
-        return _autoCapture 
-            ? 'Center item in frame (auto-capture in 5s)'
-            : 'Center item & tap Capture';
+        return _autoCapture ? 'Center 1 item • auto-capture when steady' : 'Center 1 item • tap Capture';
       case 'analyzing':
         return 'Analyzing item...';
       case 'confirming':
@@ -388,11 +514,23 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
 
   @override
   Widget build(BuildContext context) {
+    final hintActive = _qualityHint != null && (_qualityHintUntil == null || DateTime.now().isBefore(_qualityHintUntil!));
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Scan Items'),
         backgroundColor: const Color(0xFF4CAF50),
         actions: [
+          IconButton(
+            tooltip: 'Scan barcode',
+            onPressed: _isProcessing ? null : _openBarcodeScanner,
+            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'More',
+            onPressed: _openMore,
+            icon: const Icon(Icons.more_vert, color: Colors.white),
+          ),
           TextButton(
             onPressed: _finishScanning,
             child: const Text(
@@ -512,7 +650,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                                 ),
                                 child: Text(
                                   _currentStep == 'centering' 
-                                      ? 'Center item here'
+                                      ? (hintActive ? (_qualityHint ?? 'Hold steady') : 'Fill box with the item/label')
                                       : _currentStep == 'analyzing'
                                           ? 'Analyzing...'
                                           : _detectedItem.isNotEmpty
@@ -526,6 +664,14 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                                   textAlign: TextAlign.center,
                                 ),
                               ),
+                              if (_currentStep == 'centering' && !hintActive)
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    'One item at a time',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
+                                ),
                               if (_estimatedQuantity.isNotEmpty && _currentStep == 'confirming')
                                 Padding(
                                   padding: const EdgeInsets.only(top: 8),
@@ -568,18 +714,6 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                   color: Colors.white,
                   child: Column(
                     children: [
-                      // Scan type selector
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          _buildScanTypeChip('Pantry', 'pantry'),
-                          _buildScanTypeChip('Fridge', 'fridge'),
-                          _buildScanTypeChip('Counter', 'counter'),
-                        ],
-                      ),
-                      
-                      const SizedBox(height: 12),
-                      
                       // Auto-capture toggle & item count
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -593,6 +727,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                                   setState(() {
                                     _autoCapture = value;
                                   });
+                                  _savePrefs();
                                   if (value) {
                                     _startFocusDetection();
                                   } else {
@@ -640,7 +775,124 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     );
   }
 
-  Widget _buildScanTypeChip(String label, String value) {
+  Future<void> _openBarcodeScanner() async {
+    // Pause auto-capture while barcode scanning.
+    if (_autoCapture) _stopFocusDetection();
+
+    final code = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const BarcodeScanScreen()),
+    );
+
+    if (!mounted) return;
+
+    if (_autoCapture) {
+      _nextAutoCaptureAllowedAt = DateTime.now().add(const Duration(seconds: 1));
+      _startFocusDetection();
+    }
+
+    final barcode = (code ?? '').trim();
+    if (barcode.isEmpty) return;
+
+    setState(() {
+      _isProcessing = true;
+      _currentStep = 'analyzing';
+    });
+
+    try {
+      final name = await _barcodeLookup.lookupName(barcode);
+      if (!mounted) return;
+
+      if (name == null || name.trim().isEmpty) {
+        setState(() {
+          _currentStep = 'centering';
+        });
+        _showError('Barcode not recognized. Try scanning the front label.');
+        _setQualityHint('Try label scan');
+        return;
+      }
+
+      final ingredient = <String, dynamic>{
+        'detected_name': name,
+        'canonical_name': name,
+        'quantity': 1.0,
+        'unit': 'pieces',
+        'confidence': 0.99,
+        'close_alternatives': const [],
+      };
+
+      setState(() {
+        _detectedItem = name;
+        _estimatedQuantity = '1 pieces';
+        _currentStep = 'confirming';
+      });
+
+      _showQuickConfirmation(ingredient);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _currentStep = 'centering';
+      });
+      _showError('Barcode lookup failed: $e');
+      _setQualityHint('Check connection');
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isProcessing = false;
+      });
+    }
+  }
+
+  Future<void> _openMore() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('More', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 12),
+                  const Text('Scan location'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      _buildScanTypeChip('Pantry', 'pantry', setLocal),
+                      _buildScanTypeChip('Fridge', 'fridge', setLocal),
+                      _buildScanTypeChip('Counter', 'counter', setLocal),
+                      _buildScanTypeChip('Shopping', 'shopping', setLocal),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openBarcodeScanner();
+                    },
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Scan barcode'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildScanTypeChip(String label, String value, void Function(void Function())? setLocal) {
     final isSelected = _scanType == value;
     return ChoiceChip(
       label: Text(label),
@@ -651,9 +903,15 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
       ),
       onSelected: (selected) {
         if (selected) {
-          setState(() {
+          if (mounted) {
+            setState(() {
+              _scanType = value;
+            });
+          }
+          setLocal?.call(() {
             _scanType = value;
           });
+          _savePrefs();
         }
       },
     );

@@ -7,8 +7,8 @@ import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
-import 'pantry_camera_screen.dart';
 import 'pantry/manual_entry_screen.dart';
+import 'scanning/continuous_camera_screen.dart';
 
 class PantryUpdateEntryScreen extends StatefulWidget {
   const PantryUpdateEntryScreen({super.key});
@@ -217,15 +217,15 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
               onTap: () {
                 Navigator.push(
                   context,
-                  AppMotion.createRoute(const PantryCameraScreen()),
+                  AppMotion.createRoute(const ContinuousCameraScanScreen()),
                 );
               },
               child: const Row(
                 children: [
-                  Icon(Icons.photo_camera),
+                  Icon(Icons.center_focus_strong),
                   SizedBox(width: AppSpacing.md),
                   Expanded(
-                    child: Text('Scan pantry shelf'),
+                    child: Text('Scan items (one by one)'),
                   ),
                 ],
               ),
