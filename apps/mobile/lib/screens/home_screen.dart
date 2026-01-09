@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
@@ -14,7 +16,6 @@ import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import '../widgets/pro_paywall_sheet.dart';
 import 'plan_screen.dart';
-import 'cook_now_entry_screen.dart';
 import 'pantry_update_entry_screen.dart';
 import 'account_settings_screen.dart';
 import 'onboarding/onboarding_coordinator.dart';
@@ -29,6 +30,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const String _prefsTonightOptionsKey = 'savo.tonight.options.v1';
+  static const String _prefsTonightOptionsAtKey = 'savo.tonight.options_at.v1';
+
   bool _loadingOnboarding = true;
   Map<String, dynamic>? _onboardingStatus;
 
@@ -45,14 +49,57 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshOnboardingStatus();
-      _loadTonight();
+      _loadTonightFromCache().whenComplete(() {
+        _loadTonight(allowStaleSuggestion: true);
+      });
     });
   }
 
-  Future<void> _loadTonight() async {
+  Future<void> _loadTonightFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsTonightOptionsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+
+      final recipes = decoded
+          .whereType<Map>()
+          .map((m) => Recipe.fromJson(m.cast<String, dynamic>()))
+          .where((r) => r.recipeId.trim().isNotEmpty)
+          .toList(growable: false);
+
+      if (recipes.isEmpty) return;
+      if (!mounted) return;
+      setState(() {
+        _tonightOptions = recipes;
+        _tonightIndex = 0;
+        _tonightError = null;
+        // Keep the CTA enabled while we refresh in the background.
+        _loadingTonight = false;
+      });
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  Future<void> _saveTonightCache(List<Recipe> recipes) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = jsonEncode(recipes.take(5).map((r) => r.toJson()).toList());
+      await prefs.setString(_prefsTonightOptionsKey, payload);
+      await prefs.setInt(_prefsTonightOptionsAtKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  Future<void> _loadTonight({bool allowStaleSuggestion = false}) async {
     if (mounted) {
       setState(() {
-        _loadingTonight = true;
+        // If we already have a cached suggestion, don't block the CTA while refreshing.
+        _loadingTonight = allowStaleSuggestion ? (_tonightRecipe == null) : true;
         _tonightError = null;
       });
     }
@@ -68,6 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
         profileState: profileState,
         maxOptions: 5,
         avoidRecentRecipes: 3,
+        preferCachedFirst: true,
       );
 
       final tonight = TonightSuggestionService().rankRecipes(
@@ -83,11 +131,15 @@ class _HomeScreenState extends State<HomeScreen> {
         _tonightIndex = 0;
         _loadingTonight = false;
       });
+
+      // Cache the latest options for instant load next time.
+      await _saveTonightCache(_tonightOptions);
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
       setState(() {
-        _loadingTonight = false;
+        // If we have a suggestion already, keep CTA enabled and show no blocking state.
+        _loadingTonight = (_tonightRecipe == null) ? false : false;
         _loadingInventory = false;
         _tonightError = msg;
       });

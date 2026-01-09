@@ -21,6 +21,7 @@ class CookNowService {
     required ProfileState profileState,
     int maxOptions = 5,
     int avoidRecentRecipes = 3,
+    bool preferCachedFirst = false,
   }) async {
     final body = <String, dynamic>{
       // Without meal_type, the backend may generate a full-day plan (slower).
@@ -73,11 +74,25 @@ class CookNowService {
     }
 
     MenuPlanResponse plan;
-    try {
-      plan = await fetchPlan(forceRegenerate: true);
-    } catch (_) {
-      // Best-effort fallback: return cached plan if regeneration stalls/fails.
-      plan = await fetchPlan(forceRegenerate: false);
+    if (preferCachedFirst) {
+      // Faster path for 'Tonight': load cached plan first, then regenerate only if needed.
+      try {
+        plan = await fetchPlan(forceRegenerate: false);
+      } catch (_) {
+        plan = await fetchPlan(forceRegenerate: true);
+      }
+
+      // If cached plan is stale/incomplete, retry with regeneration.
+      if (plan.status != 'ok') {
+        plan = await fetchPlan(forceRegenerate: true);
+      }
+    } else {
+      try {
+        plan = await fetchPlan(forceRegenerate: true);
+      } catch (_) {
+        // Best-effort fallback: return cached plan if regeneration stalls/fails.
+        plan = await fetchPlan(forceRegenerate: false);
+      }
     }
 
     // If the backend is asking for safety/profile clarification, surface that directly.
