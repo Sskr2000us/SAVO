@@ -40,6 +40,141 @@ class _InventoryScreenState extends State<InventoryScreen> {
     'global',
   ];
 
+  String? _suggestCuisineFromName(String rawName) {
+    final key = _canonicalizeName(rawName);
+    if (key.isEmpty) return null;
+
+    // Indian
+    const indian = <String>{
+      'paneer',
+      'curd',
+      'hung_curd',
+      'buttermilk',
+      'ghee',
+      'basmati_rice',
+      'idli_rice',
+      'poha',
+      'toor_dal',
+      'moong_dal',
+      'masoor_dal',
+      'urad_dal',
+      'chana_dal',
+      'besan',
+      'asafoetida',
+      'kasuri_methi',
+      'garam_masala',
+      'sambar_powder',
+      'rasam_powder',
+      'biryani_masala',
+      'pav_bhaji_masala',
+      'chai_masala',
+      'tandoori_masala',
+      'chana_masala',
+      'chaat_masala',
+      'kitchen_king_masala',
+      'curry_leaves',
+      'tamarind_pulp',
+      'jaggery',
+    };
+    if (indian.contains(key)) return 'indian';
+
+    // Italian
+    const italian = <String>{
+      'parmesan',
+      'pecorino',
+      'burrata',
+      'mozzarella',
+      'ricotta',
+      'mascarpone',
+      'pesto',
+      'marinara_sauce',
+      'arrabbiata_sauce',
+      'alfredo_sauce',
+      'lasagna_sheets',
+      'spaghetti',
+      'penne',
+      'fusilli',
+      'farfalle',
+      'rigatoni',
+      'linguine',
+      'fettuccine',
+      'tagliatelle',
+      'orzo',
+      'gnocchi',
+      '00_flour',
+      'balsamic_vinegar',
+    };
+    if (italian.contains(key)) return 'italian';
+
+    // Mexican
+    const mexican = <String>{
+      'masa_harina',
+      'corn_tortillas',
+      'flour_tortillas',
+      'taco_shells',
+      'tostadas',
+      'tortilla_chips',
+      'nachos',
+      'jalapeno',
+      'chipotle_powder',
+      'ancho_chili_powder',
+      'guajillo_chili_powder',
+      'canned_chipotle_in_adobo',
+      'taco_seasoning',
+      'fajita_seasoning',
+      'adobo_seasoning',
+      'salsa',
+      'pico_de_gallo',
+      'guacamole',
+      'tomatillo',
+      'canned_tomatillos',
+    };
+    if (mexican.contains(key)) return 'mexican';
+
+    // Middle East / MENA
+    const middleEast = <String>{
+      'tahini',
+      'zaatar',
+      'dukkah',
+      'ras_el_hanout',
+      'baharat',
+      'sumac',
+      'pomegranate_molasses',
+      'labneh',
+      'halloumi',
+      'bulgur_fine',
+      'bulgur_coarse',
+      'freekeh',
+      'harissa',
+      'orange_blossom_water',
+      'rose_water',
+    };
+    if (middleEast.contains(key)) return 'middle_east';
+
+    // South East Asian
+    const sea = <String>{
+      'lemongrass',
+      'galangal',
+      'thai_basil',
+      'thai_chili',
+      'birdseye_chili',
+      'fish_sauce',
+      'oyster_sauce',
+      'rice_paper',
+      'pho_noodles',
+      'rice_vermicelli',
+      'glass_noodles',
+      'curry_paste_green',
+      'curry_paste_red',
+      'curry_paste_yellow',
+      'jasmine_rice',
+      'sticky_rice',
+    };
+    if (sea.contains(key)) return 'south_east_asian';
+
+    return null;
+  }
+
   // Storage -> Category -> Subcategories
   static const Map<String, Map<String, List<String>>> _inventoryTaxonomy = {
     'fridge': {
@@ -516,6 +651,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String? category = _cleanOptional(item.category);
     String? subcategory = _cleanOptional(item.subcategory);
     String? cuisine = _cleanOptional(item.cuisine);
+    bool cuisineTouched = false;
 
     double qty = item.quantity;
     String unit = item.unit;
@@ -556,6 +692,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                     onChanged: (_) {
                       setModalState(() {});
+
+                      if (!cuisineTouched && (cuisine == null || cuisine.trim().isEmpty)) {
+                        final suggested = _suggestCuisineFromName(nameController.text);
+                        if (suggested != null) {
+                          cuisine = suggested;
+                        }
+                      }
                     },
                   ),
                   const SizedBox(height: 12),
@@ -618,12 +761,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       labelText: 'Cuisine (optional)',
                       border: OutlineInputBorder(),
                     ),
-                    items: _cuisineOptions
-                        .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
-                        .toList(),
+                    items: [
+                      const DropdownMenuItem<String>(value: null, child: Text('None')),
+                      ..._cuisineOptions.map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c)))),
+                    ],
                     onChanged: (value) {
                       setModalState(() {
                         cuisine = value;
+                        cuisineTouched = true;
                       });
                     },
                   ),
@@ -822,6 +967,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String? category;
     String? subcategory;
     String? cuisine;
+    bool cuisineTouched = false;
 
     showDialog(
       context: context,
@@ -837,6 +983,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     TextField(
                       controller: nameController,
                       decoration: const InputDecoration(labelText: 'Name'),
+                      onChanged: (_) {
+                        if (!cuisineTouched && (cuisine == null || cuisine!.trim().isEmpty)) {
+                          final suggested = _suggestCuisineFromName(nameController.text);
+                          if (suggested != null) {
+                            setDialogState(() {
+                              cuisine = suggested;
+                            });
+                          }
+                        }
+                      },
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
@@ -882,12 +1038,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         labelText: 'Cuisine (optional)',
                         border: OutlineInputBorder(),
                       ),
-                      items: _cuisineOptions
-                          .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
-                          .toList(),
+                      items: [
+                        const DropdownMenuItem<String>(value: null, child: Text('None')),
+                        ..._cuisineOptions.map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c)))),
+                      ],
                       onChanged: (value) {
                         setDialogState(() {
                           cuisine = value;
+                          cuisineTouched = true;
                         });
                       },
                     ),
