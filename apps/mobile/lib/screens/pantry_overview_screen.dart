@@ -8,6 +8,27 @@ import '../services/waste_analytics_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 
+String _prettyPantryToken(String raw) {
+  final s = raw.trim().replaceAll('_', ' ');
+  if (s.isEmpty) return s;
+  return s.split(RegExp(r'\s+')).map((w) {
+    if (w.isEmpty) return w;
+    return w[0].toUpperCase() + w.substring(1);
+  }).join(' ');
+}
+
+String _formatPantryQty(double qty) {
+  if (qty == qty.roundToDouble()) return qty.toInt().toString();
+  return qty
+      .toStringAsFixed(2)
+      .replaceAll(RegExp(r'0+$'), '')
+      .replaceAll(RegExp(r'\.$'), '');
+}
+
+String _formatPantryDate(DateTime d) {
+  return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
 class PantryOverviewScreen extends StatefulWidget {
   const PantryOverviewScreen({super.key});
 
@@ -254,9 +275,46 @@ class _PantryList extends StatelessWidget {
                 _StorageIcon(item: item),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
-                  child: Text(
-                    item.displayLabel,
-                    style: Theme.of(context).textTheme.titleMedium,
+                  child: Builder(
+                    builder: (context) {
+                      final theme = Theme.of(context);
+                      final category = (item.category ?? '').trim();
+                      final subcategory = (item.subcategory ?? '').trim();
+                      final cuisine = (item.cuisine ?? '').trim();
+                      final expiry = item.expiryDate;
+
+                      final taxonomyLabel = () {
+                        if (category.isEmpty && subcategory.isEmpty) return 'Category: Uncategorized';
+                        if (category.isNotEmpty && subcategory.isNotEmpty) {
+                          return 'Category: ${_prettyPantryToken(category)} / ${_prettyPantryToken(subcategory)}';
+                        }
+                        if (category.isNotEmpty) return 'Category: ${_prettyPantryToken(category)}';
+                        return 'Category: ${_prettyPantryToken(subcategory)}';
+                      }();
+
+                      final metaParts = <String>[
+                        taxonomyLabel,
+                        'Expiry: ${expiry == null ? '—' : _formatPantryDate(expiry)}',
+                        if (cuisine.isNotEmpty) 'Cuisine: ${_prettyPantryToken(cuisine)}',
+                      ];
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(item.displayLabel, style: theme.textTheme.titleMedium),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${_formatPantryQty(item.quantity)} ${item.unit} • ${_prettyPantryToken(item.state)}',
+                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            metaParts.join(' • '),
+                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],

@@ -1,15 +1,13 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
 import '../services/api_client.dart';
 import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
+import '../services/shopping_list_storage.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/pro_paywall_sheet.dart';
@@ -38,7 +36,7 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
   bool _approving = false;
   String? _error;
 
-  static const _shoppingListPrefsKey = 'savo.shopping_list.latest';
+  // Stored via ShoppingListStorage.
 
   @override
   void initState() {
@@ -64,37 +62,7 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
     return sum > 0 ? sum : 1;
   }
 
-  List<Map<String, dynamic>> _mergeShoppingListItems(List<Map<String, dynamic>> raw) {
-    final Map<String, Map<String, dynamic>> merged = {};
-    for (final item in raw) {
-      final name = (item['canonical_name'] ?? item['ingredient'] ?? item['name'] ?? '').toString().trim();
-      final unit = (item['unit'] ?? '').toString().trim();
-      final amount = item['amount'] ?? item['quantity'];
-      final key = '${name.toLowerCase()}|${unit.toLowerCase()}';
 
-      final num? qty = amount is num ? amount : num.tryParse(amount?.toString() ?? '');
-      if (!merged.containsKey(key)) {
-        merged[key] = {
-          'canonical_name': name.isEmpty ? 'Item' : name,
-          'amount': qty ?? amount,
-          'unit': unit,
-        };
-      } else {
-        final existing = merged[key]!;
-        final existingAmount = existing['amount'];
-        final num? existingQty = existingAmount is num ? existingAmount : num.tryParse(existingAmount?.toString() ?? '');
-        if (existingQty != null && qty != null) {
-          existing['amount'] = existingQty + qty;
-        }
-      }
-    }
-    return merged.values.toList();
-  }
-
-  Future<void> _persistShoppingList(List<dynamic> items) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_shoppingListPrefsKey, json.encode(items));
-  }
 
   Future<void> _approveMenu() async {
     if (_approving) return;
@@ -170,8 +138,8 @@ class _GeneratedMenuScreenState extends State<GeneratedMenuScreen> {
         return;
       }
 
-      final merged = _mergeShoppingListItems(combined);
-      await _persistShoppingList(merged);
+      // Merge into the existing cart/list (never overwrite).
+      await ShoppingListStorage.mergeAndSaveIncoming(combined);
 
       fireAndForget(MetricsService.instance.recordWorkflowStep('PlanParty', 'Approve'));
 

@@ -233,8 +233,10 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
   Future<void> _generateDailyPlan() async {
     if (_generating) return;
 
+    final isRegenerate = _latest != null;
+
     // Free tier: allow generating, but limit regenerates.
-    if (_latest != null) {
+    if (isRegenerate) {
       final gate = await EntitlementsService.instance.tryConsumeRegenerate();
       if (!gate.allowed && mounted) {
         await showProPaywallSheet(
@@ -268,7 +270,8 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
       final body = <String, dynamic>{
         'time_available_minutes': 60,
         'servings': 4,
-        'date': _todayIsoDate(),
+        // Backend expects current_date (YYYY-MM-DD) for daily plan caching/variety.
+        'current_date': _todayIsoDate(),
       };
 
       if (_includeInactiveInventory) {
@@ -293,10 +296,86 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
         body['measurement_system'] = measurementSystem.trim();
       }
 
-      // Prefer cached daily plans when available for reliability (especially on web).
-      final response = await apiClient.post('/plan/daily', body);
+      // Use cache for first generate; force regeneration when user taps Regenerate.
+      final endpoint = isRegenerate ? '/plan/daily?force_regenerate=true' : '/plan/daily';
+      final response = await apiClient.post(endpoint, body);
       if (!mounted) return;
 
+      final plan = MenuPlanResponse.fromJson(response);
+      setState(() {
+        _latest = plan;
+        _generating = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _generating = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Map<String, dynamic> _buildDailyPlanRequestBody(ProfileState profileState) {
+    final body = <String, dynamic>{
+      'time_available_minutes': 60,
+      'servings': 4,
+      // Backend expects current_date (YYYY-MM-DD) for daily plan caching/variety.
+      'current_date': _todayIsoDate(),
+    };
+
+    if (_includeInactiveInventory) {
+      body['include_inactive_inventory'] = true;
+    }
+
+    final preferred = profileState.favoriteCuisines;
+    if (preferred.isNotEmpty) {
+      body['cuisine_preferences'] = preferred;
+    }
+
+    final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+        ? profileState.preferredLanguage!.trim()
+        : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+            ? profileState.primaryLanguage!.trim()
+            : 'en';
+    body['output_language'] = outputLang;
+    body['output_languages'] = outputLang == 'en' ? ['en'] : ['en', outputLang];
+
+    final measurementSystem = profileState.measurementSystem;
+    if (measurementSystem != null && measurementSystem.trim().isNotEmpty) {
+      body['measurement_system'] = measurementSystem.trim();
+    }
+
+    return body;
+  }
+
+  Future<void> _swapDailyPlanOptions() async {
+    if (_generating) return;
+    if (_latest == null) return;
+
+    // Swap is meant to fetch fresh alternatives, not just cycle existing cards.
+    final gate = await EntitlementsService.instance.tryConsumeSwap();
+    if (!gate.allowed && mounted) {
+      await showProPaywallSheet(
+        context,
+        title: 'Upgrade to SAVO Pro',
+        ctaLabel: 'Upgrade for unlimited swaps',
+        reason: 'You\'ve used today\'s free swap. Pro unlocks unlimited swaps/regenerates so you can refine plans faster.',
+        trigger: 'swap_limit',
+      );
+      return;
+    }
+
+    setState(() {
+      _generating = true;
+      _error = null;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final body = _buildDailyPlanRequestBody(profileState);
+      final response = await apiClient.post('/plan/daily?force_regenerate=true', body);
+      if (!mounted) return;
       final plan = MenuPlanResponse.fromJson(response);
       setState(() {
         _latest = plan;
@@ -328,6 +407,7 @@ class _DailyPlanScreenState extends State<DailyPlanScreen> {
                 menuPlan: _latest!,
                 planType: 'daily',
                 showScaffold: false,
+                onSwapRequested: _generating ? null : _swapDailyPlanOptions,
               )
             : Center(
                 child: Padding(

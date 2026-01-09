@@ -268,18 +268,21 @@ class _LandingScreenState extends State<LandingScreen> {
                       icon: Icons.camera_alt,
                       title: 'Scan Ingredients',
                       description: 'Snap a photo to add items to your pantry fast.',
+                      imageUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=600',
                     ),
                     const SizedBox(height: AppSpacing.md),
                     _FeatureCard(
                       icon: Icons.auto_awesome,
                       title: 'Smart meal plans',
                       description: 'Daily, weekly, or party plans tailored to you.',
+                      imageUrl: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=600',
                     ),
                     const SizedBox(height: AppSpacing.md),
                     _FeatureCard(
                       icon: Icons.savings,
                       title: 'Reduce waste',
                       description: 'Prioritize expiring items and plan with leftovers.',
+                      imageUrl: 'https://images.unsplash.com/photo-1606914501449-5a96b6ce24ca?w=600',
                     ),
                     const SizedBox(height: AppSpacing.xl),
                     
@@ -302,11 +305,13 @@ class _FeatureCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String description;
+  final String? imageUrl;
 
   const _FeatureCard({
     required this.icon,
     required this.title,
     required this.description,
+    this.imageUrl,
   });
 
   @override
@@ -358,6 +363,19 @@ class _FeatureCard extends StatelessWidget {
               ],
             ),
           ),
+          if (imageUrl != null && imageUrl!.trim().isNotEmpty) ...[
+            const SizedBox(width: AppSpacing.lg),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              child: Image.network(
+                imageUrl!,
+                width: 72,
+                height: 72,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -110,6 +110,15 @@ def _drop_none_values(data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in data.items() if v is not None}
 
 
+def _drop_none_values_except(data: Dict[str, Any], keep_null_keys: set[str]) -> Dict[str, Any]:
+    """Drop None values but keep explicit nulls for selected keys.
+
+    This allows PATCH semantics to clear nullable columns (e.g., expiry_date) when
+    the client intentionally sends null.
+    """
+    return {k: v for k, v in data.items() if v is not None or k in keep_null_keys}
+
+
 # ============================================================================
 # USER PROFILE OPERATIONS
 # ============================================================================
@@ -422,6 +431,12 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
                 break
             except APIError as e:
                 missing = _extract_missing_column_name(e)
+                if missing == "expiry_date":
+                    logger.error(
+                        "Database schema is missing inventory_items.expiry_date. "
+                        "Apply migrations before using expiry date features."
+                    )
+                    raise
                 if missing and missing in item_data:
                     item_data.pop(missing, None)
                     continue
@@ -449,7 +464,23 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
             if cuisine:
                 item_data["cuisine"] = cuisine
 
-        item_data = _drop_none_values(item_data)
+        # Preserve explicit nulls for nullable columns so clients can clear them.
+        item_data = _drop_none_values_except(
+            item_data,
+            {
+                "purchase_date",
+                "expiry_date",
+                "notes",
+                "category",
+                "subcategory",
+                "cuisine",
+                "barcode",
+                "product_name",
+                "brand",
+                "image_url",
+                "package_size_text",
+            },
+        )
 
         for _ in range(5):
             try:
@@ -457,6 +488,12 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
                 break
             except APIError as e:
                 missing = _extract_missing_column_name(e)
+                if missing == "expiry_date":
+                    logger.error(
+                        "Database schema is missing inventory_items.expiry_date. "
+                        "Apply migrations before using expiry date features."
+                    )
+                    raise
                 if missing and missing in item_data:
                     item_data.pop(missing, None)
                     continue

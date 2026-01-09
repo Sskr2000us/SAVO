@@ -424,6 +424,22 @@ async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_
     cache: dict[str, list[dict[str, Any]]] = {}
     semaphore = asyncio.Semaphore(4)
 
+    def _opt_recipe_name(opt: dict[str, Any]) -> str:
+        """Best-effort extraction of a recipe name across schema variants."""
+        if not isinstance(opt, dict):
+            return ""
+        for k in (
+            "recipe_name",
+            "name",
+            "title",
+            "recipe_title",
+            "recipeTitle",
+        ):
+            name = _recipe_name_text(opt.get(k))
+            if name:
+                return name
+        return ""
+
     async def _enrich_recipe_opt(opt: dict[str, Any], *, cuisine_fallback: str) -> None:
         try:
             if not isinstance(opt, dict):
@@ -431,7 +447,7 @@ async def _enrich_plan_payload_with_youtube_references(payload: Any, *, max_per_
             if isinstance(opt.get("youtube_references"), list) and opt.get("youtube_references"):
                 return
 
-            name = _recipe_name_text(opt.get("recipe_name"))
+            name = _opt_recipe_name(opt)
             if not name:
                 return
 
@@ -2284,6 +2300,7 @@ def _generate_fallback_party_plan(
     household: Dict[str, Any],
     members: List[Dict[str, Any]],
     guest_count: int,
+    variety_seed: str = "",
 ) -> Dict[str, Any]:
     from datetime import datetime
 
@@ -2295,6 +2312,24 @@ def _generate_fallback_party_plan(
     inv_items = [i for i in (inventory or []) if getattr(i, "inventory_id", None) and getattr(i, "canonical_name", None)]
     # Keep a wider window so deterministic selection can avoid branded/packaged items
     # and still find sensible ingredients for each course.
+    seed_source = (variety_seed or "").strip() or datetime.utcnow().isoformat()
+    try:
+        seed_tag = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:8]
+        shift = int(seed_tag, 16) % 3
+    except Exception:
+        seed_tag = "00000000"
+        shift = 0
+
+    # Shuffle candidate inventory so fallback menus change between regenerations.
+    try:
+        import random
+
+        rnd = random.Random(int(seed_tag, 16))
+        inv_items = list(inv_items)
+        rnd.shuffle(inv_items)
+    except Exception:
+        inv_items = list(inv_items)
+
     inv_items = inv_items[:40]
 
     inv_names_lower: list[str] = []
@@ -2482,49 +2517,71 @@ def _generate_fallback_party_plan(
     def _dish_name_en(*, cuisine: str, course_label: str, option_idx: int) -> str:
         c = (cuisine or "").strip().lower()
         cl = (course_label or "").strip().lower()
-        idx = 1 if int(option_idx or 1) <= 1 else 2
+        try:
+            raw_idx = int(option_idx or 1)
+        except Exception:
+            raw_idx = 1
+        choice = (max(1, raw_idx) - 1 + shift) % 3
 
         if c in {"indian", "punjabi", "gujarati", "south indian", "north indian"}:
             if "main" in cl:
                 if _has_any("paneer"):
-                    return "Paneer Butter Masala" if idx == 1 else "Paneer Biryani"
+                    opts = ["Paneer Butter Masala", "Paneer Biryani", "Palak Paneer"]
+                    return opts[choice]
                 if _has_any("chicken"):
-                    return "Chicken Curry" if idx == 1 else "Chicken Biryani"
+                    opts = ["Chicken Curry", "Chicken Biryani", "Chicken Tikka Masala"]
+                    return opts[choice]
                 if _has_any("lentil", "dal", "chana", "chickpea"):
-                    return "Chana Masala" if idx == 1 else "Dal Tadka with Jeera Rice"
-                return "Vegetable Pulao" if idx == 1 else "Mixed Vegetable Curry"
+                    opts = ["Chana Masala", "Dal Tadka with Jeera Rice", "Rajma Masala"]
+                    return opts[choice]
+                opts = ["Vegetable Pulao", "Mixed Vegetable Curry", "Vegetable Korma"]
+                return opts[choice]
 
             if "side" in cl:
                 if _has_any("yogurt", "curd"):
-                    return "Cucumber Raita" if idx == 1 else "Boondi Raita"
+                    opts = ["Cucumber Raita", "Boondi Raita", "Mint Raita"]
+                    return opts[choice]
                 if _has_any("cucumber", "tomato", "onion"):
-                    return "Kachumber Salad" if idx == 1 else "Onion-Tomato Salad"
-                return "Mint Chutney" if idx == 1 else "Spiced Roasted Vegetables"
+                    opts = ["Kachumber Salad", "Onion-Tomato Salad", "Cucumber-Tomato Salad"]
+                    return opts[choice]
+                opts = ["Mint Chutney", "Spiced Roasted Vegetables", "Kachumber Salad"]
+                return opts[choice]
 
             if "dess" in cl or "sweet" in cl:
                 if _has_any("milk") and _has_any("rice"):
-                    return "Kheer (Rice Pudding)" if idx == 1 else "Kesar Kheer"
+                    opts = ["Kheer (Rice Pudding)", "Kesar Kheer", "Vermicelli Kheer"]
+                    return opts[choice]
                 if _has_any("carrot"):
-                    return "Gajar Halwa" if idx == 1 else "Carrot Kheer"
+                    opts = ["Gajar Halwa", "Carrot Kheer", "Gajar Halwa Cups"]
+                    return opts[choice]
                 if _has_any("yogurt"):
-                    return "Sweet Yogurt Parfait" if idx == 1 else "Mango Lassi Bowl"
-                return "Fruit Chaat" if idx == 1 else "Coconut Ladoo"
+                    opts = ["Sweet Yogurt Parfait", "Mango Lassi Bowl", "Saffron Yogurt Parfait"]
+                    return opts[choice]
+                opts = ["Fruit Chaat", "Coconut Ladoo", "Dates-Nuts Ladoo"]
+                return opts[choice]
 
             if "appet" in cl or "starter" in cl:
                 if _has_any("paneer"):
-                    return "Paneer Tikka Skewers" if idx == 1 else "Paneer Pakora"
+                    opts = ["Paneer Tikka Skewers", "Paneer Pakora", "Paneer Chilli Bites"]
+                    return opts[choice]
                 if _has_any("corn"):
-                    return "Masala Corn" if idx == 1 else "Corn Chaat"
-                return "Cucumber Chaat" if idx == 1 else "Spiced Roasted Chickpeas"
+                    opts = ["Masala Corn", "Corn Chaat", "Corn Tikki"]
+                    return opts[choice]
+                opts = ["Cucumber Chaat", "Spiced Roasted Chickpeas", "Aloo Tikki"]
+                return opts[choice]
 
         # Generic fallback (non-cuisine-specific)
         if "dess" in cl or "sweet" in cl:
-            return "Simple Dessert" if idx == 1 else "Fresh Fruit Bowl"
+            opts = ["Simple Dessert", "Fresh Fruit Bowl", "Quick Sweet Treat"]
+            return opts[choice]
         if "side" in cl:
-            return "Quick Side Salad" if idx == 1 else "Herbed Yogurt Dip"
+            opts = ["Quick Side Salad", "Herbed Yogurt Dip", "Roasted Veg Side"]
+            return opts[choice]
         if "main" in cl:
-            return "Hearty Main Course" if idx == 1 else "One-Pot Main Dish"
-        return "Party Appetizer" if idx == 1 else "Party Starter"
+            opts = ["Hearty Main Course", "One-Pot Main Dish", "Family-Style Main"]
+            return opts[choice]
+        opts = ["Party Appetizer", "Party Starter", "Snack Platter"]
+        return opts[choice]
 
     def _cooking_method_for(dish_name: str, course_label: str) -> str:
         name_l = (dish_name or "").strip().lower()
@@ -2620,7 +2677,7 @@ def _generate_fallback_party_plan(
         prep = max(3, int(total * 0.35))
         cook = max(5, total - prep)
         difficulty = "easy" if total <= 30 else ("medium" if total <= 60 else "hard")
-        seed = f"{course_label}:{option_idx}:{recipe_id}"
+        seed = f"{seed_source}:{course_label}:{option_idx}:{recipe_id}"
         dish_name = _dish_name_en(cuisine=cuisine, course_label=course_label, option_idx=option_idx)
         ings = _ingredients_used(seed, course_label, max_n=6)
         cooking_method = _cooking_method_for(dish_name, course_label)
@@ -2665,13 +2722,15 @@ def _generate_fallback_party_plan(
 
     courses = []
     # Keep the same coarse-grained party structure the UI expects.
+    short = seed_tag[:6]
     for label in ("Mains", "Sides", "Desserts"):
         courses.append(
             {
                 "course_header": label,
                 "recipe_options": [
-                    _recipe(f"fallback_party_{label.lower()}_1", label, 1, 35),
-                    _recipe(f"fallback_party_{label.lower()}_2", label, 2, 40),
+                    _recipe(f"fallback_party_{label.lower()}_{short}_1", label, 1, 35),
+                    _recipe(f"fallback_party_{label.lower()}_{short}_2", label, 2, 40),
+                    _recipe(f"fallback_party_{label.lower()}_{short}_3", label, 3, 45),
                 ],
             }
         )
@@ -2702,6 +2761,7 @@ def _generate_fallback_party_plan(
         "error_message": None,
         "_generated_at": datetime.utcnow().isoformat(),
         "_fallback_mode": True,
+        "_fallback_seed": seed_source,
     }
 
 
@@ -4624,6 +4684,16 @@ async def post_daily(
             payload["_include_inactive_inventory"] = include_inactive_inv
             payload = _coerce_menu_headers(payload)
 
+            # Best-effort: attach YouTube references / image URLs so UX matches normal plans.
+            try:
+                payload = await _enrich_plan_payload_with_youtube_references(payload)
+            except Exception:
+                pass
+            try:
+                payload = await _enrich_plan_payload_with_image_urls(payload, request=request)
+            except Exception:
+                pass
+
             # Persist like a normal plan.
             try:
                 await create_meal_plan(
@@ -5412,6 +5482,7 @@ async def post_party(
             household=household,
             members=normalized_members,
             guest_count=getattr(req.party_settings, "guest_count", 6) or 6,
+            variety_seed=str(uuid4()),
         )
 
     # Enforce a recent-recipe cooldown so users see variety across parties.

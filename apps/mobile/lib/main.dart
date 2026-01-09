@@ -10,6 +10,7 @@ import 'screens/cook_now_entry_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/pantry_update_entry_screen.dart';
+import 'screens/shopping_list_screen.dart';
 import 'screens/onboarding/onboarding_coordinator.dart';
 import 'screens/onboarding/login_screen.dart';
 import 'screens/account_settings_screen.dart';
@@ -149,6 +150,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     HomeScreen(),
     CookNowEntryScreen(),
     PlanScreen(),
+    ShoppingListScreen(),
     InventoryScreen(),
     UserProfileScreen(),
   ];
@@ -181,6 +183,11 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             icon: Icon(Icons.restaurant_menu_outlined),
             selectedIcon: Icon(Icons.restaurant_menu),
             label: 'Plan',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.local_grocery_store_outlined),
+            selectedIcon: Icon(Icons.local_grocery_store),
+            label: 'Cart',
           ),
           NavigationDestination(
             icon: Icon(Icons.inventory_2_outlined),

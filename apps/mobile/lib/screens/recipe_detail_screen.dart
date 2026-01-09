@@ -1,13 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
 import '../services/scanning_service.dart';
 import '../services/metrics_service.dart';
+import '../services/shopping_list_storage.dart';
 import '../services/weekly_cook_streak_service.dart';
 import '../models/planning.dart';
 import '../models/profile_state.dart';
@@ -819,9 +817,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       // Persist latest shopping list for the Shopping List screen
       try {
         if (result['success'] == true) {
-          final prefs = await SharedPreferences.getInstance();
           final list = result['shopping_list'] ?? [];
-          await prefs.setString('savo.shopping_list.latest', jsonEncode(list));
+          await ShoppingListStorage.mergeAndSaveIncoming(List<dynamic>.from(list));
         }
       } catch (_) {
         // Best-effort only

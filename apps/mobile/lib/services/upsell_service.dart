@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -7,6 +5,7 @@ import '../screens/planning_results_screen.dart';
 import '../screens/shopping_list_screen.dart';
 import '../services/entitlements_service.dart';
 import '../services/saved_recipes_local_service.dart';
+import '../services/shopping_list_storage.dart';
 import '../widgets/pro_paywall_sheet.dart';
 
 class UpsellService {
@@ -117,8 +116,7 @@ class UpsellService {
     // Persist a shopping list immediately (so user sees instant value).
     final items = SavedRecipesLocalService.instance.buildShoppingListFromRecipes(saved.take(3).toList());
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('savo.shopping_list.latest', jsonEncode(items));
+      await ShoppingListStorage.mergeAndSaveIncoming(items);
     } catch (_) {
       // ignore
     }

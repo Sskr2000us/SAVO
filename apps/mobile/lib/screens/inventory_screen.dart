@@ -651,13 +651,46 @@ class _InventoryScreenState extends State<InventoryScreen> {
               final total = group.fold<double>(0, (sum, i) => sum + i.quantity);
               final sameUnit = group.every((i) => i.unit == group.first.unit);
               final mergeable = group.every((i) => i.unit == group.first.unit && i.storage == group.first.storage && i.state == group.first.state);
+
+              final category = (group.first.category ?? '').trim();
+              final subcategory = (group.first.subcategory ?? '').trim();
+              final cuisine = (group.first.cuisine ?? '').trim();
+              final expiry = group
+                  .map((i) => i.expiryDate)
+                  .whereType<DateTime>()
+                  .fold<DateTime?>(null, (min, d) => min == null || d.isBefore(min) ? d : min);
+
+              String formatDate(DateTime d) =>
+                  '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+              final taxonomyLabel = () {
+                if (category.isEmpty && subcategory.isEmpty) return 'Category: Uncategorized';
+                if (category.isNotEmpty && subcategory.isNotEmpty) {
+                  return 'Category: ${_prettyName(category)} / ${_prettyName(subcategory)}';
+                }
+                if (category.isNotEmpty) return 'Category: ${_prettyName(category)}';
+                return 'Category: ${_prettyName(subcategory)}';
+              }();
+
               final subtitleParts = <String>[
                 '${group.length} items',
                 if (sameUnit) '${total.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')} ${group.first.unit}',
               ];
+              final metaParts = <String>[
+                taxonomyLabel,
+                'Expiry: ${expiry == null ? '—' : formatDate(expiry)}',
+                if (cuisine.isNotEmpty) 'Cuisine: ${_prettyName(cuisine)}',
+              ];
               return ListTile(
                 title: Text(name),
-                subtitle: Text(subtitleParts.join(' • ')),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(subtitleParts.join(' • ')),
+                    const SizedBox(height: 2),
+                    Text(metaParts.join(' • '), style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
                 trailing: TextButton(
                   onPressed: _mergingDuplicates || !mergeable
                       ? null
@@ -736,7 +769,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     onChanged: (_) {
                       setModalState(() {});
 
-                      if (!cuisineTouched && (cuisine == null || cuisine.trim().isEmpty)) {
+                      if (!cuisineTouched && (cuisine?.trim().isEmpty ?? true)) {
                         final suggested = _suggestCuisineFromName(nameController.text);
                         if (suggested != null) {
                           cuisine = suggested;
@@ -903,9 +936,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               setModalState(() {
                                 expiry = picked;
                               });
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Expiry date selected. Tap Save to persist.')),
+                              );
                             }
                           },
-                          child: const Text('Set'),
+                          child: Text(expiry == null ? 'Pick' : 'Change'),
                         ),
                       ],
                     ),
@@ -1027,7 +1064,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       controller: nameController,
                       decoration: const InputDecoration(labelText: 'Name'),
                       onChanged: (_) {
-                        if (!cuisineTouched && (cuisine == null || cuisine!.trim().isEmpty)) {
+                        if (!cuisineTouched && (cuisine?.trim().isEmpty ?? true)) {
                           final suggested = _suggestCuisineFromName(nameController.text);
                           if (suggested != null) {
                             setDialogState(() {
@@ -1618,11 +1655,35 @@ class _InventoryCard extends StatelessWidget {
         .replaceAll(RegExp(r'\.$'), '');
   }
 
+  String _formatDate(DateTime d) {
+    return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final freshness = item.freshnessDaysRemaining;
     final showExpiryChip = freshness != null;
+
+    final category = (item.category ?? '').trim();
+    final subcategory = (item.subcategory ?? '').trim();
+    final cuisine = (item.cuisine ?? '').trim();
+    final expiry = item.expiryDate;
+
+    final taxonomyLabel = () {
+      if (category.isEmpty && subcategory.isEmpty) return 'Category: Uncategorized';
+      if (category.isNotEmpty && subcategory.isNotEmpty) {
+        return 'Category: ${prettyName(category)} / ${prettyName(subcategory)}';
+      }
+      if (category.isNotEmpty) return 'Category: ${prettyName(category)}';
+      return 'Category: ${prettyName(subcategory)}';
+    }();
+
+    final metaParts = <String>[
+      taxonomyLabel,
+      'Expiry: ${expiry == null ? '—' : _formatDate(expiry)}',
+      if (cuisine.isNotEmpty) 'Cuisine: ${prettyName(cuisine)}',
+    ];
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1654,8 +1715,13 @@ class _InventoryCard extends StatelessWidget {
               ),
           ],
         ),
-        subtitle: Text(
-          '${_formatQty(item.quantity)} ${item.unit} • ${item.storage}',
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'),
+            const SizedBox(height: 2),
+            Text(metaParts.join(' • '), style: theme.textTheme.bodySmall),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,

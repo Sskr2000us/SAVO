@@ -23,6 +23,25 @@ workflows:
           cd apps/mobile
           flutter --version
           flutter pub get
+      - name: Sanity check source snapshot
+        script: |
+          cd apps/mobile
+          echo "Commit: ${CM_COMMIT:-unknown}"
+          git rev-parse HEAD || true
+          echo "--- inventory_screen.dart snippet (lines 720-790) ---"
+          sed -n '720,790p' lib/screens/inventory_screen.dart || true
+          echo "--- grep for unsafe cuisine.trim() ---"
+          if grep -nE "cuisine\\.trim\\(" lib/screens/inventory_screen.dart; then
+            echo "ERROR: Found unsafe cuisine.trim() usage (String? cannot call trim)."
+            exit 1
+          else
+            echo "OK: No unsafe cuisine.trim() patterns found."
+          fi
+      - name: Clean Flutter + iOS pods
+        script: |
+          cd apps/mobile
+          flutter clean
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
       - name: Build iOS (no codesign)
         script: |
           cd apps/mobile
@@ -69,6 +88,27 @@ workflows:
           cd apps/mobile
           flutter --version
           flutter pub get
+
+      - name: Sanity check source snapshot
+        script: |
+          cd apps/mobile
+          echo "Commit: ${CM_COMMIT:-unknown}"
+          git rev-parse HEAD || true
+          echo "--- inventory_screen.dart snippet (lines 720-790) ---"
+          sed -n '720,790p' lib/screens/inventory_screen.dart || true
+          echo "--- grep for unsafe cuisine.trim() ---"
+          if grep -nE "cuisine\\.trim\\(" lib/screens/inventory_screen.dart; then
+            echo "ERROR: Found unsafe cuisine.trim() usage (String? cannot call trim)."
+            exit 1
+          else
+            echo "OK: No unsafe cuisine.trim() patterns found."
+          fi
+
+      - name: Clean Flutter + iOS pods
+        script: |
+          cd apps/mobile
+          flutter clean
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
 
       - name: Apply signing settings
         script: |

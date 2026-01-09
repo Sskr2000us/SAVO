@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
 import '../services/plan_share_service.dart';
 import '../services/cuisine_preference_service.dart';
@@ -11,6 +9,7 @@ import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../services/saved_recipes_local_service.dart';
 import '../services/upsell_service.dart';
+import '../services/shopping_list_storage.dart';
 import '../models/planning.dart';
 import '../models/cuisine.dart';
 import '../config/app_config.dart';
@@ -23,12 +22,14 @@ class PlanningResultsScreen extends StatefulWidget {
   final MenuPlanResponse menuPlan;
   final String planType; // 'daily', 'weekly', 'party'
   final bool showScaffold;
+  final Future<void> Function()? onSwapRequested;
 
   const PlanningResultsScreen({
     super.key,
     required this.menuPlan,
     required this.planType,
     this.showScaffold = true,
+    this.onSwapRequested,
   });
 
   @override
@@ -41,8 +42,6 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   String? _selectedCuisine;
   bool _buildingShoppingList = false;
   bool _sharingPlan = false;
-
-  static const _shoppingListPrefsKey = 'savo.shopping_list.latest';
 
   Future<void> _sharePlan() async {
     if (_sharingPlan) return;
@@ -185,37 +184,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
     return sum > 0 ? sum : 1;
   }
 
-  Future<void> _persistShoppingList(List<dynamic> items) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_shoppingListPrefsKey, json.encode(items));
-  }
 
-  List<Map<String, dynamic>> _mergeShoppingListItems(List<Map<String, dynamic>> raw) {
-    final Map<String, Map<String, dynamic>> merged = {};
-    for (final item in raw) {
-      final name = (item['canonical_name'] ?? item['ingredient'] ?? item['name'] ?? '').toString().trim();
-      final unit = (item['unit'] ?? '').toString().trim();
-      final amount = item['amount'] ?? item['quantity'];
-      final key = '${name.toLowerCase()}|${unit.toLowerCase()}';
-
-      final num? qty = amount is num ? amount : num.tryParse(amount?.toString() ?? '');
-      if (!merged.containsKey(key)) {
-        merged[key] = {
-          'canonical_name': name.isEmpty ? 'Item' : name,
-          'amount': qty ?? amount,
-          'unit': unit,
-        };
-      } else {
-        final existing = merged[key]!;
-        final existingAmount = existing['amount'];
-        final num? existingQty = existingAmount is num ? existingAmount : num.tryParse(existingAmount?.toString() ?? '');
-        if (existingQty != null && qty != null) {
-          existing['amount'] = existingQty + qty;
-        }
-      }
-    }
-    return merged.values.toList();
-  }
 
   Future<void> _createShoppingListFromPlan() async {
     if (_buildingShoppingList) return;
@@ -287,8 +256,8 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
         return;
       }
 
-      final merged = _mergeShoppingListItems(combined);
-      await _persistShoppingList(merged);
+      // Merge into the existing cart/list (never overwrite).
+      await ShoppingListStorage.mergeAndSaveIncoming(combined);
 
       if (!mounted) return;
       Navigator.push(
@@ -604,16 +573,30 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
         ? (course.recipeOptions.isNotEmpty ? [course.recipeOptions.first] : <Recipe>[])
         : course.recipeOptions;
 
+    final canSwap = widget.planType == 'daily' && widget.onSwapRequested != null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            course.courseHeader,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  course.courseHeader,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
+              ),
+              if (canSwap)
+                IconButton(
+                  tooltip: 'Swap for new options',
+                  icon: const Icon(Icons.swap_horiz),
+                  onPressed: widget.onSwapRequested,
+                ),
+            ],
           ),
         ),
         SizedBox(
