@@ -4943,6 +4943,11 @@ async def post_daily(
     if isinstance(result, dict) and result.get("status") == "ok":
         result = _tighten_ingredients_used_in_payload(result)
 
+    # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
+    # Do this BEFORE vetting/catalog fill so we can refill back up to the minimum.
+    if isinstance(result, dict) and result.get("status") == "ok":
+        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=12)
+
     # Enforce: recipes must be real cuisine dishes, and major ingredients must match pantry.
     # When needed, fill missing options from the curated recipe catalog.
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -4956,14 +4961,10 @@ async def post_daily(
                 result,
                 profile_dict=profile_dict,
                 pantry_canonical_names=pantry_set,
-                min_options_per_course=1,
+                min_options_per_course=2,
             )
         except Exception:
             pass
-
-    # Enforce a recent-recipe cooldown so CookNow doesn't repeat the last few cooks.
-    if isinstance(result, dict) and result.get("status") == "ok":
-        result = _exclude_recent_recipes_from_payload(result, db_history, cooldown_last_n=12)
 
     # Persist inventory snapshot hash inside the stored payload (response model ignores unknown keys).
     if isinstance(result, dict) and result.get("status") == "ok":
@@ -5163,11 +5164,12 @@ async def get_latest_plan(
             for i in _db_inventory_to_models(db_inventory)
             if getattr(i, "canonical_name", None)
         }
+        min_opts = 2 if str(plan_type or "").strip().lower() == "daily" else 1
         payload = _vet_and_filter_menu_payload(
             payload,
             profile_dict=profile_dict,
             pantry_canonical_names=pantry_set,
-            min_options_per_course=1,
+            min_options_per_course=min_opts,
         )
     except Exception:
         pass
