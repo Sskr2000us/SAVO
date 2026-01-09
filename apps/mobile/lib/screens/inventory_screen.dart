@@ -44,6 +44,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final key = _canonicalizeName(rawName);
     if (key.isEmpty) return null;
 
+    final tokens = key.split('_').where((t) => t.trim().isNotEmpty).toList(growable: false);
+
+    bool _hasToken(String t) => tokens.contains(t);
+    bool _hasAnyToken(Set<String> any) => tokens.any(any.contains);
+    bool _startsWithAny(Set<String> prefixes) => prefixes.any((p) => key.startsWith(p));
+
     // Indian
     const indian = <String>{
       'paneer',
@@ -78,6 +84,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
     };
     if (indian.contains(key)) return 'indian';
 
+    // Common variants: "paneer cubes", "urad dal", "garam masala" etc.
+    if (_startsWithAny({'paneer'}) || _hasToken('paneer')) return 'indian';
+    if (_hasAnyToken({'toor', 'moong', 'masoor', 'urad', 'chana'}) && _hasToken('dal')) return 'indian';
+    if (_hasToken('garam') && _hasToken('masala')) return 'indian';
+    if (_hasToken('sambar') && _hasToken('powder')) return 'indian';
+    if (_hasToken('rasam') && _hasToken('powder')) return 'indian';
+    if (_hasToken('biryani') && _hasToken('masala')) return 'indian';
+    if (_hasToken('tandoori') && _hasToken('masala')) return 'indian';
+    if (_hasToken('chaat') && _hasToken('masala')) return 'indian';
+    if (_hasToken('kitchen') && _hasToken('king')) return 'indian';
+
     // Italian
     const italian = <String>{
       'parmesan',
@@ -106,6 +123,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
     };
     if (italian.contains(key)) return 'italian';
 
+    // Common variants: "parmigiano reggiano", "parmesan grated", "pasta penne".
+    if (_hasAnyToken({'parmigiano', 'reggiano'})) return 'italian';
+    if (_startsWithAny({'parmesan'}) || _hasToken('parmesan')) return 'italian';
+    if (_hasToken('pasta') && _hasAnyToken({'spaghetti', 'penne', 'fusilli', 'farfalle', 'rigatoni', 'linguine', 'fettuccine', 'tagliatelle', 'orzo', 'gnocchi'})) {
+      return 'italian';
+    }
+
     // Mexican
     const mexican = <String>{
       'masa_harina',
@@ -131,6 +155,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
     };
     if (mexican.contains(key)) return 'mexican';
 
+    // Common variants: "corn tortilla", "tortilla wraps", "chipotle in adobo".
+    if (_hasAnyToken({'tortilla', 'tortillas', 'tostada', 'tostadas'})) return 'mexican';
+    if (_hasToken('masa') && (_hasToken('harina') || _hasToken('corn'))) return 'mexican';
+    if (_hasAnyToken({'jalapeno', 'tomatillo', 'chipotle', 'guajillo', 'ancho'})) return 'mexican';
+    if (_hasToken('adobo') && _hasToken('chipotle')) return 'mexican';
+
     // Middle East / MENA
     const middleEast = <String>{
       'tahini',
@@ -150,6 +180,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'rose_water',
     };
     if (middleEast.contains(key)) return 'middle_east';
+
+    // Common variants: "za'atar", "bulgur wheat", "falafel frozen".
+    if (_hasAnyToken({'tahini', 'zaatar', 'dukkah', 'baharat', 'sumac', 'labneh', 'halloumi', 'bulgur', 'freekeh', 'harissa'})) {
+      return 'middle_east';
+    }
+    if (_hasToken('falafel')) return 'middle_east';
 
     // South East Asian
     const sea = <String>{
@@ -171,6 +207,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'sticky_rice',
     };
     if (sea.contains(key)) return 'south_east_asian';
+
+    // Common variants: "rice paper wrappers", "fish sauce", "pho noodles".
+    if (_hasAnyToken({'lemongrass', 'galangal'})) return 'south_east_asian';
+    if (_hasToken('fish') && _hasToken('sauce')) return 'south_east_asian';
+    if (_hasToken('rice') && _hasToken('paper')) return 'south_east_asian';
+    if (_hasToken('pho') && _hasAnyToken({'noodles', 'noodle'})) return 'south_east_asian';
+    if (_hasAnyToken({'vermicelli', 'glass'}) && _hasAnyToken({'noodles', 'noodle'})) return 'south_east_asian';
 
     return null;
   }
