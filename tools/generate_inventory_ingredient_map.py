@@ -22,7 +22,10 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_PATH = ROOT / "docs" / "inventory_ingredient_map.v1.json"
+OUT_SQL_PATH = ROOT / "services" / "api" / "migrations" / "012c_inventory_ingredient_map_reference.sql"
 TAXONOMY_PATH = ROOT / "docs" / "inventory_taxonomy.v1.json"
+
+TARGET_COUNT = 1000
 
 
 def _snake_case(value: str) -> str:
@@ -769,12 +772,491 @@ def build_rows() -> List[IngredientRow]:
     for n in ["other"]:
         _add(rows, seen, n, counter, "other", "other")
 
-    # Ensure we land in the requested range.
-    if not (500 <= len(rows) <= 1000):
-        raise SystemExit(f"Expected 500-1000 ingredients, got {len(rows)}. Adjust lists.")
+    # ---------------------------------------------------------------------
+    # GLOBAL CUISINE EXPANSION (IND/ITA/MEX/MENA/SEA/GLOBAL)
+    # Goal: Ensure we have >= TARGET_COUNT diverse ingredients.
+    # ---------------------------------------------------------------------
+
+    # Pantry: expand pasta shapes & variants (Italian + global)
+    pasta_shapes = [
+        "spaghetti",
+        "penne",
+        "fusilli",
+        "farfalle",
+        "rigatoni",
+        "linguine",
+        "fettuccine",
+        "tagliatelle",
+        "angel_hair",
+        "bucatini",
+        "orecchiette",
+        "pappardelle",
+        "cavatappi",
+        "ziti",
+        "rotini",
+        "radiatori",
+        "conchiglie",
+        "gnocchi",
+        "orzo",
+        "ravioli_dry",
+        "tortellini_dry",
+        "lasagna_sheets",
+        "cannelloni",
+        "manicotti",
+    ]
+    pasta_variants = ["", "whole_wheat_", "gluten_free_", "chickpea_", "lentil_"]
+    for shape in pasta_shapes:
+        for prefix in pasta_variants:
+            name = f"{prefix}{shape}_pasta" if not shape.endswith("_sheets") else f"{prefix}{shape}"
+            _add(rows, seen, name, pantry, "grains", "wheat")
+
+    # Pantry: expand rice/noodle staples (South East + global)
+    noodles = [
+        "rice_noodles",
+        "rice_vermicelli",
+        "glass_noodles",
+        "egg_noodles",
+        "soba_noodles",
+        "udon_noodles",
+        "ramen_noodles",
+        "pho_noodles",
+        "instant_noodles",
+        "rice_paper",
+    ]
+    for n in noodles:
+        _add(rows, seen, n, pantry, "grains", "wheat" if "egg_noodles" in n else "rice")
+
+    # Pantry: Middle East grains
+    for n in [
+        "bulgur_fine",
+        "bulgur_coarse",
+        "freekeh",
+        "farro",
+        "couscous_pearl",
+        "barley_pearled",
+    ]:
+        _add(rows, seen, n, pantry, "grains", "other")
+
+    # Pantry: expanded dals/beans (Indian + Mexican + global)
+    for n in [
+        "rajma",
+        "lobia",
+        "chawli",
+        "black_eyed_peas",
+        "fava_beans",
+        "garbanzo_beans",
+        "cannellini_beans",
+        "great_northern_beans",
+        "borlotti_beans",
+        "butter_beans",
+        "split_peas_green",
+        "split_peas_yellow",
+        "matki",
+        "kulthi",
+        "moth_beans",
+        "soy_chunks",
+        "tvp",
+    ]:
+        _add(rows, seen, n, pantry, "pulses", "other")
+
+    # Pantry: expanded whole spices (Indian/Middle East/Global)
+    for n in [
+        "cumin_seeds_whole",
+        "coriander_seeds_whole",
+        "fennel_seeds_whole",
+        "fenugreek_seeds_whole",
+        "mustard_seeds_black",
+        "mustard_seeds_yellow",
+        "sichuan_pepper",
+        "allspice_berries",
+        "juniper_berries",
+        "anise_seeds",
+        "celery_seeds",
+        "caraway_seeds",
+        "ajwain",
+        "kalonji",
+        "poppy_seeds_white",
+        "poppy_seeds_black",
+        "black_sesame_seeds",
+        "white_sesame_seeds",
+        "dried_lime",
+    ]:
+        _add(rows, seen, n, pantry, "spices", "whole")
+
+    # Pantry: expanded powdered spices (Mexican/Italian/Middle East/SEA)
+    for n in [
+        "turmeric_ground",
+        "sumac_powder",
+        "smoked_paprika",
+        "chipotle_powder",
+        "ancho_chili_powder",
+        "guajillo_chili_powder",
+        "cumin_ground",
+        "coriander_ground",
+        "cardamom_ground",
+        "clove_ground",
+        "nutmeg_ground",
+        "ginger_ground",
+        "garlic_granules",
+        "onion_granules",
+        "white_pepper_ground",
+        "black_pepper_ground",
+        "cinnamon_ground",
+    ]:
+        _add(rows, seen, n, pantry, "spices", "powdered")
+
+    # Pantry: spice blends (Indian/Mexican/Middle East/SEA/Global)
+    for n in [
+        "chana_masala",
+        "chaat_masala",
+        "kitchen_king_masala",
+        "korma_masala",
+        "vindaloo_masala",
+        "madras_curry_powder",
+        "thai_green_curry_powder",
+        "thai_red_curry_powder",
+        "berbere",
+        "dukkah",
+        "ras_el_hanout",
+        "baharat",
+        "togarashi",
+        "furikake",
+        "fajita_seasoning",
+        "adobo_seasoning",
+        "cajun_seasoning",
+        "old_bay_seasoning",
+    ]:
+        _add(rows, seen, n, pantry, "spices", "blends")
+
+    # Pantry: sauces/condiments that are shelf-stable often end up in pantry in practice,
+    # but taxonomy keeps them under fridge. We map the common ones to fridge/condiments.
+    for n in [
+        "tahini",
+        "harissa",
+        "gochujang",
+        "miso_paste",
+        "pesto",
+        "salsa",
+        "chimichurri",
+        "pomegranate_molasses",
+        "marinara_sauce",
+        "arrabbiata_sauce",
+        "alfredo_sauce",
+        "teriyaki_sauce",
+        "hoisin_sauce",
+        "ponzu",
+        "mirin",
+        "curry_paste_green",
+        "curry_paste_red",
+        "curry_paste_yellow",
+    ]:
+        _add(rows, seen, n, fridge, "condiments", "sauces")
+
+    # Fridge: cheeses (Italian/Middle East/global)
+    for n in [
+        "burrata",
+        "pecorino",
+        "gruyere",
+        "brie",
+        "camembert",
+        "halloumi",
+        "goat_cheese",
+        "blue_cheese",
+        "provolone",
+        "asiago",
+        "mascarpone",
+        "labneh",
+    ]:
+        _add(rows, seen, n, fridge, "dairy", "cheese")
+
+    # Fridge: herbs/produce (Indian/SEA/Middle East)
+    for n in [
+        "lemongrass",
+        "galangal",
+        "thai_chili",
+        "birdseye_chili",
+        "curry_leaves_fresh",
+        "tamarind_pulp",
+        "tamarind_fresh",
+        "mint_fresh",
+        "dill_fresh",
+        "oregano_fresh",
+        "rosemary_fresh",
+        "thyme_fresh",
+        "sage_fresh",
+    ]:
+        _add(rows, seen, n, fridge, "vegetables", "other")
+
+    # Pantry: canned expansions
+    for n in [
+        "canned_green_chiles",
+        "canned_pinto_beans",
+        "canned_cannellini_beans",
+        "canned_salmon",
+        "canned_mackerel",
+        "canned_mushrooms",
+        "canned_peas",
+        "canned_stock",
+        "canned_soup",
+    ]:
+        _add(rows, seen, n, pantry, "canned", "other")
+
+    # Pantry: baking expansions
+    for n in [
+        "maple_syrup",
+        "agave_syrup",
+        "molasses",
+        "coconut_sugar",
+        "date_syrup",
+        "rose_water",
+        "orange_blossom_water",
+        "almond_extract",
+        "cream_of_tartar",
+        "xanthan_gum",
+        "guar_gum",
+        "pectin",
+        "carob_powder",
+        "matcha_powder",
+    ]:
+        _add(rows, seen, n, pantry, "baking", "other")
+
+    # Freezer: expansions
+    for n in [
+        "frozen_okra",
+        "frozen_green_beans",
+        "frozen_cauli",
+        "frozen_acai",
+        "frozen_avocado",
+        "frozen_edamame",
+        "frozen_gyoza",
+        "frozen_samosa",
+        "frozen_falafel",
+    ]:
+        _add(rows, seen, n, freezer, "prepared_meals", "other")
+
+    # Counter: breads (global)
+    for n in [
+        "naan",
+        "bagel",
+        "croissant",
+        "wraps",
+        "tortilla_flour",
+        "tortilla_corn",
+    ]:
+        _add(rows, seen, n, counter, "breads", "other")
+
+    # Pantry: rice varieties (Indian/SEA/Italian)
+    rice_varieties = [
+        "basmati",
+        "sona_masoori",
+        "jasmine",
+        "sushi",
+        "wild",
+        "arborio",
+        "carnaroli",
+        "vialone_nano",
+        "calrose",
+        "ponni",
+        "matta",
+        "sticky",
+        "black",
+        "red",
+    ]
+    rice_forms = ["rice", "rice_flour", "rice_noodles", "rice_vermicelli"]
+    rice_mods = ["", "brown_", "parboiled_", "organic_"]
+    for v in rice_varieties:
+        for m in rice_mods:
+            _add(rows, seen, f"{m}{v}_rice", pantry, "grains", "rice")
+        for f in rice_forms:
+            _add(rows, seen, f"{v}_{f}", pantry, "grains", "rice")
+
+    # Pantry: tortillas / masa (Mexican)
+    for n in [
+        "masa_harina",
+        "corn_tortillas",
+        "flour_tortillas",
+        "tostadas",
+        "taco_shells",
+    ]:
+        _add(rows, seen, n, pantry, "grains", "other")
+
+    # Pantry: expanded flours (global)
+    for n in [
+        "all_purpose_flour",
+        "bread_flour",
+        "cake_flour",
+        "self_raising_flour",
+        "00_flour",
+        "rye_flour",
+        "buckwheat_flour",
+        "spelt_flour",
+        "sorghum_flour",
+        "teff_flour",
+        "cassava_flour",
+        "potato_starch",
+        "tapioca_flour",
+    ]:
+        _add(rows, seen, n, pantry, "flours", "other")
+
+    # Pantry: more nuts & seeds (global)
+    for n in [
+        "macadamia_nuts",
+        "pecans",
+        "brazil_nuts",
+        "pine_nuts",
+        "chia_seeds",
+        "flax_seeds",
+        "hemp_seeds",
+        "sesame_seeds_black",
+        "sesame_seeds_white",
+        "poppy_seeds",
+        "watermelon_seeds",
+        "melon_seeds",
+    ]:
+        _add(rows, seen, n, pantry, "snacks", "nuts")
+
+    # Pantry: oils & vinegars (global)
+    for n in [
+        "avocado_oil",
+        "grapeseed_oil",
+        "peanut_oil",
+        "sesame_oil_toasted",
+        "walnut_oil",
+        "sherry_vinegar",
+        "red_wine_vinegar",
+        "white_wine_vinegar",
+        "malt_vinegar",
+    ]:
+        _add(rows, seen, n, pantry, "oils", "other" if "vinegar" not in n and "oil" not in n else ("vinegar" if "vinegar" in n else "cooking_oils"))
+
+    # Pantry: additional spice/herb set (Italian/Global)
+    for n in [
+        "oregano_dried",
+        "thyme_dried",
+        "rosemary_dried",
+        "basil_dried",
+        "sage_dried",
+        "marjoram_dried",
+        "tarragon_dried",
+        "parsley_dried",
+        "dill_weed_dried",
+        "mint_dried",
+        "cilantro_dried",
+        "bay_leaf_dried",
+    ]:
+        _add(rows, seen, n, pantry, "spices", "other")
+
+    # Pantry: more canned staples
+    for n in [
+        "canned_tomatillos",
+        "canned_jalapenos",
+        "canned_chipotle_in_adobo",
+        "canned_coconut_cream",
+        "canned_pumpkin_puree",
+        "canned_beets",
+        "canned_artichoke_hearts",
+        "canned_olives",
+        "canned_caprese_peppers",
+    ]:
+        _add(rows, seen, n, pantry, "canned", "other")
+
+    # Fridge: more meats/fish (global)
+    for n in [
+        "goat",
+        "goat_mince",
+        "lamb_chops",
+        "beef_mince",
+        "pork_belly",
+        "chorizo",
+        "salami",
+        "prosciutto",
+        "anchovies",
+        "cod",
+        "tilapia",
+        "mackerel",
+        "sardines",
+        "clams",
+        "mussels",
+        "squid",
+        "octopus",
+        "lobster",
+    ]:
+        _add(rows, seen, n, fridge, "proteins", "meat" if n in {"goat", "goat_mince", "lamb_chops", "beef_mince", "pork_belly", "chorizo", "salami", "prosciutto"} else "fish")
+
+    # Fridge: more vegetables/fruits (global)
+    for n in [
+        "artichoke",
+        "fennel_bulb",
+        "romanesco",
+        "broccolini",
+        "chinese_broccoli",
+        "savoy_cabbage",
+        "tomatillo",
+        "thai_eggplant",
+        "kabocha_squash",
+        "butternut_squash",
+        "acorn_squash",
+        "jicama",
+    ]:
+        _add(rows, seen, n, fridge, "vegetables", "other")
+
+    for n in [
+        "rambutan",
+        "mangosteen",
+        "durian",
+        "sapota",
+        "custard_apple",
+        "soursop",
+        "clementine",
+        "tangerine",
+        "blood_orange",
+        "grapefruit_pink",
+        "cantaloupe",
+        "honeydew",
+    ]:
+        _add(rows, seen, n, fridge, "fruits", "tropical" if n in {"rambutan", "mangosteen", "durian", "sapota", "custard_apple", "soursop"} else "other")
+
+    if len(rows) < TARGET_COUNT:
+        raise SystemExit(f"Expected at least {TARGET_COUNT} ingredients, got {len(rows)}. Expand lists.")
 
     rows.sort(key=lambda r: (r.storage_location, r.category, r.subcategory or "", r.canonical_name))
-    return rows
+    return rows[:TARGET_COUNT]
+
+
+def _sql_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def write_sql_reference(rows: List[IngredientRow]) -> None:
+    lines: List[str] = []
+    lines.append("-- Inventory ingredient mapping reference (no tables created)")
+    lines.append("-- Generated by tools/generate_inventory_ingredient_map.py")
+    lines.append(f"-- Generated at: {date.today().isoformat()}")
+    lines.append("--")
+    lines.append("-- Returns: canonical_name, storage_location, category, subcategory")
+    lines.append("")
+    lines.append("WITH ingredient_map AS (")
+    lines.append("    SELECT * FROM (")
+    lines.append("        VALUES")
+
+    for idx, r in enumerate(rows):
+        comma = "," if idx < len(rows) - 1 else ""
+        sub = "NULL" if r.subcategory is None else f"'{_sql_escape(r.subcategory)}'"
+        lines.append(
+            "            (" +
+            f"'{_sql_escape(r.canonical_name)}', '{_sql_escape(r.storage_location)}', '{_sql_escape(r.category)}', {sub}" +
+            ")" + comma
+        )
+
+    lines.append("    ) AS v(canonical_name, storage_location, category, subcategory)")
+    lines.append(")")
+    lines.append("SELECT canonical_name, storage_location, category, subcategory")
+    lines.append("FROM ingredient_map")
+    lines.append("ORDER BY storage_location, category, subcategory NULLS FIRST, canonical_name;")
+    lines.append("")
+
+    OUT_SQL_PATH.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote SQL reference -> {OUT_SQL_PATH}")
 
 
 def main() -> None:
@@ -803,6 +1285,7 @@ def main() -> None:
 
     OUT_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Wrote {len(rows)} rows -> {OUT_PATH}")
+    write_sql_reference(rows)
 
 
 if __name__ == "__main__":
