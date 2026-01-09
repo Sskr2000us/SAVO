@@ -218,6 +218,25 @@ async def post_normalize(req: NormalizeInventoryRequest):
         if not isinstance(result, dict):
             return _fallback_normalize(req.raw_items)
 
+        # Best-effort cuisine enrichment for clients (optional field).
+        try:
+            from app.core.inventory_cuisine import lookup_cuisine
+
+            norm = result.get("normalized_inventory")
+            if isinstance(norm, list):
+                for item in norm:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_cuisine = item.get("cuisine")
+                    if isinstance(raw_cuisine, str) and raw_cuisine.strip():
+                        continue
+                    cuisine = lookup_cuisine(item.get("canonical_name"), item.get("display_name"))
+                    if cuisine:
+                        item["cuisine"] = cuisine
+        except Exception:
+            # Best-effort only; never fail normalization.
+            pass
+
         # Validate payload matches response model; if not, fail closed to fallback.
         try:
             validator = getattr(NormalizeInventoryResponse, "model_validate", None)

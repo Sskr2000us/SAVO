@@ -70,6 +70,7 @@ class NormalizedInventoryItem(BaseModel):
     storage: Literal["pantry", "fridge", "freezer"]
     freshness_days_remaining: int
     confidence: float = Field(ge=0.0, le=1.0)
+    cuisine: Optional[str] = None
 
 
 class NormalizeInventoryResponse(BaseModel):

@@ -396,9 +396,18 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
     """Add new inventory item"""
     try:
         from app.core.media_storage import to_signed_url
+        from app.core.inventory_cuisine import lookup_cuisine
 
         item_data = dict(item_data or {})
         item_data["user_id"] = user_id
+
+        # Best-effort cuisine auto-fill (especially for scan/normalize flows).
+        raw_cuisine = item_data.get("cuisine")
+        if not (isinstance(raw_cuisine, str) and raw_cuisine.strip()):
+            cuisine = lookup_cuisine(item_data.get("canonical_name"), item_data.get("display_name"))
+            if cuisine:
+                item_data["cuisine"] = cuisine
+
         item_data = _drop_none_values(item_data)
         
         # Set default low stock threshold if not provided
@@ -430,8 +439,17 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
     """Update existing inventory item"""
     try:
         from app.core.media_storage import to_signed_url
+        from app.core.inventory_cuisine import lookup_cuisine
 
-        item_data = _drop_none_values(dict(item_data or {}))
+        item_data = dict(item_data or {})
+
+        raw_cuisine = item_data.get("cuisine")
+        if not (isinstance(raw_cuisine, str) and raw_cuisine.strip()):
+            cuisine = lookup_cuisine(item_data.get("canonical_name"), item_data.get("display_name"))
+            if cuisine:
+                item_data["cuisine"] = cuisine
+
+        item_data = _drop_none_values(item_data)
 
         for _ in range(5):
             try:

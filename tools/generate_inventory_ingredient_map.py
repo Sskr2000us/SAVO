@@ -45,9 +45,18 @@ class IngredientRow:
     storage_location: str
     category: str
     subcategory: Optional[str]
+    cuisine: str
 
 
-def _add(rows: List[IngredientRow], seen: Set[str], name: str, storage: str, category: str, subcategory: Optional[str]) -> None:
+def _add(
+    rows: List[IngredientRow],
+    seen: Set[str],
+    name: str,
+    storage: str,
+    category: str,
+    subcategory: Optional[str],
+    cuisine: Optional[str] = None,
+) -> None:
     canon = _snake_case(name)
     if not canon:
         return
@@ -60,8 +69,186 @@ def _add(rows: List[IngredientRow], seen: Set[str], name: str, storage: str, cat
             storage_location=storage,
             category=_snake_case(category),
             subcategory=_snake_case(subcategory) if subcategory else None,
+            cuisine=_snake_case(cuisine) if cuisine else "global",
         )
     )
+
+
+def _apply_cuisine_overrides(rows: List[IngredientRow]) -> List[IngredientRow]:
+    # Curated overrides so auto-fill is useful.
+    # Everything else defaults to "global".
+    overrides: dict[str, str] = {}
+
+    # Indian
+    for n in [
+        "paneer",
+        "hung_curd",
+        "curd",
+        "buttermilk",
+        "ghee",
+        "basmati_rice",
+        "sona_masoori_rice",
+        "ponni_rice",
+        "matta_rice",
+        "idli_rice",
+        "poha",
+        "puffed_rice",
+        "toor_dal",
+        "moong_dal",
+        "masoor_dal",
+        "urad_dal",
+        "chana_dal",
+        "besan",
+        "roasted_chana",
+        "kabuli_chana",
+        "kala_chana",
+        "rajma",
+        "asafoetida",
+        "kasuri_methi",
+        "methi",
+        "garam_masala",
+        "sambar_powder",
+        "rasam_powder",
+        "biryani_masala",
+        "pav_bhaji_masala",
+        "chai_masala",
+        "tandoori_masala",
+        "chana_masala",
+        "chaat_masala",
+        "kitchen_king_masala",
+        "curry_leaves",
+        "curry_leaves_fresh",
+        "curry_leaves_dried",
+        "tamarind_pulp",
+        "jaggery",
+    ]:
+        overrides[_snake_case(n)] = "indian"
+
+    # Italian
+    for n in [
+        "parmesan",
+        "pecorino",
+        "burrata",
+        "mozzarella",
+        "ricotta",
+        "mascarpone",
+        "pesto",
+        "marinara_sauce",
+        "arrabbiata_sauce",
+        "alfredo_sauce",
+        "oregano_dried",
+        "basil",
+        "basil_dried",
+        "rosemary_dried",
+        "thyme_dried",
+        "sage_dried",
+        "lasagna_sheets",
+        "spaghetti",
+        "penne",
+        "fusilli",
+        "farfalle",
+        "rigatoni",
+        "linguine",
+        "fettuccine",
+        "tagliatelle",
+        "orzo",
+        "gnocchi",
+        "00_flour",
+        "arborio_rice",
+        "carnaroli_rice",
+        "vialone_nano_rice",
+        "balsamic_vinegar",
+    ]:
+        overrides[_snake_case(n)] = "italian"
+
+    # Mexican
+    for n in [
+        "masa_harina",
+        "corn_tortillas",
+        "flour_tortillas",
+        "taco_shells",
+        "tostadas",
+        "tortilla_chips",
+        "nachos",
+        "jalapeno",
+        "pickled_jalapenos",
+        "chipotle_powder",
+        "ancho_chili_powder",
+        "guajillo_chili_powder",
+        "canned_chipotle_in_adobo",
+        "taco_seasoning",
+        "fajita_seasoning",
+        "adobo_seasoning",
+        "salsa",
+        "pico_de_gallo",
+        "guacamole",
+        "tomatillo",
+        "canned_tomatillos",
+    ]:
+        overrides[_snake_case(n)] = "mexican"
+
+    # Middle East / MENA
+    for n in [
+        "tahini",
+        "zaatar",
+        "dukkah",
+        "ras_el_hanout",
+        "baharat",
+        "sumac",
+        "sumac_powder",
+        "pomegranate_molasses",
+        "labneh",
+        "halloumi",
+        "falafel",
+        "frozen_falafel",
+        "bulgur_fine",
+        "bulgur_coarse",
+        "freekeh",
+        "harissa",
+        "orange_blossom_water",
+        "rose_water",
+    ]:
+        overrides[_snake_case(n)] = "middle_east"
+
+    # South East Asian (incl. common SEA pantry)
+    for n in [
+        "lemongrass",
+        "galangal",
+        "thai_basil",
+        "thai_chili",
+        "birdseye_chili",
+        "fish_sauce",
+        "oyster_sauce",
+        "rice_paper",
+        "pho_noodles",
+        "rice_vermicelli",
+        "glass_noodles",
+        "curry_paste_green",
+        "curry_paste_red",
+        "curry_paste_yellow",
+        "thai_green_curry_powder",
+        "thai_red_curry_powder",
+        "jasmine_rice",
+        "sticky_rice",
+    ]:
+        overrides[_snake_case(n)] = "south_east_asian"
+
+    updated: List[IngredientRow] = []
+    for r in rows:
+        override = overrides.get(r.canonical_name)
+        if override and override != r.cuisine:
+            updated.append(
+                IngredientRow(
+                    canonical_name=r.canonical_name,
+                    storage_location=r.storage_location,
+                    category=r.category,
+                    subcategory=r.subcategory,
+                    cuisine=override,
+                )
+            )
+        else:
+            updated.append(r)
+    return updated
 
 
 def build_rows() -> List[IngredientRow]:
@@ -1216,6 +1403,8 @@ def build_rows() -> List[IngredientRow]:
     ]:
         _add(rows, seen, n, fridge, "fruits", "tropical" if n in {"rambutan", "mangosteen", "durian", "sapota", "custard_apple", "soursop"} else "other")
 
+    rows = _apply_cuisine_overrides(rows)
+
     if len(rows) < TARGET_COUNT:
         raise SystemExit(f"Expected at least {TARGET_COUNT} ingredients, got {len(rows)}. Expand lists.")
 
@@ -1233,7 +1422,7 @@ def write_sql_reference(rows: List[IngredientRow]) -> None:
     lines.append("-- Generated by tools/generate_inventory_ingredient_map.py")
     lines.append(f"-- Generated at: {date.today().isoformat()}")
     lines.append("--")
-    lines.append("-- Returns: canonical_name, storage_location, category, subcategory")
+    lines.append("-- Returns: canonical_name, storage_location, category, subcategory, cuisine")
     lines.append("")
     lines.append("WITH ingredient_map AS (")
     lines.append("    SELECT * FROM (")
@@ -1244,13 +1433,13 @@ def write_sql_reference(rows: List[IngredientRow]) -> None:
         sub = "NULL" if r.subcategory is None else f"'{_sql_escape(r.subcategory)}'"
         lines.append(
             "            (" +
-            f"'{_sql_escape(r.canonical_name)}', '{_sql_escape(r.storage_location)}', '{_sql_escape(r.category)}', {sub}" +
+            f"'{_sql_escape(r.canonical_name)}', '{_sql_escape(r.storage_location)}', '{_sql_escape(r.category)}', {sub}, '{_sql_escape(r.cuisine)}'" +
             ")" + comma
         )
 
-    lines.append("    ) AS v(canonical_name, storage_location, category, subcategory)")
+    lines.append("    ) AS v(canonical_name, storage_location, category, subcategory, cuisine)")
     lines.append(")")
-    lines.append("SELECT canonical_name, storage_location, category, subcategory")
+    lines.append("SELECT canonical_name, storage_location, category, subcategory, cuisine")
     lines.append("FROM ingredient_map")
     lines.append("ORDER BY storage_location, category, subcategory NULLS FIRST, canonical_name;")
     lines.append("")
@@ -1278,6 +1467,7 @@ def main() -> None:
                 "storage_location": r.storage_location,
                 "category": r.category,
                 "subcategory": r.subcategory,
+                "cuisine": r.cuisine,
             }
             for r in rows
         ],

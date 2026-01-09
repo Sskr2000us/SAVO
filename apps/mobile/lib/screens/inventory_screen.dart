@@ -158,6 +158,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Future<List<Map<String, dynamic>>?> _showConfirmNormalizedItemsDialog(List normItems) async {
     final candidates = <_NormalizedCandidate>[];
+    final Map<_NormalizedCandidate, String?> candidateCuisine = {};
     for (final item in normItems) {
       if (item is! Map) continue;
       final json = Map<String, dynamic>.from(item);
@@ -168,6 +169,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final storage = (json['storage'] ?? 'pantry').toString();
       final state = (json['state'] ?? 'raw').toString();
       final confidence = (json['confidence'] is num) ? (json['confidence'] as num).toDouble() : null;
+      final cuisine = (json['cuisine'] == null) ? null : json['cuisine'].toString().trim();
       candidates.add(
         _NormalizedCandidate(
           nameController: TextEditingController(text: display),
@@ -178,6 +180,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           scanConfidence: confidence,
         ),
       );
+      candidateCuisine[candidates.last] = (cuisine != null && cuisine.isNotEmpty) ? cuisine : null;
     }
 
     if (candidates.isEmpty) return null;
@@ -285,6 +288,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           'unit': c.unit,
                           'item_state': c.state,
                           'storage_location': c.storage,
+                          'cuisine': candidateCuisine[c],
                           'source': 'scan',
                           'scan_confidence': c.scanConfidence,
                         },
