@@ -1,0 +1,3251 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-01-09",
+  "taxonomy_ref": {
+    "path": "docs/inventory_taxonomy.v1.json",
+    "version": "1.0"
+  },
+  "count": 540,
+  "ingredients": [
+    {
+      "canonical_name": "bread",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "bread"
+    },
+    {
+      "canonical_name": "sandwich_bread",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "bread"
+    },
+    {
+      "canonical_name": "sourdough",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "bread"
+    },
+    {
+      "canonical_name": "burger_buns",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "buns"
+    },
+    {
+      "canonical_name": "hotdog_buns",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "buns"
+    },
+    {
+      "canonical_name": "pita",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tortilla",
+      "storage_location": "counter",
+      "category": "breads",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "other",
+      "storage_location": "counter",
+      "category": "other",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "apple_room_temp",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "fruits"
+    },
+    {
+      "canonical_name": "avocado_ripe",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "fruits"
+    },
+    {
+      "canonical_name": "banana_ripe",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "fruits"
+    },
+    {
+      "canonical_name": "mango_ripe",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "fruits"
+    },
+    {
+      "canonical_name": "lemon_room_temp",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "garlic_room_temp",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "onion_room_temp",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "tomato_room_temp",
+      "storage_location": "counter",
+      "category": "produce",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "cookies_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "crackers_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "chips_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "nachos_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "almonds_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "cashews_opened",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "trail_mix",
+      "storage_location": "counter",
+      "category": "snacks",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "gelato",
+      "storage_location": "freezer",
+      "category": "desserts",
+      "subcategory": "ice_cream"
+    },
+    {
+      "canonical_name": "ice_cream",
+      "storage_location": "freezer",
+      "category": "desserts",
+      "subcategory": "ice_cream"
+    },
+    {
+      "canonical_name": "sorbet",
+      "storage_location": "freezer",
+      "category": "desserts",
+      "subcategory": "ice_cream"
+    },
+    {
+      "canonical_name": "frozen_cake",
+      "storage_location": "freezer",
+      "category": "desserts",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_yogurt",
+      "storage_location": "freezer",
+      "category": "desserts",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_blueberries",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "frozen_mixed_berries",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "frozen_strawberries",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "frozen_banana",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_mango",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_pineapple",
+      "storage_location": "freezer",
+      "category": "frozen_fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_methi",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "frozen_spinach",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "frozen_mix",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "mixed"
+    },
+    {
+      "canonical_name": "mixed_vegetables_frozen",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "mixed"
+    },
+    {
+      "canonical_name": "frozen_broccoli",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_corn",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_peas",
+      "storage_location": "freezer",
+      "category": "frozen_vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "fish_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "prawns_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "salmon_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "chicken_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "mince_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "mutton_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "sausages_frozen",
+      "storage_location": "freezer",
+      "category": "meat_seafood",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "leftover_curry_frozen",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "leftovers"
+    },
+    {
+      "canonical_name": "leftover_paratha",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "leftovers"
+    },
+    {
+      "canonical_name": "frozen_dumplings",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_pizza",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "frozen_fries",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "ready_to_cook"
+    },
+    {
+      "canonical_name": "frozen_nuggets",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "ready_to_cook"
+    },
+    {
+      "canonical_name": "frozen_paratha",
+      "storage_location": "freezer",
+      "category": "prepared_meals",
+      "subcategory": "ready_to_cook"
+    },
+    {
+      "canonical_name": "apple_juice",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "juice"
+    },
+    {
+      "canonical_name": "coconut_water",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "juice"
+    },
+    {
+      "canonical_name": "mango_juice",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "juice"
+    },
+    {
+      "canonical_name": "orange_juice",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "juice"
+    },
+    {
+      "canonical_name": "pomegranate_juice",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "juice"
+    },
+    {
+      "canonical_name": "cold_coffee",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "iced_tea",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "kombucha",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cola",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "soft_drinks"
+    },
+    {
+      "canonical_name": "soda",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "soft_drinks"
+    },
+    {
+      "canonical_name": "sparkling_water",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "soft_drinks"
+    },
+    {
+      "canonical_name": "tonic_water",
+      "storage_location": "fridge",
+      "category": "beverages",
+      "subcategory": "soft_drinks"
+    },
+    {
+      "canonical_name": "chutney",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "coriander_chutney",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "mint_chutney",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "relish",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "gherkin_pickles",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "pickles"
+    },
+    {
+      "canonical_name": "lime_pickle",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "pickles"
+    },
+    {
+      "canonical_name": "mango_pickle",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "pickles"
+    },
+    {
+      "canonical_name": "mixed_pickle",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "pickles"
+    },
+    {
+      "canonical_name": "pickle",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "pickles"
+    },
+    {
+      "canonical_name": "bbq_sauce",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "fish_sauce",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "hot_sauce",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "ketchup",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "mayonnaise",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "mustard",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "oyster_sauce",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "soy_sauce",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "sriracha",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "sauces"
+    },
+    {
+      "canonical_name": "chocolate_spread",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "spreads"
+    },
+    {
+      "canonical_name": "hummus",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "spreads"
+    },
+    {
+      "canonical_name": "jam",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "spreads"
+    },
+    {
+      "canonical_name": "marmalade",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "spreads"
+    },
+    {
+      "canonical_name": "peanut_butter",
+      "storage_location": "fridge",
+      "category": "condiments",
+      "subcategory": "spreads"
+    },
+    {
+      "canonical_name": "butter",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "butter"
+    },
+    {
+      "canonical_name": "ghee",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "butter"
+    },
+    {
+      "canonical_name": "salted_butter",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "butter"
+    },
+    {
+      "canonical_name": "unsalted_butter",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "butter"
+    },
+    {
+      "canonical_name": "cheddar",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "cream_cheese",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "emmental",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "feta",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "gouda",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "mozzarella",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "paneer",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "parmesan",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "processed_cheese",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "ricotta",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "cheese"
+    },
+    {
+      "canonical_name": "almond_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "coconut_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "lactose_free_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "oat_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "skim_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "soy_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "whole_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "milk"
+    },
+    {
+      "canonical_name": "condensed_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cream",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "evaporated_milk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "milk_powder",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sour_cream",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "whipping_cream",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "buttermilk",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "curd",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "greek_yogurt",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "hung_curd",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "kefir",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "yogurt",
+      "storage_location": "fridge",
+      "category": "dairy",
+      "subcategory": "yogurt"
+    },
+    {
+      "canonical_name": "blackberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "blueberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "cranberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "gooseberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "mulberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "raspberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "strawberry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "berries"
+    },
+    {
+      "canonical_name": "grapefruit",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "lemon",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "lime",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "mandarin",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "orange",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "sweet_lime",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "citrus"
+    },
+    {
+      "canonical_name": "apple",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "apricot",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "avocado",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cherry",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "dates_fresh",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "dragon_fruit",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "fig",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "grapes",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_apple",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "guava_pink",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "kiwi",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "melon",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "nectarine",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "passion_fruit",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "peach",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "pear",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "persimmon",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "plum",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "pomegranate",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "raisins",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "star_fruit",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "watermelon",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "banana",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "coconut",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "guava",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "jackfruit",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "lychee",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "mango",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "papaya",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "pineapple",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "plantain",
+      "storage_location": "fridge",
+      "category": "fruits",
+      "subcategory": "tropical"
+    },
+    {
+      "canonical_name": "cooked_chicken",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "cooked"
+    },
+    {
+      "canonical_name": "cooked_pasta",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "cooked"
+    },
+    {
+      "canonical_name": "cooked_rice",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "cooked"
+    },
+    {
+      "canonical_name": "cooked_vegetables",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "cooked"
+    },
+    {
+      "canonical_name": "leftover_curry",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "leftover_dal",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "leftover_soup",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "batter",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "prepared"
+    },
+    {
+      "canonical_name": "cut_vegetables",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "prepared"
+    },
+    {
+      "canonical_name": "dough",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "prepared"
+    },
+    {
+      "canonical_name": "marinated_chicken",
+      "storage_location": "fridge",
+      "category": "leftovers",
+      "subcategory": "prepared"
+    },
+    {
+      "canonical_name": "egg_whites",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "eggs"
+    },
+    {
+      "canonical_name": "egg_yolks",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "eggs"
+    },
+    {
+      "canonical_name": "eggs",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "eggs"
+    },
+    {
+      "canonical_name": "quail_eggs",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "eggs"
+    },
+    {
+      "canonical_name": "crab",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "fish",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "prawns",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "salmon",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "shrimp",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "tuna",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "bacon",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "beef",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "chicken",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "chicken_breast",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "chicken_thigh",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "duck",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "ham",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "lamb",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "mutton",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "pork",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "sausage",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "turkey",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "meat"
+    },
+    {
+      "canonical_name": "seitan",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tempeh",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tofu",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "paneer_blocks",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "paneer"
+    },
+    {
+      "canonical_name": "paneer_crumbled",
+      "storage_location": "fridge",
+      "category": "proteins",
+      "subcategory": "paneer"
+    },
+    {
+      "canonical_name": "broccoli",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "brussels_sprouts",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "cabbage",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "cauliflower",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "kohlrabi",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "napa_cabbage",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "red_cabbage",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "cruciferous"
+    },
+    {
+      "canonical_name": "amaranth_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "arugula",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "baby_spinach",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "basil",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "bok_choy",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "collard_greens",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "coriander_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "curry_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "dill",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "fenugreek_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "iceberg_lettuce",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "kale",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "lettuce",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "mint_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "moringa_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "mustard_greens",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "parsley",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "romaine_lettuce",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "spinach",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "spring_onion_greens",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "swiss_chard",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "taro_leaves",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "tender_gongura",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "thai_basil",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "watercress",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "leafy"
+    },
+    {
+      "canonical_name": "ash_gourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "asparagus",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "baby_eggplant",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bamboo_shoots",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bean_sprouts",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bell_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bitter_gourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bottle_gourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "brinjal",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "button_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "capsicum",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "celery",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "chayote",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cherry_tomato",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "chili",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "coriander_stems",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "corn",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cucumber",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "edamame",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "eggplant",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "enoki_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "french_beans",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "fresh_peas",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_beans",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_bell_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_chili",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "habanero",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "ivygourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "jalapeno",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "king_oyster_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "leek",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "okra",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "oyster_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "peas",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "plantain_green",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "portobello_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "pumpkin",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "raw_banana",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "red_bell_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "red_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "ridge_gourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "scallions",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "serrano_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "shiitake_mushroom",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "snake_gourd",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "snap_peas",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "spring_onion",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sun_dried_tomato",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sweet_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tomato",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "water_chestnut",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "yellow_bell_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "yellow_pepper",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "zucchini",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "baby_carrot",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "beetroot",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "carrot",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "cassava",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "celeriac",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "daikon",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "garlic",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "ginger",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "lotus_root",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "onion",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "parsnip",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "potato",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "radish",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "red_onion",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "shallot",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "sweet_potato",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "taro_root",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "turnip",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "white_onion",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "yam",
+      "storage_location": "fridge",
+      "category": "vegetables",
+      "subcategory": "root"
+    },
+    {
+      "canonical_name": "chocolate_chips",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "cocoa"
+    },
+    {
+      "canonical_name": "baking_chocolate",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sprinkles",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "vanilla_extract",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "brown_sugar",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "sugar"
+    },
+    {
+      "canonical_name": "honey",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "sugar"
+    },
+    {
+      "canonical_name": "jaggery",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "sugar"
+    },
+    {
+      "canonical_name": "powdered_sugar",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "sugar"
+    },
+    {
+      "canonical_name": "sugar",
+      "storage_location": "pantry",
+      "category": "baking",
+      "subcategory": "sugar"
+    },
+    {
+      "canonical_name": "canned_black_beans",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "canned_chickpeas",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "canned_kidney_beans",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "canned_sardines",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "canned_tuna",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "fish"
+    },
+    {
+      "canonical_name": "coconut_milk_can",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "condensed_milk_can",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "canned_corn",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "canned_tomatoes",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "tomato_paste",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "tomato_puree",
+      "storage_location": "pantry",
+      "category": "canned",
+      "subcategory": "vegetables"
+    },
+    {
+      "canonical_name": "chickpea_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "besan"
+    },
+    {
+      "canonical_name": "gram_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "besan"
+    },
+    {
+      "canonical_name": "almond_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "arrowroot_powder",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "bajra_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "coconut_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "corn_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cornstarch",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "jowar_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "millet_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "oat_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "ragi_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tapioca_starch",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "glutinous_rice_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "rice_flour"
+    },
+    {
+      "canonical_name": "idiyappam_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "rice_flour"
+    },
+    {
+      "canonical_name": "rice_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "rice_flour"
+    },
+    {
+      "canonical_name": "maida",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "wheat_flour"
+    },
+    {
+      "canonical_name": "semolina_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "wheat_flour"
+    },
+    {
+      "canonical_name": "wheat_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "wheat_flour"
+    },
+    {
+      "canonical_name": "whole_wheat_flour",
+      "storage_location": "pantry",
+      "category": "flours",
+      "subcategory": "wheat_flour"
+    },
+    {
+      "canonical_name": "barnyard_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "finger_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "foxtail_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "kodo_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "little_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "pearl_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "proso_millet",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "sorghum",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "teff",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "millets"
+    },
+    {
+      "canonical_name": "instant_oats",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "oats"
+    },
+    {
+      "canonical_name": "rolled_oats",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "oats"
+    },
+    {
+      "canonical_name": "steel_cut_oats",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "oats"
+    },
+    {
+      "canonical_name": "amaranth",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "barley",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "buckwheat",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cereal",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "cornmeal",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "polenta",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "quinoa",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "arborio_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "basmati_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "black_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "broken_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "brown_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "idli_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "jasmine_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "parboiled_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "poha",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "puffed_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "red_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "risotto_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "sona_masoori_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "sticky_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "sushi_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "wild_rice",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "rice"
+    },
+    {
+      "canonical_name": "bulgur",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "couscous",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "farfalle",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "fusilli",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "lasagna_sheets",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "macaroni",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "noodles",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "pasta",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "penne",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "ramen_noodles",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "semolina",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "soba_noodles",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "spaghetti",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "udon_noodles",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "vermicelli",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "wheat",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "whole_wheat",
+      "storage_location": "pantry",
+      "category": "grains",
+      "subcategory": "wheat"
+    },
+    {
+      "canonical_name": "canola_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "coconut_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "extra_virgin_olive_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "groundnut_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "mustard_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "olive_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "rice_bran_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "sesame_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "sunflower_oil",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "cooking_oils"
+    },
+    {
+      "canonical_name": "cooking_spray",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "apple_cider_vinegar",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "vinegar"
+    },
+    {
+      "canonical_name": "balsamic_vinegar",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "vinegar"
+    },
+    {
+      "canonical_name": "rice_vinegar",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "vinegar"
+    },
+    {
+      "canonical_name": "white_vinegar",
+      "storage_location": "pantry",
+      "category": "oils",
+      "subcategory": "vinegar"
+    },
+    {
+      "canonical_name": "agar_agar",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "baking"
+    },
+    {
+      "canonical_name": "baking_powder",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "baking"
+    },
+    {
+      "canonical_name": "baking_soda",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "baking"
+    },
+    {
+      "canonical_name": "gelatin",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "baking"
+    },
+    {
+      "canonical_name": "yeast",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "baking"
+    },
+    {
+      "canonical_name": "cocoa_powder",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "instant_coffee",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "malt_powder",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "tea_powder",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "collagen_powder",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "protein"
+    },
+    {
+      "canonical_name": "plant_protein",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "protein"
+    },
+    {
+      "canonical_name": "whey_protein",
+      "storage_location": "pantry",
+      "category": "powders",
+      "subcategory": "protein"
+    },
+    {
+      "canonical_name": "adzuki_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "black_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "chickpeas",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "edamame_dried",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "kidney_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "lima_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "mung_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "navy_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "pinto_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "soybeans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "white_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "beans"
+    },
+    {
+      "canonical_name": "besan",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "chickpeas"
+    },
+    {
+      "canonical_name": "kabuli_chana",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "chickpeas"
+    },
+    {
+      "canonical_name": "kala_chana",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "chickpeas"
+    },
+    {
+      "canonical_name": "roasted_chana",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "chickpeas"
+    },
+    {
+      "canonical_name": "black_lentils",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "brown_lentils",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "chana_dal",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "green_lentils",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "masoor_dal",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "moong_dal",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "red_lentils",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "split_mung_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "split_pigeon_peas",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "toor_dal",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "urad_dal",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "whole_mung_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "yellow_lentils",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "lentils"
+    },
+    {
+      "canonical_name": "black_eyed_peas",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "broad_beans",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "green_peas_dried",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "horse_gram",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "peas_dried",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "pigeon_peas",
+      "storage_location": "pantry",
+      "category": "pulses",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "biscuits",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "cookies",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "crackers",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "digestive_biscuits",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "biscuits"
+    },
+    {
+      "canonical_name": "banana_chips",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "nachos",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "potato_chips",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "tortilla_chips",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "chips"
+    },
+    {
+      "canonical_name": "almonds",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "cashews",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "hazelnuts",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "peanuts",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "pistachios",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "pumpkin_seeds",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "sunflower_seeds",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "walnuts",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "nuts"
+    },
+    {
+      "canonical_name": "granola",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "muesli",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "popcorn_kernels",
+      "storage_location": "pantry",
+      "category": "snacks",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "biryani_masala",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "chai_masala",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "curry_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "five_spice",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "garam_masala",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "herbes_de_provence",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "italian_seasoning",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "pav_bhaji_masala",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "rasam_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "sambar_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "taco_seasoning",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "tandoori_masala",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "zaatar",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "blends"
+    },
+    {
+      "canonical_name": "asafoetida",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "dry_mango_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "kasuri_methi",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "poppy_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sesame_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "sumac",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "other"
+    },
+    {
+      "canonical_name": "black_pepper_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "cardamom_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "cayenne_pepper",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "chili_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "cinnamon_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "clove_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "coriander_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "cumin_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "garam_masala_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "garlic_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "ginger_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "onion_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "paprika",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "turmeric_powder",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "powdered"
+    },
+    {
+      "canonical_name": "bay_leaf",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "black_cardamom",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "black_pepper",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "cardamom",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "carom_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "cinnamon",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "cloves",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "coriander_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "cumin_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "curry_leaves_dried",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "dry_red_chili",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "fennel_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "fenugreek_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "green_cardamom",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "mace",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "mustard_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "nigella_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "nutmeg",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "pink_peppercorn",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "pomegranate_seeds",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "star_anise",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    },
+    {
+      "canonical_name": "white_pepper",
+      "storage_location": "pantry",
+      "category": "spices",
+      "subcategory": "whole"
+    }
+  ]
+}
