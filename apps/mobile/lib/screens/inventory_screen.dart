@@ -29,6 +29,67 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   static const List<String> _storageOptions = ['pantry', 'fridge', 'freezer', 'counter'];
 
+  // Storage -> Category -> Subcategories
+  static const Map<String, Map<String, List<String>>> _inventoryTaxonomy = {
+    'fridge': {
+      'vegetables': ['leafy', 'root', 'cruciferous', 'other'],
+      'fruits': ['berries', 'citrus', 'tropical', 'other'],
+      'dairy': ['milk', 'cheese', 'yogurt', 'butter', 'other'],
+      'proteins': ['eggs', 'paneer', 'meat', 'fish', 'other'],
+      'condiments': ['sauces', 'pickles', 'spreads', 'other'],
+      'beverages': ['juice', 'soft_drinks', 'other'],
+      'leftovers': ['cooked', 'prepared', 'other'],
+    },
+    'pantry': {
+      'grains': ['rice', 'millets', 'wheat', 'oats', 'other'],
+      'pulses': ['lentils', 'beans', 'chickpeas', 'other'],
+      'flours': ['wheat_flour', 'rice_flour', 'besan', 'other'],
+      'spices': ['whole', 'powdered', 'blends', 'other'],
+      'powders': ['baking', 'protein', 'other'],
+      'oils': ['cooking_oils', 'ghee', 'vinegar', 'other'],
+      'snacks': ['chips', 'biscuits', 'nuts', 'other'],
+      'canned': ['vegetables', 'beans', 'fish', 'other'],
+      'baking': ['sugar', 'baking_powder', 'cocoa', 'other'],
+    },
+    'freezer': {
+      'frozen_vegetables': ['mixed', 'leafy', 'other'],
+      'frozen_fruits': ['berries', 'other'],
+      'meat_seafood': ['meat', 'fish', 'other'],
+      'prepared_meals': ['leftovers', 'ready_to_cook', 'other'],
+      'desserts': ['ice_cream', 'other'],
+    },
+    'counter': {
+      'produce': ['fruits', 'vegetables', 'other'],
+      'breads': ['bread', 'buns', 'other'],
+      'snacks': ['chips', 'biscuits', 'nuts', 'other'],
+      'other': ['other'],
+    },
+  };
+
+  static String? _cleanOptional(String? raw) {
+    final trimmed = raw?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed;
+  }
+
+  List<String> _categoryOptionsForStorage(String storage, {String? includeValue}) {
+    final categories = (_inventoryTaxonomy[storage]?.keys.toList() ?? <String>[]);
+    if (includeValue != null && includeValue.trim().isNotEmpty && !categories.contains(includeValue)) {
+      categories.add(includeValue);
+    }
+    categories.sort();
+    return categories;
+  }
+
+  List<String> _subcategoryOptionsFor(String storage, String category, {String? includeValue}) {
+    final subcategories = List<String>.from(_inventoryTaxonomy[storage]?[category] ?? const <String>[]);
+    if (includeValue != null && includeValue.trim().isNotEmpty && !subcategories.contains(includeValue)) {
+      subcategories.add(includeValue);
+    }
+    subcategories.sort();
+    return subcategories;
+  }
+
   Future<void> _saveRealtimeScanResults(List<String> ingredients) async {
     if (ingredients.isEmpty) return;
 
@@ -435,8 +496,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Future<void> _showEditItemSheet(InventoryItem item) async {
     final nameController = TextEditingController(text: _prettyName(item.displayLabel));
-    final categoryController = TextEditingController(text: item.category ?? '');
     final notesController = TextEditingController(text: item.notes ?? '');
+
+    String? category = _cleanOptional(item.category);
+    String? subcategory = _cleanOptional(item.subcategory);
 
     double qty = item.quantity;
     String unit = item.unit;
@@ -495,13 +558,42 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: categoryController,
-                    textInputAction: TextInputAction.next,
+                  DropdownButtonFormField<String>(
+                    value: category,
                     decoration: const InputDecoration(
                       labelText: 'Category (optional)',
                       border: OutlineInputBorder(),
                     ),
+                    items: _categoryOptionsForStorage(storage, includeValue: category)
+                        .map((c) => DropdownMenuItem(value: c, child: Text(_prettyName(c))))
+                        .toList(),
+                    onChanged: (value) {
+                      setModalState(() {
+                        category = value;
+                        // Reset subcategory when category changes.
+                        subcategory = null;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: subcategory,
+                    decoration: const InputDecoration(
+                      labelText: 'Subcategory (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: (category == null)
+                        ? const <DropdownMenuItem<String>>[]
+                        : _subcategoryOptionsFor(storage, category!, includeValue: subcategory)
+                            .map((sc) => DropdownMenuItem(value: sc, child: Text(_prettyName(sc))))
+                            .toList(),
+                    onChanged: (category == null)
+                        ? null
+                        : (value) {
+                            setModalState(() {
+                              subcategory = value;
+                            });
+                          },
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -519,6 +611,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           onChanged: (value) {
                             setModalState(() {
                               storage = value ?? 'pantry';
+
+                              // If the chosen category isn't valid for this storage, clear it.
+                              final validCategories = _categoryOptionsForStorage(storage);
+                              if (category != null && !validCategories.contains(category)) {
+                                category = null;
+                                subcategory = null;
+                              }
+                              if (category != null) {
+                                final validSubcategories = _subcategoryOptionsFor(storage, category!);
+                                if (subcategory != null && !validSubcategories.contains(subcategory)) {
+                                  subcategory = null;
+                                }
+                              }
                             });
                           },
                         ),
@@ -630,7 +735,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             final updates = <String, dynamic>{
                               'display_name': display,
                               'canonical_name': _canonicalizeName(display),
-                              'category': categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
+                              'category': _cleanOptional(category),
+                              'subcategory': _cleanOptional(subcategory),
                               'quantity': qty,
                               'unit': unit,
                               'storage_location': storage,
@@ -986,6 +1092,25 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       final items = byStorage[storage] ?? const <InventoryItem>[];
                       if (items.isEmpty) return const <Widget>[];
                       final title = storage[0].toUpperCase() + storage.substring(1);
+
+                      // Category -> Subcategory -> Items
+                      final Map<String, Map<String, List<InventoryItem>>> byCategory = {};
+                      for (final item in items) {
+                        final c = (item.category ?? '').trim();
+                        final categoryKey = c.isEmpty ? 'uncategorized' : c;
+                        final sc = (item.subcategory ?? '').trim();
+                        final subKey = sc.isEmpty ? '' : sc;
+                        byCategory.putIfAbsent(categoryKey, () => <String, List<InventoryItem>>{});
+                        byCategory[categoryKey]!.putIfAbsent(subKey, () => <InventoryItem>[]).add(item);
+                      }
+
+                      final categories = byCategory.keys.toList();
+                      categories.sort((a, b) {
+                        if (a == 'uncategorized' && b != 'uncategorized') return 1;
+                        if (b == 'uncategorized' && a != 'uncategorized') return -1;
+                        return a.toLowerCase().compareTo(b.toLowerCase());
+                      });
+
                       return <Widget>[
                         Padding(
                           padding: const EdgeInsets.only(top: 8, bottom: 8),
@@ -994,13 +1119,62 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                           ),
                         ),
-                        ...items.map((item) => _InventoryCard(
-                              item: item,
-                              prettyName: _prettyName,
-                              onEdit: () => _showEditItemSheet(item),
-                              onDelete: () => _deleteItem(item.inventoryId),
-                              onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
-                            )),
+                        ...categories.expand((categoryKey) {
+                          final bySubcategory = byCategory[categoryKey] ?? const <String, List<InventoryItem>>{};
+                          final noSubItems = (bySubcategory[''] ?? const <InventoryItem>[]).toList();
+                          noSubItems.sort((a, b) => a.displayLabel.toLowerCase().compareTo(b.displayLabel.toLowerCase()));
+
+                          final subcats = bySubcategory.keys.where((k) => k.trim().isNotEmpty).toList();
+                          subcats.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+                          final widgets = <Widget>[
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6, bottom: 6, left: 8),
+                              child: Text(
+                                _prettyName(categoryKey),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            ...noSubItems.map((item) => _InventoryCard(
+                                  item: item,
+                                  prettyName: _prettyName,
+                                  onEdit: () => _showEditItemSheet(item),
+                                  onDelete: () => _deleteItem(item.inventoryId),
+                                  onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
+                                )),
+                          ];
+
+                          for (final subKey in subcats) {
+                            final subItems = (bySubcategory[subKey] ?? const <InventoryItem>[]).toList();
+                            subItems.sort((a, b) => a.displayLabel.toLowerCase().compareTo(b.displayLabel.toLowerCase()));
+                            widgets.add(
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4, bottom: 4, left: 16),
+                                child: Text(
+                                  _prettyName(subKey),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(fontWeight: FontWeight.w500, color: Colors.grey.shade700),
+                                ),
+                              ),
+                            );
+                            widgets.addAll(
+                              subItems.map((item) => _InventoryCard(
+                                    item: item,
+                                    prettyName: _prettyName,
+                                    onEdit: () => _showEditItemSheet(item),
+                                    onDelete: () => _deleteItem(item.inventoryId),
+                                    onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
+                                  )),
+                            );
+                          }
+
+                          return widgets;
+                        }),
                       ];
                     }),
                   ],

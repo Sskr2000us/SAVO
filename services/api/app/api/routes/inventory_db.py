@@ -34,6 +34,7 @@ class InventoryItemCreate(BaseModel):
     canonical_name: str = Field(..., description="Standardized ingredient name")
     display_name: str = Field(..., description="User-friendly display name")
     category: Optional[str] = Field(None, description="vegetables, dairy, meat, etc")
+    subcategory: Optional[str] = Field(None, description="leafy, root, rice, millets, powders, etc")
     
     quantity: float = Field(..., gt=0, description="Quantity")
     unit: str = Field(..., description="Unit of measurement")
@@ -66,6 +67,7 @@ class InventoryItemUpdate(BaseModel):
     canonical_name: Optional[str] = None
     display_name: Optional[str] = None
     category: Optional[str] = None
+    subcategory: Optional[str] = None
     
     quantity: Optional[float] = Field(None, gt=0)
     unit: Optional[str] = None
