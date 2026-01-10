@@ -40,14 +40,21 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _currentIndex = 0;
   int _savedCount = 0;
   int _skippedCount = 0;
+  bool _autoVideoStarted = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.autoStartVideoScan && !kIsWeb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _videoScan();
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        // Presenting the native camera picker during a route transition can crash on iOS.
+        // Delay slightly and ensure this route is current before opening the picker.
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        if (!mounted || _autoVideoStarted) return;
+        final route = ModalRoute.of(context);
+        if (route != null && route.isCurrent != true) return;
+        _autoVideoStarted = true;
+        await _videoScan();
       });
     }
   }
