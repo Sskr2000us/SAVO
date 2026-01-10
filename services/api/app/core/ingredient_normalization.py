@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Set
 from difflib import SequenceMatcher
 from decimal import Decimal
 import re
+import unicodedata
 
 
 class IngredientNormalizer:
@@ -148,7 +149,8 @@ class IngredientNormalizer:
             Canonical name (lowercase, underscored)
         """
         # Clean up name
-        name = ingredient_name.lower().strip()
+        name = unicodedata.normalize("NFKC", (ingredient_name or "")).strip()
+        name = name.casefold()
         
         # Remove common descriptors
         descriptors = [
@@ -164,10 +166,13 @@ class IngredientNormalizer:
             return self.CANONICAL_NAMES[name]
         
         # Convert spaces and hyphens to underscores
-        name = name.replace(" ", "_").replace("-", "_")
-        
-        # Remove special characters except underscores
-        name = re.sub(r'[^a-z0-9_]', '', name)
+        name = re.sub(r"[\s\-]+", "_", name)
+
+        # Remove punctuation/symbols, but keep Unicode letters/digits/underscore.
+        name = re.sub(r"[^\w_]", "", name, flags=re.UNICODE)
+
+        # Collapse multiple underscores
+        name = re.sub(r"_+", "_", name).strip("_")
         
         return name
     

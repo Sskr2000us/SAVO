@@ -247,6 +247,106 @@ class GraphIntelligenceService:
         """
         if not ingredient_ids:
             return []
+
+    async def get_derived_from(
+        self,
+        conn,
+        ingredient_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return base ingredients that `ingredient_id` is derived from."""
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    d.id,
+                    d.base_ingredient_id,
+                    mi.canonical_name,
+                    mi.category,
+                    mi.names,
+                    d.derivation_type,
+                    d.confidence,
+                    d.cuisine_types,
+                    d.notes
+                FROM ingredient_derivations d
+                JOIN master_ingredients mi ON d.base_ingredient_id = mi.id
+                WHERE d.derived_ingredient_id = $1
+                ORDER BY d.confidence DESC NULLS LAST, mi.canonical_name
+                LIMIT $2
+                """,
+                ingredient_id,
+                limit,
+            )
+
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "relationship_id": str(r["id"]),
+                        "ingredient_id": str(r["base_ingredient_id"]),
+                        "canonical_name": r["canonical_name"],
+                        "category": r["category"],
+                        "names": r["names"],
+                        "derivation_type": r["derivation_type"],
+                        "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                        "cuisine_types": r["cuisine_types"],
+                        "notes": r["notes"],
+                    }
+                )
+            return out
+        except Exception as e:
+            print(f"Error getting derived-from relationships: {e}")
+            return []
+
+    async def get_derivatives(
+        self,
+        conn,
+        ingredient_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return ingredients derived from `ingredient_id` (base -> derived)."""
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    d.id,
+                    d.derived_ingredient_id,
+                    mi.canonical_name,
+                    mi.category,
+                    mi.names,
+                    d.derivation_type,
+                    d.confidence,
+                    d.cuisine_types,
+                    d.notes
+                FROM ingredient_derivations d
+                JOIN master_ingredients mi ON d.derived_ingredient_id = mi.id
+                WHERE d.base_ingredient_id = $1
+                ORDER BY d.confidence DESC NULLS LAST, mi.canonical_name
+                LIMIT $2
+                """,
+                ingredient_id,
+                limit,
+            )
+
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "relationship_id": str(r["id"]),
+                        "ingredient_id": str(r["derived_ingredient_id"]),
+                        "canonical_name": r["canonical_name"],
+                        "category": r["category"],
+                        "names": r["names"],
+                        "derivation_type": r["derivation_type"],
+                        "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                        "cuisine_types": r["cuisine_types"],
+                        "notes": r["notes"],
+                    }
+                )
+            return out
+        except Exception as e:
+            print(f"Error getting derivatives: {e}")
+            return []
         
         try:
             # Get pairings for all provided ingredients

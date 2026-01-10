@@ -20,11 +20,19 @@ class GuidedScanResult {
 class GuidedScanScreen extends StatefulWidget {
   final String scanType;
   final String? locationHint;
+  final String? barcode;
+  final String? barcodeNameHint;
+  final double? barcodeQuantityHint;
+  final String? barcodeUnitHint;
 
   const GuidedScanScreen({
     super.key,
     this.scanType = 'pantry',
     this.locationHint,
+    this.barcode,
+    this.barcodeNameHint,
+    this.barcodeQuantityHint,
+    this.barcodeUnitHint,
   });
 
   @override
@@ -216,6 +224,14 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
           'scan_type': widget.scanType,
           if (widget.locationHint != null && widget.locationHint!.trim().isNotEmpty)
             'location_hint': widget.locationHint!.trim(),
+          if (widget.barcode != null && widget.barcode!.trim().isNotEmpty)
+            'barcode': widget.barcode!.trim(),
+          if (widget.barcodeNameHint != null && widget.barcodeNameHint!.trim().isNotEmpty)
+            'barcode_name_hint': widget.barcodeNameHint!.trim(),
+          if (widget.barcodeQuantityHint != null && widget.barcodeQuantityHint! > 0)
+            'barcode_quantity_hint': widget.barcodeQuantityHint!.toString(),
+          if (widget.barcodeUnitHint != null && widget.barcodeUnitHint!.trim().isNotEmpty)
+            'barcode_unit_hint': widget.barcodeUnitHint!.trim(),
         },
         timeoutSeconds: 30,
       );

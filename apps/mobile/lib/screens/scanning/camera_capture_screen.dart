@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/scanning_service.dart';
+import '../../services/barcode_lookup_service.dart';
+import 'barcode_scan_screen.dart';
 import 'ingredient_confirmation_screen.dart';
 
 /// Camera capture screen for scanning pantry/fridge
@@ -22,6 +24,12 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   String _scanType = 'pantry';
   final TextEditingController _locationController = TextEditingController();
   final ScanningService _scanningService = ScanningService();
+  final BarcodeLookupService _barcodeLookup = BarcodeLookupService();
+
+  String? _barcode;
+  String? _barcodeNameHint;
+  double? _barcodeQuantityHint;
+  String? _barcodeUnitHint;
 
   @override
   void initState() {
@@ -108,6 +116,10 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         locationHint: _locationController.text.isNotEmpty
             ? _locationController.text
             : null,
+        barcode: _barcode,
+        barcodeNameHint: _barcodeNameHint,
+        barcodeQuantityHint: _barcodeQuantityHint,
+        barcodeUnitHint: _barcodeUnitHint,
       );
 
       if (mounted) {
@@ -119,6 +131,10 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                 scanId: result['scan_id'],
                 ingredients: result['ingredients'],
                 metadata: result['metadata'],
+                    barcode: _barcode,
+                    barcodeNameHint: _barcodeNameHint,
+                    barcodeQuantityHint: _barcodeQuantityHint,
+                    barcodeUnitHint: _barcodeUnitHint,
               ),
             ),
           );
@@ -142,6 +158,57 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
     setState(() {
       _capturedImage = null;
     });
+  }
+
+  Future<void> _scanBarcode() async {
+    if (_isProcessing) return;
+
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const BarcodeScanScreen()),
+    );
+    if (!mounted) return;
+    if (code == null || code.trim().isEmpty) return;
+
+    setState(() {
+      _barcode = code.trim();
+      _barcodeNameHint = null;
+      _barcodeQuantityHint = null;
+      _barcodeUnitHint = null;
+    });
+
+    try {
+      final product = await _barcodeLookup.lookupProduct(_barcode!);
+      if (!mounted) return;
+      if (product == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Barcode scanned')), 
+        );
+        return;
+      }
+
+      setState(() {
+        _barcodeNameHint = product['name']?.toString();
+        final q = product['quantity'];
+        _barcodeQuantityHint = (q is num) ? q.toDouble() : double.tryParse(q?.toString() ?? '');
+        _barcodeUnitHint = product['unit']?.toString();
+      });
+
+      final name = (_barcodeNameHint ?? '').trim();
+      if (name.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Barcode: $name')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Barcode scanned')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Barcode scanned')),
+      );
+    }
   }
 
   void _showError(String message) {
@@ -249,8 +316,11 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                 ),
               ),
 
-              // Placeholder for symmetry
-              const SizedBox(width: 48),
+              // Barcode scan (optional)
+              IconButton(
+                icon: const Icon(Icons.qr_code_scanner, color: Colors.white, size: 32),
+                onPressed: _scanBarcode,
+              ),
             ],
           ),
         ),

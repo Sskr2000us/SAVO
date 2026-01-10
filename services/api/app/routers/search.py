@@ -25,6 +25,7 @@ class SearchRequest(BaseModel):
     limit: int = Field(20, description="Maximum number of results", ge=1, le=100)
     language: Optional[str] = Field(None, description="Language filter (en, hi, ta, es, zh, ar)")
     category: Optional[str] = Field(None, description="Category filter")
+    collapse_deprecated: bool = Field(True, description="Collapse deprecated ingredients onto replacements")
 
 
 class SemanticSearchRequest(SearchRequest):
@@ -48,6 +49,7 @@ class VoiceSearchRequest(BaseModel):
     audio_text: str = Field(..., description="Transcribed audio text")
     limit: int = Field(20, ge=1, le=100)
     language: Optional[str] = None
+    collapse_deprecated: bool = Field(True, description="Collapse deprecated ingredients onto replacements")
 
 
 class AutocompleteRequest(BaseModel):
@@ -55,6 +57,7 @@ class AutocompleteRequest(BaseModel):
     prefix: str = Field(..., description="Text prefix", min_length=1)
     limit: int = Field(10, ge=1, le=50)
     language: Optional[str] = None
+    collapse_deprecated: bool = Field(True, description="Collapse deprecated ingredients onto replacements")
 
 
 class SearchResult(BaseModel):
@@ -88,6 +91,7 @@ async def multi_language_search(
     limit: int = Query(20, ge=1, le=100),
     language: Optional[str] = Query(None, description="Language filter"),
     category: Optional[str] = Query(None, description="Category filter"),
+    collapse_deprecated: bool = Query(True, description="Collapse deprecated ingredients onto replacements"),
     conn: asyncpg.Connection = Depends(get_db_connection)
 ):
     """
@@ -107,7 +111,12 @@ async def multi_language_search(
     """
     try:
         results = await search_service.multi_language_search(
-            conn, query, limit=limit, language=language, category=category
+            conn,
+            query,
+            limit=limit,
+            language=language,
+            category=category,
+            collapse_deprecated=collapse_deprecated,
         )
         
         return {
@@ -154,7 +163,8 @@ async def semantic_search(
             limit=request.limit,
             min_similarity=request.min_similarity,
             category_filter=request.category,
-            language_filter=request.language
+            language_filter=request.language,
+            collapse_deprecated=request.collapse_deprecated,
         )
         
         return {
@@ -200,7 +210,8 @@ async def fuzzy_search(
             request.query,
             limit=request.limit,
             threshold=request.threshold,
-            language=request.language
+            language=request.language,
+            collapse_deprecated=request.collapse_deprecated,
         )
         
         return {
@@ -250,7 +261,8 @@ async def hybrid_search(
             language=request.language,
             category=request.category,
             use_semantic=request.use_semantic,
-            use_fuzzy=request.use_fuzzy
+            use_fuzzy=request.use_fuzzy,
+            collapse_deprecated=request.collapse_deprecated,
         )
         
         return {
@@ -300,7 +312,8 @@ async def voice_search(
             conn,
             request.audio_text,
             limit=request.limit,
-            language=request.language
+            language=request.language,
+            collapse_deprecated=request.collapse_deprecated,
         )
         
         return {
@@ -318,6 +331,7 @@ async def autocomplete(
     prefix: str = Query(..., description="Text prefix", min_length=1),
     limit: int = Query(10, ge=1, le=50),
     language: Optional[str] = Query(None, description="Language filter"),
+    collapse_deprecated: bool = Query(True, description="Collapse deprecated ingredients onto replacements"),
     conn: asyncpg.Connection = Depends(get_db_connection)
 ):
     """
@@ -336,12 +350,13 @@ async def autocomplete(
     """
     try:
         suggestions = await search_service.autocomplete(
-            conn, prefix, limit=limit, language=language
+            conn, prefix, limit=limit, language=language, collapse_deprecated=collapse_deprecated
         )
         
         return {
             "prefix": prefix,
             "language": language,
+            "collapse_deprecated": collapse_deprecated,
             "suggestions": suggestions,
             "count": len(suggestions)
         }

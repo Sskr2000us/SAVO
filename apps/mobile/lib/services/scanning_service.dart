@@ -49,6 +49,46 @@ class ScanningService {
     if (cn is String) {
       out['confirmed_name'] = cn.trim();
     }
+
+    final bc = out['barcode'];
+    if (bc is String) {
+      final trimmed = bc.trim();
+      if (trimmed.isEmpty) {
+        out.remove('barcode');
+      } else {
+        out['barcode'] = trimmed;
+      }
+    }
+
+    final bcn = out['barcode_name_hint'];
+    if (bcn is String) {
+      final trimmed = bcn.trim();
+      if (trimmed.isEmpty) {
+        out.remove('barcode_name_hint');
+      } else {
+        out['barcode_name_hint'] = trimmed;
+      }
+    }
+
+    final bcu = out['barcode_unit_hint'];
+    if (bcu is String) {
+      final trimmed = bcu.trim();
+      if (trimmed.isEmpty) {
+        out.remove('barcode_unit_hint');
+      } else {
+        out['barcode_unit_hint'] = _normalizeUnit(trimmed);
+      }
+    }
+
+    final bcq = out['barcode_quantity_hint'];
+    if (bcq is String) {
+      final parsed = double.tryParse(bcq.trim());
+      if (parsed == null || parsed <= 0) {
+        out.remove('barcode_quantity_hint');
+      } else {
+        out['barcode_quantity_hint'] = parsed;
+      }
+    }
     final unit = out['unit'];
     if (unit is String) {
       out['unit'] = _normalizeUnit(unit);
@@ -86,6 +126,10 @@ class ScanningService {
     required File imageFile,
     required String scanType,
     String? locationHint,
+    String? barcode,
+    String? barcodeNameHint,
+    double? barcodeQuantityHint,
+    String? barcodeUnitHint,
     int retryCount = 0,
   }) async {
     const maxRetries = 2;
@@ -145,6 +189,22 @@ class ScanningService {
       request.fields['scan_type'] = scanType;
       if (locationHint != null && locationHint.isNotEmpty) {
         request.fields['location_hint'] = locationHint;
+      }
+
+      final bc = (barcode ?? '').trim();
+      if (bc.isNotEmpty) {
+        request.fields['barcode'] = bc;
+      }
+      final bcn = (barcodeNameHint ?? '').trim();
+      if (bcn.isNotEmpty) {
+        request.fields['barcode_name_hint'] = bcn;
+      }
+      if (barcodeQuantityHint != null && barcodeQuantityHint > 0) {
+        request.fields['barcode_quantity_hint'] = barcodeQuantityHint.toString();
+      }
+      final bcu = (barcodeUnitHint ?? '').trim();
+      if (bcu.isNotEmpty) {
+        request.fields['barcode_unit_hint'] = _normalizeUnit(bcu);
       }
 
       // Send request with timeout
@@ -234,6 +294,10 @@ class ScanningService {
           imageFile: imageFile,
           scanType: scanType,
           locationHint: locationHint,
+          barcode: barcode,
+          barcodeNameHint: barcodeNameHint,
+          barcodeQuantityHint: barcodeQuantityHint,
+          barcodeUnitHint: barcodeUnitHint,
           retryCount: retryCount + 1,
         );
       }
@@ -252,6 +316,10 @@ class ScanningService {
           imageFile: imageFile,
           scanType: scanType,
           locationHint: locationHint,
+          barcode: barcode,
+          barcodeNameHint: barcodeNameHint,
+          barcodeQuantityHint: barcodeQuantityHint,
+          barcodeUnitHint: barcodeUnitHint,
           retryCount: retryCount + 1,
         );
       }

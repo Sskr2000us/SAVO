@@ -4,7 +4,7 @@ Handles inventory CRUD, low stock alerts, and automatic deduction
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 from datetime import date, datetime
 
@@ -21,6 +21,38 @@ from app.core.database import (
     activate_inventory_items_for_scan_set,
 )
 from app.middleware.auth import get_current_user
+
+
+async def _log_inventory_event(
+    user_id: str,
+    item: Dict[str, Any],
+    event_type: str,
+    before: Optional[Dict[str, Any]],
+    after: Optional[Dict[str, Any]],
+) -> None:
+    """Best-effort inventory event log for KPI dashboards."""
+    try:
+        from app.core.database import get_db_client
+
+        db = get_db_client()
+        db.table("inventory_item_events").insert(
+            {
+                "user_id": user_id,
+                "item_id": item.get("id"),
+                "event_type": event_type,
+                "before": before or None,
+                "after": after or None,
+                "item_source": item.get("source"),
+                "item_scan_confidence": item.get("scan_confidence"),
+                "item_model_version": item.get("model_version"),
+                "item_model_provider": item.get("model_provider"),
+                "item_release_version": item.get("release_version"),
+                "item_app_version": item.get("app_version"),
+            }
+        ).execute()
+    except Exception:
+        # Never break core inventory flows.
+        return
 
 router = APIRouter()  # Remove duplicate prefix - already set in main router
 
@@ -200,6 +232,9 @@ async def update_item(
         item_data = item.model_dump(exclude_unset=True)
         if not item_data:
             raise HTTPException(status_code=400, detail="No fields to update")
+
+        # Snapshot before (for correction/false-positive metrics)
+        before_item = next((i for i in user_items if i.get("id") == item_id), None)
         
         # Convert dates to ISO format
         if item_data.get("purchase_date"):
@@ -208,6 +243,26 @@ async def update_item(
             item_data["expiry_date"] = item_data["expiry_date"].isoformat()
         
         updated_item = await update_inventory_item(item_id, item_data)
+
+        # Best-effort event log
+        if before_item:
+            await _log_inventory_event(
+                user_id=user_id,
+                item=before_item,
+                event_type="update",
+                before={
+                    "canonical_name": before_item.get("canonical_name"),
+                    "quantity": before_item.get("quantity"),
+                    "unit": before_item.get("unit"),
+                    "is_current": before_item.get("is_current"),
+                },
+                after={
+                    "canonical_name": updated_item.get("canonical_name"),
+                    "quantity": updated_item.get("quantity"),
+                    "unit": updated_item.get("unit"),
+                    "is_current": updated_item.get("is_current"),
+                },
+            )
         
         return {
             "success": True,
@@ -240,7 +295,24 @@ async def remove_item(
                 detail="Item not found or access denied"
             )
         
+        before_item = next((i for i in user_items if i.get("id") == item_id), None)
+
         await delete_inventory_item(item_id)
+
+        # Best-effort event log
+        if before_item:
+            await _log_inventory_event(
+                user_id=user_id,
+                item=before_item,
+                event_type="delete",
+                before={
+                    "canonical_name": before_item.get("canonical_name"),
+                    "quantity": before_item.get("quantity"),
+                    "unit": before_item.get("unit"),
+                    "is_current": before_item.get("is_current"),
+                },
+                after=None,
+            )
         
         return {
             "success": True,

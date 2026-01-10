@@ -6,7 +6,7 @@ Processes video files frame-by-frame for comprehensive pantry scanning
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import List, Dict, Optional
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import base64
 import asyncio
@@ -20,6 +20,51 @@ from app.api.routes.profile import get_full_profile
 
 
 router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
+
+
+def _safe_crop_by_bbox(image_data: bytes, bbox: Optional[Dict]) -> Optional[bytes]:
+    """Crop a JPEG bytes image using normalized bbox {x,y,width,height}.
+
+    Returns cropped JPEG bytes, or None if bbox is missing/invalid.
+    """
+    if not bbox or not isinstance(bbox, dict):
+        return None
+    if not all(k in bbox for k in ["x", "y", "width", "height"]):
+        return None
+
+    try:
+        from PIL import Image
+        import io
+
+        img = Image.open(io.BytesIO(image_data)).convert("RGB")
+        w, h = img.size
+        x = max(0.0, min(1.0, float(bbox.get("x"))))
+        y = max(0.0, min(1.0, float(bbox.get("y"))))
+        bw = max(0.0, min(1.0, float(bbox.get("width"))))
+        bh = max(0.0, min(1.0, float(bbox.get("height"))))
+        if bw <= 0 or bh <= 0 or w <= 1 or h <= 1:
+            return None
+
+        left = int(x * w)
+        top = int(y * h)
+        right = int((x + bw) * w)
+        bottom = int((y + bh) * h)
+
+        pad_x = int(max(2, (right - left) * 0.08))
+        pad_y = int(max(2, (bottom - top) * 0.08))
+        left = max(0, left - pad_x)
+        top = max(0, top - pad_y)
+        right = min(w, right + pad_x)
+        bottom = min(h, bottom + pad_y)
+        if right <= left or bottom <= top:
+            return None
+
+        crop = img.crop((left, top, right, bottom))
+        out = io.BytesIO()
+        crop.save(out, format="JPEG", quality=85, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -256,18 +301,9 @@ async def analyze_video(
         db = get_db_client()
         scan_id = str(uuid4())
 
-        # Upload a representative frame image for auditability (best-effort)
+        # Privacy: do NOT persist full frames long-term.
+        representative_frame = frames[0] if frames else None
         representative_image_url = None
-        try:
-            representative_frame = frames[0] if frames else None
-            if representative_frame:
-                representative_image_url = upload_inventory_image(
-                    user_id=user_id,
-                    content=representative_frame,
-                    content_type="image/jpeg",
-                )
-        except Exception as e:
-            logger.warning(f"Failed to upload representative video frame: {e}")
         
         db.table("ingredient_scans").insert({
             "id": scan_id,
@@ -275,13 +311,13 @@ async def analyze_video(
             "scan_type": "video_" + scan_type,
             "location_hint": location_hint,
             "status": "processing",
-            "image_url": representative_image_url,
+            "image_url": None,
             "created_at": datetime.utcnow().isoformat(),
             "metadata": {
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
                 "frames_extracted": len(frames),
-                "representative_frame_image_url": representative_image_url,
+                "representative_frame_image_url": None,
             }
         }).execute()
         
@@ -326,6 +362,26 @@ async def analyze_video(
         # Store detections in database
         for detection in unique_detections:
             detected_id = str(uuid4())
+
+            # Best-effort crop from representative frame when bbox exists.
+            thumbnail_url = None
+            try:
+                if representative_frame and isinstance(detection, dict) and detection.get("bbox"):
+                    cropped = _safe_crop_by_bbox(representative_frame, detection.get("bbox"))
+                    if cropped:
+                        expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+                        thumbnail_url = upload_inventory_image(
+                            user_id=user_id,
+                            content=cropped,
+                            content_type="image/jpeg",
+                            asset_type="crop",
+                            source="video_scanning",
+                            expires_at=expires_at,
+                            links={"scan_id": scan_id, "detected_id": detected_id},
+                            metadata={"kind": "video_frame_crop"},
+                        )
+            except Exception:
+                thumbnail_url = None
             
             db.table("detected_ingredients").insert({
                 "id": detected_id,
@@ -340,8 +396,8 @@ async def analyze_video(
                 "close_alternatives": detection.get("close_alternatives", []),
                 "visual_similarity_group": detection.get("visual_similarity_group"),
                 "confirmation_status": "pending",
-                "thumbnail_url": None,
-                "full_image_url": representative_image_url,
+                "thumbnail_url": thumbnail_url,
+                "full_image_url": None,
                 "metadata": {
                     "detection_count": detection.get("detection_count", 1),
                     "frames_detected_in": detection.get("detection_count", 1)

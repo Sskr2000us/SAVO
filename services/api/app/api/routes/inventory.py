@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import List, Optional
 import base64
 import io
@@ -304,10 +305,14 @@ async def post_scan_ingredients(
     stored_image_ref: Optional[str] = None
     if user_id:
         try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
             stored_image_ref = upload_inventory_image(
                 user_id=user_id,
                 content=raw,
                 content_type=image.content_type,
+                asset_type="inventory_scan_reference",
+                source="inventory_scan",
+                expires_at=expires_at,
             )
         except Exception:
             stored_image_ref = None

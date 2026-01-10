@@ -24,7 +24,8 @@ class VisionAPIClient:
     
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4o"  # GPT-4 Vision model
+        # Allow overriding to support auditability and controlled rollouts.
+        self.model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
         
         # Confidence thresholds
         self.HIGH_CONFIDENCE = Decimal("0.80")
@@ -35,7 +36,11 @@ class VisionAPIClient:
         image_data: bytes,
         scan_type: str = "pantry",
         location_hint: Optional[str] = None,
-        user_preferences: Optional[Dict] = None
+        user_preferences: Optional[Dict] = None,
+        barcode: Optional[str] = None,
+        barcode_name_hint: Optional[str] = None,
+        barcode_quantity_hint: Optional[float] = None,
+        barcode_unit_hint: Optional[str] = None,
     ) -> Dict:
         """
         Analyze image and detect ingredients with confidence scores
@@ -74,7 +79,15 @@ class VisionAPIClient:
             image_hash, image_size = self._process_image(image_data)
             
             # Build prompt
-            prompt = self._build_detection_prompt(scan_type, location_hint, user_preferences)
+            prompt = self._build_detection_prompt(
+                scan_type,
+                location_hint,
+                user_preferences,
+                barcode=barcode,
+                barcode_name_hint=barcode_name_hint,
+                barcode_quantity_hint=barcode_quantity_hint,
+                barcode_unit_hint=barcode_unit_hint,
+            )
             
             # Encode image for API
             base64_image = base64.b64encode(image_data).decode('utf-8')
@@ -335,7 +348,11 @@ OUTPUT (JSON only):
         self,
         scan_type: str,
         location_hint: Optional[str],
-        user_preferences: Optional[Dict]
+        user_preferences: Optional[Dict],
+        barcode: Optional[str] = None,
+        barcode_name_hint: Optional[str] = None,
+        barcode_quantity_hint: Optional[float] = None,
+        barcode_unit_hint: Optional[str] = None,
     ) -> str:
         """
         Build prompt for Vision API with context
@@ -398,6 +415,20 @@ RESPONSE FORMAT (JSON):
         # Add location context
         if location_hint:
             prompt += f"\nLOCATION CONTEXT: User indicated this is from '{location_hint}'\n"
+
+        # Optional barcode context (best-effort).
+        bc = (barcode or "").strip()
+        bcn = (barcode_name_hint or "").strip()
+        if bc or bcn or barcode_quantity_hint is not None:
+            prompt += "\nBARCODE CONTEXT (OPTIONAL):\n"
+            if bc:
+                prompt += f"- A barcode was scanned: {bc}\n"
+            if bcn:
+                prompt += f"- Barcode lookup suggests product name: {bcn}\n"
+            if barcode_quantity_hint is not None:
+                bu = (barcode_unit_hint or "").strip() or "unknown"
+                prompt += f"- Barcode lookup suggests net quantity: {barcode_quantity_hint} {bu}\n"
+            prompt += "INSTRUCTIONS: Use barcode hints only if you can visually match a packaged item in the image. If the barcode hints do not match what you see, ignore them and rely on the image.\n"
         
         # Add user context (cuisine preferences can help)
         if user_preferences:

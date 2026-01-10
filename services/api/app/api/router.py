@@ -19,6 +19,15 @@ from app.api.routes.security import router as security_router
 from app.api.routes.debug import router as debug_router
 from app.api.routes.market import router as market_router, admin_router as admin_market_router
 from app.api.routes.analytics import router as analytics_router
+from app.api.routes.metrics import router as metrics_router
+from app.api.routes.scan_session import router as scan_session_router
+from app.api.routes.scan_frames import router as scan_frames_router
+from app.api.routes.vision import router as vision_router
+from app.api.routes.quantity import router as quantity_router
+from app.api.routes.pantry import router as pantry_router
+from app.api.routes.learning import router as learning_router
+from app.api.routes.events import router as events_router
+from app.api.routes.observations import router as observations_router
 
 # Ingredient Intelligence routers
 from app.routers.intelligence import router as intelligence_router
@@ -44,6 +53,8 @@ api_router.include_router(nutrition_router, tags=["nutrition"])
 api_router.include_router(profile_router, tags=["profile"])
 api_router.include_router(inventory_db_router, prefix="/inventory-db", tags=["inventory-db"])
 api_router.include_router(scanning_router, tags=["scanning"])
+api_router.include_router(events_router, tags=["events"])
+api_router.include_router(observations_router, tags=["observations"])
 api_router.include_router(video_scanning_router, tags=["video-scanning"])
 api_router.include_router(barcode_router, prefix="/barcode", tags=["barcode"])
 api_router.include_router(security_router, tags=["security"])
@@ -51,6 +62,13 @@ api_router.include_router(debug_router, prefix="/debug", tags=["debug"])
 api_router.include_router(market_router, tags=["market"])
 api_router.include_router(admin_market_router, tags=["admin", "market"])
 api_router.include_router(analytics_router, tags=["analytics"])
+api_router.include_router(metrics_router, tags=["metrics"])
+api_router.include_router(scan_session_router, tags=["scan-session"])
+api_router.include_router(scan_frames_router, tags=["scan-frames"])
+api_router.include_router(vision_router, tags=["vision"])
+api_router.include_router(quantity_router, tags=["quantity"])
+api_router.include_router(pantry_router, tags=["pantry"])
+api_router.include_router(learning_router, tags=["learning"])
 
 # Ingredient Intelligence routers
 api_router.include_router(intelligence_router, tags=["intelligence"])

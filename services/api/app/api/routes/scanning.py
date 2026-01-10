@@ -3,7 +3,7 @@ Scanning API Routes
 Endpoints for pantry/fridge scanning with Vision AI
 """
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header
 from typing import Any, List, Dict, Optional
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta, timezone
@@ -11,6 +11,9 @@ from decimal import Decimal
 import logging
 import io
 import statistics
+import os
+import hashlib
+import time
 
 from pydantic import BaseModel, Field
 
@@ -21,11 +24,168 @@ from app.core.database import get_db_client
 from app.core.vision_api import get_vision_client
 from app.core.ingredient_normalization import get_normalizer
 from app.api.routes.profile import get_full_profile
-from app.core.media_storage import upload_inventory_image
+from app.core.media_storage import upload_inventory_image, to_signed_url
+from app.core.events import emit_event, emit_events
+from app.core.observations import log_scan_observations
+import os
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scanning", tags=["scanning"])
+
+
+def _resolve_master_ingredient_id(db, name: str) -> Optional[str]:
+    """Best-effort resolve a master ingredient UUID from a name.
+
+    Uses canonical name first, then aliases. If the matched ingredient is deprecated
+    and has a replacement, follows `replaced_by_id` (up to a few hops).
+    """
+
+    def _follow_redirect(ingredient_row: Optional[Dict[str, Any]]) -> Optional[str]:
+        seen = set()
+        hops = 0
+        row = ingredient_row
+        while row and hops < 5:
+            ing_id = row.get("id")
+            if not ing_id or ing_id in seen:
+                break
+            seen.add(ing_id)
+            status = (row.get("status") or "").strip().lower()
+            replaced_by = row.get("replaced_by_id")
+            if status != "deprecated" or not replaced_by:
+                return str(ing_id)
+            try:
+                next_row = (
+                    db.table("master_ingredients")
+                    .select("id,status,replaced_by_id")
+                    .eq("id", str(replaced_by))
+                    .limit(1)
+                    .execute()
+                )
+                row = next_row.data[0] if next_row.data else None
+            except Exception:
+                break
+            hops += 1
+        return str(row.get("id")) if row and row.get("id") else None
+
+    n = (name or "").strip()
+    if not n:
+        return None
+
+    # 1) canonical_name match
+    try:
+        res = (
+            db.table("master_ingredients")
+            .select("id,status,replaced_by_id")
+            .ilike("canonical_name", n)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return _follow_redirect(res.data[0])
+    except Exception:
+        pass
+
+    # 2) alias match
+    try:
+        alias = (
+            db.table("ingredient_aliases")
+            .select("ingredient_id")
+            .ilike("alias_name", n)
+            .limit(1)
+            .execute()
+        )
+        if alias.data and alias.data[0].get("ingredient_id"):
+            ing_id = str(alias.data[0]["ingredient_id"])
+            mi = (
+                db.table("master_ingredients")
+                .select("id,status,replaced_by_id")
+                .eq("id", ing_id)
+                .limit(1)
+                .execute()
+            )
+            if mi.data:
+                return _follow_redirect(mi.data[0])
+            return ing_id
+    except Exception:
+        pass
+
+    return None
+
+
+def _anonymized_item_signature(user_id: str, detected_item: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> str:
+    """Return a stable, anonymized signature for an item-like entity.
+
+    This is intended for ML learning logs, not for security.
+    Uses SHA-256 over non-PII-ish attributes + a server-side salt.
+    """
+    salt = os.getenv("SAVO_ANON_SIG_SALT", "")
+    md = detected_item.get("metadata") if isinstance(detected_item, dict) else None
+    if not isinstance(md, dict):
+        md = {}
+    bbox = detected_item.get("bbox") if isinstance(detected_item, dict) else None
+    if isinstance(bbox, dict):
+        try:
+            bbox_norm = {
+                "x": round(float(bbox.get("x") or 0.0), 3),
+                "y": round(float(bbox.get("y") or 0.0), 3),
+                "w": round(float(bbox.get("width") or 0.0), 3),
+                "h": round(float(bbox.get("height") or 0.0), 3),
+            }
+        except Exception:
+            bbox_norm = {}
+    else:
+        bbox_norm = {}
+
+    payload = {
+        "u": str(user_id),
+        "detected_id": str(detected_item.get("id") or ""),
+        "name": str(detected_item.get("canonical_name") or detected_item.get("detected_name") or ""),
+        "container_hash": str(md.get("container_hash") or ""),
+        "barcode": str(md.get("barcode") or ""),
+        "bbox": bbox_norm,
+    }
+    if isinstance(extra, dict):
+        payload.update(extra)
+    raw = (salt + "|" + str(payload)).encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _retry_without_missing_column(db, table: str, op: str, payload: Dict[str, Any], where: Optional[Dict[str, Any]] = None):
+    """Best-effort: PostgREST schema cache can lag migrations; retry once removing missing columns."""
+    try:
+        if op == "insert":
+            return db.table(table).insert(payload).execute()
+        if op == "update":
+            q = db.table(table).update(payload)
+            if where:
+                for k, v in where.items():
+                    q = q.eq(k, v)
+            return q.execute()
+        raise ValueError("Unsupported op")
+    except Exception as e:
+        msg = str(e)
+        # Common PostgREST error: 'column "foo" of relation "bar" does not exist'
+        missing = None
+        try:
+            import re
+
+            m = re.search(r'column\s+"([a-zA-Z0-9_]+)"\s+of\s+relation', msg)
+            if m:
+                missing = m.group(1)
+        except Exception:
+            missing = None
+        if missing and missing in payload:
+            payload = dict(payload)
+            payload.pop(missing, None)
+            if op == "insert":
+                return db.table(table).insert(payload).execute()
+            q = db.table(table).update(payload)
+            if where:
+                for k, v in where.items():
+                    q = q.eq(k, v)
+            return q.execute()
+        raise
 
 
 def _normalize_unit(unit: Optional[str]) -> str:
@@ -282,6 +442,75 @@ def _apply_scan_delta(current: List[Dict[str, Any]], previous: Dict[str, Dict[st
     }
 
 
+def _apply_barcode_hints_to_detections(
+    detections: List[Dict[str, Any]],
+    barcode_name_hint: Optional[str],
+    barcode_quantity_hint: Optional[float],
+    barcode_unit_hint: Optional[str],
+) -> None:
+    """Best-effort: apply barcode hints only when the match is unambiguous.
+
+    Acceptance intent: barcode can improve packaged identity/quantity, but must never be required.
+
+    Safety rules:
+    - Apply only if exactly 1 total detection OR exactly 1 packaged detection.
+    - Quantity hint overwrites only when missing or low-confidence.
+    - Name hint overwrites only when detection confidence isn't already high.
+    """
+
+    if not detections:
+        return
+
+    bcn = (barcode_name_hint or "").strip()
+    bcu = (barcode_unit_hint or "").strip()
+    bcq: Optional[float]
+    try:
+        bcq = float(barcode_quantity_hint) if barcode_quantity_hint is not None else None
+    except Exception:
+        bcq = None
+
+    if not bcn and bcq is None:
+        return
+
+    target: Optional[Dict[str, Any]] = None
+    if len(detections) == 1:
+        target = detections[0]
+    else:
+        packaged = [d for d in detections if (d.get("item_form") or "").strip().lower() == "packaged"]
+        if len(packaged) == 1:
+            target = packaged[0]
+
+    if not isinstance(target, dict):
+        return
+
+    if bcq is not None and bcq > 0:
+        qc = target.get("quantity_confidence")
+        try:
+            qc_val = float(qc) if qc is not None else None
+        except Exception:
+            qc_val = None
+        if target.get("quantity") is None or qc_val is None or qc_val < 0.70:
+            target["quantity"] = bcq
+            if bcu:
+                target["unit"] = _normalize_unit(bcu)
+            target["quantity_source"] = "barcode"
+            target["quantity_confidence"] = 0.95
+
+    if bcn:
+        conf = target.get("confidence")
+        try:
+            conf_val = float(conf) if conf is not None else 0.0
+        except Exception:
+            conf_val = 0.0
+        if conf_val < 0.85:
+            try:
+                normalizer = get_normalizer()
+                target["detected_name"] = bcn
+                target["canonical_name"] = normalizer.normalize_name(bcn)
+            except Exception:
+                target["detected_name"] = bcn
+
+
 def _get_container_quantity_prior(db, user_id: str, container_hash: str) -> Optional[Dict[str, Any]]:
     """Learn a typical quantity for a reused container fingerprint (jar/tin/etc)."""
     if not container_hash:
@@ -500,6 +729,14 @@ class SubmitFeedbackRequest(BaseModel):
     correct_name: Optional[str] = None
     overall_rating: Optional[int] = Field(None, ge=1, le=5)
     accuracy_rating: Optional[int] = Field(None, ge=1, le=5)
+
+
+class BarcodeLookupResponse(BaseModel):
+    success: bool
+    found: bool
+    barcode: str
+    product: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
     speed_rating: Optional[int] = Field(None, ge=1, le=5)
     comment: Optional[str] = None
 
@@ -562,6 +799,12 @@ async def analyze_image(
     image: UploadFile = File(..., description="Image file (JPEG/PNG)"),
     scan_type: str = Form(default="pantry"),
     location_hint: Optional[str] = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
+    barcode: Optional[str] = Form(default=None),
+    barcode_name_hint: Optional[str] = Form(default=None),
+    barcode_quantity_hint: Optional[float] = Form(default=None),
+    barcode_unit_hint: Optional[str] = Form(default=None),
+    x_app_version: Optional[str] = Header(default=None, alias="X-App-Version"),
     user_id: str = Depends(get_current_user)
 ):
     """
@@ -574,12 +817,58 @@ async def analyze_image(
     Returns detected ingredients with confidence scores and close alternatives
     """
     try:
+        db = get_db_client()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        event_rows: List[Dict[str, Any]] = []
+
+        correlation_id: Optional[str] = None
+        if session_id:
+            try:
+                sres = (
+                    db.table("scan_sessions")
+                    .select("correlation_id")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sres.data and isinstance(sres.data[0], dict):
+                    correlation_id = (sres.data[0].get("correlation_id") or None)
+            except Exception:
+                correlation_id = None
+
         # Validate image file
         if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
             raise HTTPException(status_code=400, detail="Invalid image format. Use JPEG or PNG.")
         
         # Read image data
         image_data = await image.read()
+
+        # Best-effort: session bookkeeping (received a frame)
+        if session_id:
+            try:
+                sess = (
+                    db.table("scan_sessions")
+                    .select("frames_received,frames_usable")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sess.data:
+                    fr = int(sess.data[0].get("frames_received") or 0) + 1
+                    fu = int(sess.data[0].get("frames_usable") or 0)
+                    db.table("scan_sessions").update(
+                        {
+                            "frames_received": fr,
+                            "frames_usable": fu,
+                            "stage": "processing",
+                            "updated_at": now_iso,
+                        }
+                    ).eq("id", session_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
         
         if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
             raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
@@ -589,6 +878,18 @@ async def analyze_image(
         if not quality.get("ok"):
             issues = quality.get("issues") or []
             metrics = quality.get("metrics") or {}
+
+            if session_id:
+                try:
+                    db.table("scan_sessions").update(
+                        {
+                            "stage": "collecting_frames",
+                            "last_quality_issues": issues,
+                            "updated_at": now_iso,
+                        }
+                    ).eq("id", session_id).eq("user_id", user_id).execute()
+                except Exception:
+                    pass
 
             # Keep message short and actionable.
             if "too_dark" in issues:
@@ -614,19 +915,37 @@ async def analyze_image(
         profile = await get_full_profile(user_id)
         
         # Analyze image with Vision API
+        started = time.perf_counter()
         vision_client = get_vision_client()
+        model_version = getattr(vision_client, "model", None)
+        model_provider = "openai"
         analysis_result = await vision_client.analyze_image(
             image_data=image_data,
             scan_type=scan_type,
             location_hint=location_hint,
-            user_preferences=profile
+            user_preferences=profile,
+            barcode=(barcode or None),
+            barcode_name_hint=(barcode_name_hint or None),
+            barcode_quantity_hint=barcode_quantity_hint,
+            barcode_unit_hint=_normalize_unit(barcode_unit_hint) if barcode_unit_hint else None,
         )
         
         if not analysis_result["success"]:
             raise HTTPException(status_code=500, detail=f"Vision analysis failed: {analysis_result.get('error')}")
+
+        analysis_ms = int(max(0.0, (time.perf_counter() - started) * 1000.0))
+        release_version = (os.getenv("SAVO_RELEASE_VERSION") or os.getenv("SAVO_RELEASE") or "").strip() or None
+        app_version = (x_app_version or "").strip() or None
+
+        # If barcode hints were provided, apply them only when unambiguous.
+        _apply_barcode_hints_to_detections(
+            analysis_result.get("ingredients") or [],
+            barcode_name_hint=barcode_name_hint,
+            barcode_quantity_hint=barcode_quantity_hint,
+            barcode_unit_hint=barcode_unit_hint,
+        )
         
         # Create scan record in database
-        db = get_db_client()
         scan_id = str(uuid4())
 
         # Best-effort delta baseline (latest prior scan).
@@ -635,10 +954,15 @@ async def analyze_image(
         # Upload image to Supabase Storage (best-effort)
         image_url = None
         try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
             image_url = upload_inventory_image(
                 user_id=user_id,
                 content=image_data,
                 content_type=image.content_type,
+                asset_type="scan_reference",
+                source="scan",
+                expires_at=expires_at,
+                links={"scan_id": scan_id},
             )
         except Exception as e:
             logger.warning(f"Failed to upload scan image: {e}")
@@ -647,7 +971,7 @@ async def analyze_image(
         api_cost = await vision_client.estimate_api_cost(image_data)
         
         # Insert scan record
-        scan_record = db.table("ingredient_scans").insert({
+        scan_record_payload = {
             "id": scan_id,
             "user_id": user_id,
             "image_url": image_url,
@@ -656,14 +980,64 @@ async def analyze_image(
                 "width": analysis_result["metadata"]["image_size"][0],
                 "height": analysis_result["metadata"]["image_size"][1],
                 "format": image.content_type,
-                "size_bytes": len(image_data)
+                "size_bytes": len(image_data),
+                **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                **({"barcode_name_hint": (barcode_name_hint or "").strip()} if (barcode_name_hint or "").strip() else {}),
+                **({"barcode_quantity_hint": barcode_quantity_hint} if barcode_quantity_hint is not None else {}),
+                **({"barcode_unit_hint": _normalize_unit(barcode_unit_hint)} if (barcode_unit_hint or "").strip() else {}),
+                **({"model_version": model_version} if model_version else {}),
+                "model_provider": model_provider,
+                "analysis_ms": analysis_ms,
+                **({"release_version": release_version} if release_version else {}),
+                **({"app_version": app_version} if app_version else {}),
+                **({"session_id": session_id} if session_id else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
             },
             "scan_type": scan_type,
             "location_hint": location_hint,
             "status": "processing",
             "vision_provider": "openai",
-            "api_cost_cents": api_cost
-        }).execute()
+            "api_cost_cents": api_cost,
+            **({"session_id": session_id} if session_id else {}),
+            **({"correlation_id": correlation_id} if correlation_id else {}),
+            **({"model_version": model_version} if model_version else {}),
+            "model_provider": model_provider,
+            "analysis_ms": analysis_ms,
+            **({"release_version": release_version} if release_version else {}),
+            **({"app_version": app_version} if app_version else {}),
+        }
+        _retry_without_missing_column(db, "ingredient_scans", "insert", scan_record_payload)
+
+        if session_id:
+            try:
+                sess = (
+                    db.table("scan_sessions")
+                    .select("frames_received,frames_usable,metadata")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sess.data:
+                    fr = int(sess.data[0].get("frames_received") or 0)
+                    fu = int(sess.data[0].get("frames_usable") or 0) + 1
+                    md = sess.data[0].get("metadata")
+                    if not isinstance(md, dict):
+                        md = {}
+                    md = dict(md)
+                    md["last_scan_id"] = scan_id
+                    db.table("scan_sessions").update(
+                        {
+                            "frames_received": fr,
+                            "frames_usable": fu,
+                            "stage": "completed",
+                            "last_quality_issues": [],
+                            "metadata": md,
+                            "updated_at": now_iso,
+                        }
+                    ).eq("id", session_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
         
         # Pre-pass: container fingerprint + learned quantity priors.
         for ingredient_data in analysis_result["ingredients"]:
@@ -692,6 +1066,40 @@ async def analyze_image(
         # Insert detected ingredients
         detected_ingredients = []
         requires_confirmation = False
+        obs_rows: List[Dict[str, Any]] = []
+
+        # Always include a scan_summary observation for auditability.
+        try:
+            obs_rows.append(
+                {
+                    "observed_entity_type": "scan_summary",
+                    "observed_entity_id": None,
+                    "detected_name": None,
+                    "canonical_name": None,
+                    "confidence": None,
+                    "quantity": None,
+                    "unit": None,
+                    "bbox": None,
+                    "crop_url": None,
+                    "metadata": {
+                        "scan_type": scan_type,
+                        "location_hint": location_hint,
+                        "analysis_ms": analysis_ms,
+                        "api_cost_cents": api_cost,
+                        "delta": delta,
+                        **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                        **({"correlation_id": correlation_id} if correlation_id else {}),
+                        **({"session_id": session_id} if session_id else {}),
+                    },
+                    "raw": {
+                        "vision_provider": "openai",
+                        "model_provider": model_provider,
+                        "model_version": model_version,
+                    },
+                }
+            )
+        except Exception:
+            pass
 
         for ingredient_data in analysis_result["ingredients"]:
             detected_id = str(uuid4())
@@ -719,10 +1127,12 @@ async def analyze_image(
                 logger.warning(f"Failed to create thumbnail for {detected_id}: {e}")
             
             # Insert detected ingredient
-            db.table("detected_ingredients").insert({
+            detected_payload = {
                 "id": detected_id,
                 "scan_id": scan_id,
                 "user_id": user_id,
+                **({"session_id": session_id} if session_id else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
                 "detected_name": ingredient_data["detected_name"],
                 "canonical_name": ingredient_data.get("canonical_name"),
                 "confidence": float(confidence),
@@ -739,8 +1149,78 @@ async def analyze_image(
                 "metadata": {
                     "container_hash": ingredient_data.get("container_hash"),
                     "container_match_count": ingredient_data.get("container_match_count"),
+                    **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                    **({"model_version": model_version} if model_version else {}),
+                    "model_provider": model_provider,
+                    **({"session_id": session_id} if session_id else {}),
+                    **({"correlation_id": correlation_id} if correlation_id else {}),
                 },
-            }).execute()
+                **({"model_version": model_version} if model_version else {}),
+                "model_provider": model_provider,
+            }
+            _retry_without_missing_column(db, "detected_ingredients", "insert", detected_payload)
+
+            # Auditable observation row (best-effort; no images)
+            try:
+                obs_rows.append(
+                    {
+                        "observed_entity_id": detected_id,
+                        "detected_name": ingredient_data.get("detected_name"),
+                        "canonical_name": ingredient_data.get("canonical_name"),
+                        "confidence": float(confidence) if confidence is not None else None,
+                        "quantity": ingredient_data.get("quantity"),
+                        "unit": ingredient_data.get("unit"),
+                        "bbox": ingredient_data.get("bbox"),
+                        "crop_url": thumbnail_url,
+                        "metadata": {
+                            "scan_type": scan_type,
+                            "location_hint": location_hint,
+                            **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                            **({"session_id": session_id} if session_id else {}),
+                        },
+                        "raw": {
+                            "detected_name": ingredient_data.get("detected_name"),
+                            "canonical_name": ingredient_data.get("canonical_name"),
+                            "confidence": float(confidence) if confidence is not None else None,
+                            "quantity": ingredient_data.get("quantity"),
+                            "unit": ingredient_data.get("unit"),
+                            "quantity_confidence": ingredient_data.get("quantity_confidence"),
+                            "quantity_source": ingredient_data.get("quantity_source"),
+                            "close_alternatives": ingredient_data.get("close_alternatives", []),
+                            "allergen_warnings": ingredient_data.get("allergen_warnings", []),
+                            "bbox": ingredient_data.get("bbox"),
+                        },
+                    }
+                )
+            except Exception:
+                pass
+
+            # Telemetry: vision.item_detected (no raw frames)
+            try:
+                event_rows.append(
+                    {
+                        "event_type": "vision.item_detected",
+                        "event_ts": now_iso,
+                        "user_id": user_id,
+                        "household_id": None,
+                        "session_id": session_id,
+                        "model_version": model_version,
+                        "release_version": release_version,
+                        "app_version": app_version,
+                        "payload": {
+                            "scan_id": scan_id,
+                            "detected_id": detected_id,
+                            "detected_name": ingredient_data.get("detected_name"),
+                            "canonical_ingredient": ingredient_data.get("canonical_name"),
+                            "confidence": float(confidence),
+                            "bbox": ingredient_data.get("bbox"),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                        },
+                    }
+                )
+            except Exception:
+                pass
             
             # Build response ingredient
             detected_ingredients.append(DetectedIngredient(
@@ -763,14 +1243,68 @@ async def analyze_image(
                 allergen_warnings=ingredient_data.get("allergen_warnings", []),
                 bbox=ingredient_data.get("bbox"),
                 confirmation_status="pending",
-                thumbnail_url=thumbnail_url,
-                full_image_url=image_url
+                thumbnail_url=to_signed_url(thumbnail_url),
+                full_image_url=to_signed_url(image_url),
             ))
         
         # Update scan processing time
         db.table("ingredient_scans").update({
             "processing_time_ms": analysis_result["metadata"]["processing_time_ms"]
         }).eq("id", scan_id).execute()
+
+        # Telemetry: pantry.delta_detected (summary + per-item change types; no images)
+        try:
+            changes = []
+            for d in (analysis_result.get("ingredients") or []):
+                if not isinstance(d, dict):
+                    continue
+                nm = d.get("canonical_name") or d.get("detected_name")
+                cs = d.get("change_status")
+                if nm and cs:
+                    changes.append({"name": nm, "change_type": cs})
+                if len(changes) >= 50:
+                    break
+            event_rows.append(
+                {
+                    "event_type": "pantry.delta_detected",
+                    "event_ts": now_iso,
+                    "user_id": user_id,
+                    "household_id": None,
+                    "session_id": session_id,
+                    "model_version": model_version,
+                    "release_version": release_version,
+                    "app_version": app_version,
+                    "payload": {
+                        "scan_id": scan_id,
+                        "delta": delta,
+                        "changes": changes,
+                        **({"correlation_id": correlation_id} if correlation_id else {}),
+                    },
+                }
+            )
+        except Exception:
+            pass
+
+        emit_events(event_rows)
+
+        # Auditable scan observations (AI inference); best-effort.
+        try:
+            log_scan_observations(
+                user_id=user_id,
+                source="image",
+                scan_id=scan_id,
+                session_id=session_id,
+                correlation_id=correlation_id,
+                storage_location=_scan_type_to_storage_location(scan_type),
+                model_provider=model_provider,
+                model_version=model_version,
+                release_version=release_version,
+                app_version=app_version,
+                observations=obs_rows,
+                observed_at=now_iso,
+            )
+        except Exception:
+            pass
         
         # Build response
         message = None
@@ -778,6 +1312,37 @@ async def analyze_image(
             message = "Some ingredients detected with lower confidence. Please review and confirm."
         else:
             message = "All ingredients detected with high confidence!"
+
+        # UI hints: keep detected vs confirmed separation explicit for clients.
+        try:
+            high_conf = 0
+            low_conf = 0
+            for ing in detected_ingredients:
+                try:
+                    if float(ing.confidence) >= 0.80:
+                        high_conf += 1
+                    else:
+                        low_conf += 1
+                except Exception:
+                    continue
+
+            md = analysis_result.get("metadata") if isinstance(analysis_result, dict) else None
+            if not isinstance(md, dict):
+                md = {}
+            md = dict(md)
+            md.update(
+                {
+                    "ui_state": "review_required" if requires_confirmation else "review_optional",
+                    "next_action": "review_and_confirm" if requires_confirmation else "confirm_all",
+                    "detected_count": len(detected_ingredients),
+                    "high_confidence_count": high_conf,
+                    "low_confidence_count": low_conf,
+                    "truth_note": "Detected items are not added to pantry until confirmed.",
+                }
+            )
+            analysis_result["metadata"] = md
+        except Exception:
+            pass
         
         return AnalyzeImageResponse(
             success=True,
@@ -795,11 +1360,475 @@ async def analyze_image(
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
+@router.post("/analyze-barcode", response_model=AnalyzeImageResponse)
+async def analyze_barcode(
+    barcode: str = Form(..., description="UPC/EAN value"),
+    scan_type: str = Form(default="pantry"),
+    location_hint: Optional[str] = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
+    barcode_name_hint: Optional[str] = Form(default=None, description="Fallback product name when barcode DB has no match"),
+    barcode_quantity_hint: Optional[float] = Form(default=None),
+    barcode_unit_hint: Optional[str] = Form(default=None),
+    x_app_version: Optional[str] = Header(default=None, alias="X-App-Version"),
+    user_id: str = Depends(get_current_user),
+):
+    """Barcode-first scan.
+
+    World-class end-user UX goal: packaged items can be captured via barcode in <1s,
+    then the user confirms quantity/name (same confirmation flow as vision scans).
+
+    - Uses `product_barcodes` when available.
+    - Falls back to client-provided name hints.
+    - Never requires an image upload.
+    """
+    try:
+        db = get_db_client()
+        normalizer = get_normalizer()
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        bc = (barcode or "").strip()
+        if not bc:
+            raise HTTPException(status_code=400, detail="Barcode is required")
+        if len(bc) < 6 or len(bc) > 32:
+            raise HTTPException(status_code=400, detail="Barcode length is invalid")
+
+        correlation_id: Optional[str] = None
+        if session_id:
+            try:
+                sres = (
+                    db.table("scan_sessions")
+                    .select("correlation_id")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sres.data and isinstance(sres.data[0], dict):
+                    correlation_id = (sres.data[0].get("correlation_id") or None)
+            except Exception:
+                correlation_id = None
+
+        release_version = (os.getenv("SAVO_RELEASE_VERSION") or os.getenv("SAVO_RELEASE") or "").strip() or None
+        app_version = (x_app_version or "").strip() or None
+
+        # Lookup product metadata (best-effort)
+        product_name = None
+        brand = None
+        quantity_value = None
+        quantity_unit = None
+        package_image_url = None
+        data_source = None
+        confidence = None
+        try:
+            pres = (
+                db.table("product_barcodes")
+                .select(
+                    "upc_ean,product_name,brand,quantity_value,quantity_unit,image_url,data_source,confidence"
+                )
+                .eq("upc_ean", bc)
+                .limit(1)
+                .execute()
+            )
+            if pres.data and isinstance(pres.data[0], dict):
+                prow = pres.data[0]
+                product_name = (prow.get("product_name") or None)
+                brand = (prow.get("brand") or None)
+                quantity_value = prow.get("quantity_value")
+                quantity_unit = prow.get("quantity_unit")
+                package_image_url = (prow.get("image_url") or None)
+                data_source = (prow.get("data_source") or None)
+                confidence = prow.get("confidence")
+        except Exception:
+            pass
+
+        hint_name = (barcode_name_hint or "").strip() or None
+        final_display_name = (product_name or hint_name)
+        if not final_display_name:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "barcode_not_found",
+                    "message": "Barcode not recognized. Try photo scan or provide product name hint.",
+                    "barcode": bc,
+                },
+            )
+
+        # Derive quantity (barcode DB preferred, then client hints)
+        final_qty = None
+        final_unit = None
+        try:
+            if quantity_value is not None:
+                final_qty = float(quantity_value)
+                final_unit = _normalize_unit(str(quantity_unit or ""))
+        except Exception:
+            final_qty = None
+            final_unit = None
+
+        if final_qty is None and barcode_quantity_hint is not None:
+            try:
+                final_qty = float(barcode_quantity_hint)
+            except Exception:
+                final_qty = None
+        if final_unit is None and (barcode_unit_hint or "").strip():
+            final_unit = _normalize_unit(barcode_unit_hint)
+
+        canonical_name = normalizer.normalize_name(final_display_name)
+
+        # Record a barcode scan history row (best-effort) and keep id for later linking.
+        barcode_scan_id = None
+        try:
+            ins = (
+                db.table("barcode_scans")
+                .insert(
+                    {
+                        "user_id": user_id,
+                        "barcode": bc,
+                        "barcode_type": None,
+                        "product_barcode": bc,
+                        "product_name": final_display_name,
+                        "brand": brand,
+                        "quantity_value": final_qty,
+                        "quantity_unit": final_unit,
+                        "package_image_url": package_image_url,
+                        "confidence": float(confidence) if confidence is not None else None,
+                        "data_source": data_source,
+                        "added_to_inventory": False,
+                        "created_at": now_iso,
+                    }
+                )
+                .execute()
+            )
+            if getattr(ins, "data", None) and isinstance(ins.data[0], dict):
+                barcode_scan_id = ins.data[0].get("id")
+        except Exception:
+            barcode_scan_id = None
+
+        # Create scan + detected ingredient rows
+        scan_id = str(uuid4())
+        previous_quantities = _load_previous_scan_quantities(db, user_id)
+
+        det_dict = {
+            "detected_name": final_display_name,
+            "canonical_name": canonical_name,
+            "confidence": Decimal("0.60"),
+            "quantity": final_qty,
+            "unit": final_unit,
+            "bbox": None,
+        }
+        delta = _apply_scan_delta([det_dict], previous_quantities)
+
+        scan_payload = {
+            "id": scan_id,
+            "user_id": user_id,
+            "image_url": package_image_url,
+            "image_hash": None,
+            "image_metadata": {
+                "scan_method": "barcode",
+                "barcode": bc,
+                **({"barcode_scan_id": barcode_scan_id} if barcode_scan_id else {}),
+                **({"brand": brand} if brand else {}),
+                **({"data_source": data_source} if data_source else {}),
+                **({"confidence": float(confidence)} if confidence is not None else {}),
+                **({"release_version": release_version} if release_version else {}),
+                **({"app_version": app_version} if app_version else {}),
+                **({"session_id": session_id} if session_id else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
+                "delta": delta,
+            },
+            "scan_type": scan_type,
+            "location_hint": location_hint,
+            "status": "completed",
+            "vision_provider": "barcode",
+            "api_cost_cents": 0,
+            **({"session_id": session_id} if session_id else {}),
+            **({"correlation_id": correlation_id} if correlation_id else {}),
+            "model_provider": "barcode",
+            "analysis_ms": 0,
+            **({"release_version": release_version} if release_version else {}),
+            **({"app_version": app_version} if app_version else {}),
+        }
+        _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
+
+        detected_id = str(uuid4())
+        detected_payload = {
+            "id": detected_id,
+            "scan_id": scan_id,
+            "user_id": user_id,
+            **({"session_id": session_id} if session_id else {}),
+            **({"correlation_id": correlation_id} if correlation_id else {}),
+            "detected_name": final_display_name,
+            "canonical_name": canonical_name,
+            "confidence": float(det_dict["confidence"]),
+            "detected_quantity": final_qty,
+            "detected_unit": final_unit,
+            "quantity_confidence": float(confidence) if confidence is not None else 0.75,
+            "bbox": None,
+            "close_alternatives": [],
+            "visual_similarity_group": None,
+            "allergen_warnings": [],
+            "thumbnail_url": None,
+            "full_image_url": package_image_url,
+            "confirmation_status": "pending",
+            "metadata": {
+                "scan_method": "barcode",
+                "barcode": bc,
+                **({"barcode_scan_id": barcode_scan_id} if barcode_scan_id else {}),
+                **({"brand": brand} if brand else {}),
+                **({"data_source": data_source} if data_source else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
+                **({"session_id": session_id} if session_id else {}),
+            },
+            "model_provider": "barcode",
+        }
+        _retry_without_missing_column(db, "detected_ingredients", "insert", detected_payload)
+
+        # Auditable scan observation (barcode inference); best-effort.
+        try:
+            log_scan_observations(
+                user_id=user_id,
+                source="barcode",
+                scan_id=scan_id,
+                session_id=session_id,
+                correlation_id=correlation_id,
+                storage_location=_scan_type_to_storage_location(scan_type),
+                model_provider="barcode",
+                model_version=None,
+                release_version=release_version,
+                app_version=app_version,
+                observations=[
+                    {
+                        "observed_entity_type": "scan_summary",
+                        "observed_entity_id": None,
+                        "crop_url": None,
+                        "metadata": {
+                            "scan_type": scan_type,
+                            "location_hint": location_hint,
+                            "delta": delta,
+                            "barcode": bc,
+                            **({"barcode_scan_id": barcode_scan_id} if barcode_scan_id else {}),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                            **({"session_id": session_id} if session_id else {}),
+                        },
+                        "raw": {"method": "barcode"},
+                    },
+                    {
+                        "observed_entity_id": detected_id,
+                        "detected_name": final_display_name,
+                        "canonical_name": canonical_name,
+                        "confidence": float(det_dict["confidence"]),
+                        "quantity": final_qty,
+                        "unit": final_unit,
+                        "bbox": None,
+                        "crop_url": None,
+                        "metadata": {
+                            "scan_type": scan_type,
+                            "location_hint": location_hint,
+                            "barcode": bc,
+                            **({"barcode_scan_id": barcode_scan_id} if barcode_scan_id else {}),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                            **({"session_id": session_id} if session_id else {}),
+                        },
+                        "raw": {
+                            "barcode": bc,
+                            "product_name": final_display_name,
+                            "brand": brand,
+                            "quantity": final_qty,
+                            "unit": final_unit,
+                            "data_source": data_source,
+                            "confidence": float(confidence) if confidence is not None else None,
+                        },
+                    }
+                ],
+                observed_at=now_iso,
+            )
+        except Exception:
+            pass
+
+        # Emit events (best-effort)
+        try:
+            changes = []
+            for d in [det_dict]:
+                nm = d.get("canonical_name") or d.get("detected_name")
+                cs = d.get("change_status")
+                if nm and cs:
+                    changes.append({"name": nm, "change_type": cs})
+
+            emit_events(
+                [
+                    {
+                        "event_type": "vision.item_detected",
+                        "event_ts": now_iso,
+                        "user_id": user_id,
+                        "household_id": None,
+                        "session_id": session_id,
+                        "model_version": None,
+                        "release_version": release_version,
+                        "app_version": app_version,
+                        "payload": {
+                            "scan_id": scan_id,
+                            "detected_id": detected_id,
+                            "detected_name": final_display_name,
+                            "canonical_ingredient": canonical_name,
+                            "confidence": float(det_dict["confidence"]),
+                            "bbox": None,
+                            "method": "barcode",
+                            "barcode": bc,
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                        },
+                    },
+                    {
+                        "event_type": "pantry.delta_detected",
+                        "event_ts": now_iso,
+                        "user_id": user_id,
+                        "household_id": None,
+                        "session_id": session_id,
+                        "model_version": None,
+                        "release_version": release_version,
+                        "app_version": app_version,
+                        "payload": {
+                            "scan_id": scan_id,
+                            "delta": delta,
+                            "changes": changes,
+                            "method": "barcode",
+                            "barcode": bc,
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                        },
+                    },
+                ]
+            )
+        except Exception:
+            pass
+
+        detected_ingredients = [
+            DetectedIngredient(
+                id=detected_id,
+                detected_name=final_display_name,
+                canonical_name=canonical_name,
+                confidence=Decimal("0.60"),
+                confidence_category="low",
+                category="other",
+                item_form="packaged",
+                quantity=final_qty,
+                unit=final_unit,
+                quantity_confidence=float(confidence) if confidence is not None else 0.75,
+                quantity_source=(data_source or "barcode"),
+                change_status=det_dict.get("change_status"),
+                previous_quantity=det_dict.get("previous_quantity"),
+                previous_unit=det_dict.get("previous_unit"),
+                close_alternatives=[],
+                visual_similarity_group=None,
+                allergen_warnings=[],
+                bbox=None,
+                confirmation_status="pending",
+                thumbnail_url=None,
+                full_image_url=package_image_url,
+            )
+        ]
+
+        return AnalyzeImageResponse(
+            success=True,
+            scan_id=scan_id,
+            ingredients=detected_ingredients,
+            metadata={
+                "scan_method": "barcode",
+                "barcode": bc,
+                "product": {
+                    "product_name": final_display_name,
+                    "brand": brand,
+                    "quantity_value": final_qty,
+                    "quantity_unit": final_unit,
+                    "image_url": package_image_url,
+                    "data_source": data_source,
+                    "confidence": float(confidence) if confidence is not None else None,
+                },
+                "delta": delta,
+                **({"barcode_scan_id": barcode_scan_id} if barcode_scan_id else {}),
+                "ui_state": "review_required",
+                "next_action": "review_and_confirm",
+                "detected_count": 1,
+                "high_confidence_count": 0,
+                "low_confidence_count": 1,
+                "truth_note": "Detected items are not added to pantry until confirmed.",
+            },
+            requires_confirmation=True,
+            message="Review and confirm this barcode item.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Barcode analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Barcode analysis failed: {str(e)}")
+
+
+@router.get("/barcode/lookup", response_model=BarcodeLookupResponse)
+async def barcode_lookup(
+    barcode: str,
+    user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Instant barcode product preview (read-only).
+
+    Does not create scans, detected_ingredients, or inventory.
+    Intended for a fast UX: show product name/brand/size immediately.
+    """
+    try:
+        db = get_db_client()
+        bc = (barcode or "").strip()
+        if not bc:
+            raise HTTPException(status_code=400, detail="Barcode is required")
+        if len(bc) < 6 or len(bc) > 32:
+            raise HTTPException(status_code=400, detail="Barcode length is invalid")
+
+        try:
+            res = (
+                db.table("product_barcodes")
+                .select("upc_ean,product_name,brand,quantity_value,quantity_unit,image_url,data_source,confidence")
+                .eq("upc_ean", bc)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Barcode lookup failed: {e}")
+
+        if not res.data or not isinstance(res.data[0], dict):
+            return {
+                "success": True,
+                "found": False,
+                "barcode": bc,
+                "product": None,
+                "message": "Barcode not found",
+            }
+
+        row = res.data[0]
+        product = {
+            "product_name": row.get("product_name"),
+            "brand": row.get("brand"),
+            "quantity_value": row.get("quantity_value"),
+            "quantity_unit": row.get("quantity_unit"),
+            "image_url": row.get("image_url"),
+            "data_source": row.get("data_source"),
+            "confidence": float(row.get("confidence")) if row.get("confidence") is not None else None,
+        }
+
+        return {"success": True, "found": True, "barcode": bc, "product": product, "message": None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Barcode lookup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Barcode lookup failed: {str(e)}")
+
+
 @router.post("/analyze-frames")
 async def analyze_frames(
     images: List[UploadFile] = File(..., description="Multiple image frames (JPEG/PNG)"),
     scan_type: str = Form(default="pantry"),
     location_hint: Optional[str] = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
+    barcode: Optional[str] = Form(default=None),
+    barcode_name_hint: Optional[str] = Form(default=None),
+    barcode_quantity_hint: Optional[float] = Form(default=None),
+    barcode_unit_hint: Optional[str] = Form(default=None),
+    x_app_version: Optional[str] = Header(default=None, alias="X-App-Version"),
     user_id: str = Depends(get_current_user),
 ):
     """Analyze multiple frames (sampled during a guided scan) and deduplicate detections.
@@ -811,6 +1840,7 @@ async def analyze_frames(
     Returns the same shape as /analyze-image for compatibility.
     """
     try:
+        started = time.perf_counter()
         # Basic validation
         if not isinstance(images, list) or not images:
             raise HTTPException(status_code=400, detail="No images provided")
@@ -867,8 +1897,58 @@ async def analyze_frames(
         # Get user profile for context
         profile = await get_full_profile(user_id)
         vision_client = get_vision_client()
+        model_version = getattr(vision_client, "model", None)
+        model_provider = "openai"
         db = get_db_client()
         scan_id = str(uuid4())
+
+        correlation_id: Optional[str] = None
+        if session_id:
+            try:
+                sres = (
+                    db.table("scan_sessions")
+                    .select("correlation_id")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sres.data and isinstance(sres.data[0], dict):
+                    correlation_id = (sres.data[0].get("correlation_id") or None)
+            except Exception:
+                correlation_id = None
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        event_rows: List[Dict[str, Any]] = []
+
+        # Best-effort: session bookkeeping (received N frames)
+        if session_id:
+            try:
+                sess = (
+                    db.table("scan_sessions")
+                    .select("frames_received,frames_usable")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sess.data:
+                    fr = int(sess.data[0].get("frames_received") or 0) + int(len(images))
+                    fu = int(sess.data[0].get("frames_usable") or 0)
+                    db.table("scan_sessions").update(
+                        {
+                            "frames_received": fr,
+                            "frames_usable": fu,
+                            "stage": "processing",
+                            "updated_at": now_iso,
+                        }
+                    ).eq("id", session_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
+
+        release_version = (os.getenv("SAVO_RELEASE_VERSION") or os.getenv("SAVO_RELEASE") or "").strip() or None
+        app_version = (x_app_version or "").strip() or None
 
         representative_image_url = None
         all_detections: List[Dict] = []
@@ -905,10 +1985,15 @@ async def analyze_frames(
 
             if representative_image_url is None:
                 try:
+                    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
                     representative_image_url = upload_inventory_image(
                         user_id=user_id,
                         content=image_data,
                         content_type=image.content_type,
+                        asset_type="scan_frame_reference",
+                        source="frames",
+                        expires_at=expires_at,
+                        links={"scan_id": scan_id, "session_id": session_id},
                     )
                 except Exception:
                     representative_image_url = None
@@ -919,6 +2004,10 @@ async def analyze_frames(
                     scan_type=scan_type,
                     location_hint=location_hint,
                     user_preferences=profile,
+                    barcode=(barcode or None),
+                    barcode_name_hint=(barcode_name_hint or None),
+                    barcode_quantity_hint=barcode_quantity_hint,
+                    barcode_unit_hint=_normalize_unit(barcode_unit_hint) if barcode_unit_hint else None,
                 )
                 if isinstance(analysis_result, dict) and analysis_result.get("success") and analysis_result.get("ingredients"):
                     for det in analysis_result.get("ingredients") or []:
@@ -928,6 +2017,33 @@ async def analyze_frames(
             except Exception as e:
                 logger.warning("Frame %s analysis failed: %s", idx, e)
                 continue
+
+        # Best-effort: session bookkeeping (usable frames + issues)
+        if session_id:
+            try:
+                sess = (
+                    db.table("scan_sessions")
+                    .select("frames_received,frames_usable,metadata")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if sess.data:
+                    fr0 = int(sess.data[0].get("frames_received") or 0)
+                    fu0 = int(sess.data[0].get("frames_usable") or 0)
+                    stage = "processing" if any_ok_frame else "collecting_frames"
+                    db.table("scan_sessions").update(
+                        {
+                            "frames_received": fr0,
+                            "frames_usable": fu0 + int(len(usable_frame_bytes)),
+                            "last_quality_issues": sorted(list(aggregated_issues)),
+                            "updated_at": now_iso,
+                            "stage": stage,
+                        }
+                    ).eq("id", session_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
 
         if not any_ok_frame:
             # Mirror /analyze-image quality error structure so clients can show guidance.
@@ -954,6 +2070,14 @@ async def analyze_frames(
             raise HTTPException(status_code=400, detail="No ingredients detected. Try scanning again with better coverage.")
 
         unique_detections = _dedupe(all_detections)
+
+        # If barcode hints were provided, apply them only when unambiguous.
+        _apply_barcode_hints_to_detections(
+            unique_detections,
+            barcode_name_hint=barcode_name_hint,
+            barcode_quantity_hint=barcode_quantity_hint,
+            barcode_unit_hint=barcode_unit_hint,
+        )
 
         previous_quantities = _load_previous_scan_quantities(db, user_id)
 
@@ -984,8 +2108,10 @@ async def analyze_frames(
 
         delta = _apply_scan_delta(unique_detections, previous_quantities)
 
+        analysis_ms = int(max(0.0, (time.perf_counter() - started) * 1000.0))
+
         # Insert scan record
-        db.table("ingredient_scans").insert({
+        scan_payload = {
             "id": scan_id,
             "user_id": user_id,
             "image_url": representative_image_url,
@@ -993,16 +2119,89 @@ async def analyze_frames(
             "image_metadata": {
                 "frames_received": len(images),
                 "frames_usable": True,
+                **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                **({"barcode_name_hint": (barcode_name_hint or "").strip()} if (barcode_name_hint or "").strip() else {}),
+                **({"barcode_quantity_hint": barcode_quantity_hint} if barcode_quantity_hint is not None else {}),
+                **({"barcode_unit_hint": _normalize_unit(barcode_unit_hint)} if (barcode_unit_hint or "").strip() else {}),
+                **({"model_version": model_version} if model_version else {}),
+                "model_provider": model_provider,
+                "analysis_ms": analysis_ms,
+                **({"release_version": release_version} if release_version else {}),
+                **({"app_version": app_version} if app_version else {}),
             },
             "scan_type": f"frames_{scan_type}",
             "location_hint": location_hint,
             "status": "processing",
             "vision_provider": "openai",
             "api_cost_cents": 0,
-        }).execute()
+            **({"session_id": session_id} if session_id else {}),
+            **({"correlation_id": correlation_id} if correlation_id else {}),
+            **({"model_version": model_version} if model_version else {}),
+            "model_provider": model_provider,
+            "analysis_ms": analysis_ms,
+            **({"release_version": release_version} if release_version else {}),
+            **({"app_version": app_version} if app_version else {}),
+        }
+        _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
+
+        if session_id:
+            try:
+                sess = (
+                    db.table("scan_sessions")
+                    .select("metadata")
+                    .eq("id", session_id)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                md = {}
+                if sess.data and isinstance(sess.data[0].get("metadata"), dict):
+                    md = sess.data[0].get("metadata")
+                md = dict(md)
+                md["last_scan_id"] = scan_id
+                db.table("scan_sessions").update(
+                    {
+                        "stage": "completed",
+                        "last_quality_issues": [],
+                        "metadata": md,
+                        "updated_at": now_iso,
+                    }
+                ).eq("id", session_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
 
         detected_ingredients = []
         requires_confirmation = False
+        obs_rows: List[Dict[str, Any]] = []
+
+        # Always include a scan_summary observation for auditability.
+        try:
+            obs_rows.append(
+                {
+                    "observed_entity_type": "scan_summary",
+                    "observed_entity_id": None,
+                    "crop_url": None,
+                    "metadata": {
+                        "scan_type": f"frames_{scan_type}",
+                        "location_hint": location_hint,
+                        "analysis_ms": analysis_ms,
+                        "frames_received": len(images),
+                        "frames_usable": int(len(usable_frame_bytes)),
+                        "delta": delta,
+                        **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                        **({"correlation_id": correlation_id} if correlation_id else {}),
+                        **({"session_id": session_id} if session_id else {}),
+                    },
+                    "raw": {
+                        "vision_provider": "openai",
+                        "model_provider": model_provider,
+                        "model_version": model_version,
+                    },
+                }
+            )
+        except Exception:
+            pass
+
         for det in unique_detections:
             detected_id = str(uuid4())
             confidence = det.get("confidence")
@@ -1014,10 +2213,35 @@ async def analyze_frames(
             if conf_val < 0.80:
                 requires_confirmation = True
 
-            db.table("detected_ingredients").insert({
+            # Best-effort: create a crop thumbnail from the source frame (no raw video storage).
+            thumbnail_url = None
+            try:
+                frame_idx = det.get("_frame_idx")
+                if isinstance(frame_idx, int):
+                    frame_bytes = usable_frame_bytes.get(frame_idx)
+                else:
+                    frame_bytes = None
+                if frame_bytes:
+                    from app.core.image_processor import upload_ingredient_thumbnail
+
+                    thumbnail_url = await upload_ingredient_thumbnail(
+                        user_id=user_id,
+                        scan_id=scan_id,
+                        detected_id=detected_id,
+                        image_data=frame_bytes,
+                        bbox=det.get("bbox"),
+                        confidence=float(conf_val),
+                        confidence_category=vision_client.get_confidence_category(Decimal(str(conf_val))),
+                    )
+            except Exception as e:
+                logger.warning("Failed to create frame thumbnail for %s: %s", detected_id, e)
+
+            det_payload = {
                 "id": detected_id,
                 "scan_id": scan_id,
                 "user_id": user_id,
+                **({"session_id": session_id} if session_id else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
                 "detected_name": det.get("detected_name"),
                 "canonical_name": det.get("canonical_name"),
                 "confidence": conf_val,
@@ -1028,15 +2252,87 @@ async def analyze_frames(
                 "close_alternatives": det.get("close_alternatives", []),
                 "visual_similarity_group": det.get("visual_similarity_group"),
                 "allergen_warnings": det.get("allergen_warnings", []),
-                "thumbnail_url": None,
+                "thumbnail_url": thumbnail_url,
                 "full_image_url": representative_image_url,
                 "confirmation_status": "pending",
                 "metadata": {
                     "detection_count": det.get("detection_count", 1),
                     "container_hash": det.get("container_hash"),
                     "container_match_count": det.get("container_match_count"),
+                    **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                    **({"model_version": model_version} if model_version else {}),
+                    "model_provider": model_provider,
+                    **({"session_id": session_id} if session_id else {}),
+                    **({"correlation_id": correlation_id} if correlation_id else {}),
                 },
-            }).execute()
+                **({"model_version": model_version} if model_version else {}),
+                "model_provider": model_provider,
+            }
+            _retry_without_missing_column(db, "detected_ingredients", "insert", det_payload)
+
+            # Auditable observation row (best-effort; no images)
+            try:
+                obs_rows.append(
+                    {
+                        "observed_entity_id": detected_id,
+                        "detected_name": det.get("detected_name"),
+                        "canonical_name": det.get("canonical_name"),
+                        "confidence": conf_val,
+                        "quantity": det.get("quantity"),
+                        "unit": det.get("unit"),
+                        "bbox": det.get("bbox"),
+                        "crop_url": thumbnail_url,
+                        "metadata": {
+                            "scan_type": f"frames_{scan_type}",
+                            "location_hint": location_hint,
+                            "detection_count": det.get("detection_count", 1),
+                            **({"barcode": (barcode or "").strip()} if (barcode or "").strip() else {}),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                            **({"session_id": session_id} if session_id else {}),
+                        },
+                        "raw": {
+                            "detected_name": det.get("detected_name"),
+                            "canonical_name": det.get("canonical_name"),
+                            "confidence": conf_val,
+                            "quantity": det.get("quantity"),
+                            "unit": det.get("unit"),
+                            "quantity_confidence": det.get("quantity_confidence"),
+                            "quantity_source": det.get("quantity_source"),
+                            "close_alternatives": det.get("close_alternatives", []),
+                            "allergen_warnings": det.get("allergen_warnings", []),
+                            "bbox": det.get("bbox"),
+                            "detection_count": det.get("detection_count", 1),
+                        },
+                    }
+                )
+            except Exception:
+                pass
+
+            # Telemetry: vision.item_detected
+            try:
+                event_rows.append(
+                    {
+                        "event_type": "vision.item_detected",
+                        "event_ts": now_iso,
+                        "user_id": user_id,
+                        "household_id": None,
+                        "session_id": session_id,
+                        "model_version": model_version,
+                        "release_version": release_version,
+                        "app_version": app_version,
+                        "payload": {
+                            "scan_id": scan_id,
+                            "detected_id": detected_id,
+                            "detected_name": det.get("detected_name"),
+                            "canonical_ingredient": det.get("canonical_name"),
+                            "confidence": conf_val,
+                            "bbox": det.get("bbox"),
+                            **({"correlation_id": correlation_id} if correlation_id else {}),
+                        },
+                    }
+                )
+            except Exception:
+                pass
 
             detected_ingredients.append(DetectedIngredient(
                 id=detected_id,
@@ -1058,8 +2354,8 @@ async def analyze_frames(
                 allergen_warnings=det.get("allergen_warnings", []),
                 bbox=det.get("bbox"),
                 confirmation_status="pending",
-                thumbnail_url=None,
-                full_image_url=representative_image_url,
+                thumbnail_url=to_signed_url(thumbnail_url),
+                full_image_url=to_signed_url(representative_image_url),
             ))
 
         db.table("ingredient_scans").update({
@@ -1068,7 +2364,77 @@ async def analyze_frames(
             "processing_time_ms": None,
         }).eq("id", scan_id).execute()
 
+        # Telemetry: pantry.delta_detected (summary + per-item change types)
+        try:
+            changes = []
+            for d in (unique_detections or []):
+                if not isinstance(d, dict):
+                    continue
+                nm = d.get("canonical_name") or d.get("detected_name")
+                cs = d.get("change_status")
+                if nm and cs:
+                    changes.append({"name": nm, "change_type": cs})
+                if len(changes) >= 50:
+                    break
+            event_rows.append(
+                {
+                    "event_type": "pantry.delta_detected",
+                    "event_ts": now_iso,
+                    "user_id": user_id,
+                    "household_id": None,
+                    "session_id": session_id,
+                    "model_version": model_version,
+                    "release_version": release_version,
+                    "app_version": app_version,
+                    "payload": {
+                        "scan_id": scan_id,
+                        "delta": delta,
+                        "changes": changes,
+                        **({"correlation_id": correlation_id} if correlation_id else {}),
+                    },
+                }
+            )
+        except Exception:
+            pass
+
+        emit_events(event_rows)
+
+        # Auditable scan observations (AI inference); best-effort.
+        try:
+            log_scan_observations(
+                user_id=user_id,
+                source="frames",
+                scan_id=scan_id,
+                session_id=session_id,
+                correlation_id=correlation_id,
+                storage_location=_scan_type_to_storage_location(scan_type),
+                model_provider=model_provider,
+                model_version=model_version,
+                release_version=release_version,
+                app_version=app_version,
+                observations=obs_rows,
+                observed_at=now_iso,
+            )
+        except Exception:
+            pass
+
         message = "Some ingredients detected with lower confidence. Please review and confirm." if requires_confirmation else "All ingredients detected with high confidence!"
+
+        high_conf = 0
+        low_conf = 0
+        try:
+            for ing in detected_ingredients:
+                try:
+                    if float(ing.confidence) >= 0.80:
+                        high_conf += 1
+                    else:
+                        low_conf += 1
+                except Exception:
+                    continue
+        except Exception:
+            high_conf = 0
+            low_conf = 0
+
         return AnalyzeImageResponse(
             success=True,
             scan_id=scan_id,
@@ -1078,6 +2444,12 @@ async def analyze_frames(
                 "total_raw_detections": len(all_detections),
                 "unique_ingredients": len(detected_ingredients),
                 "delta": delta,
+                "ui_state": "review_required" if requires_confirmation else "review_optional",
+                "next_action": "review_and_confirm" if requires_confirmation else "confirm_all",
+                "detected_count": len(detected_ingredients),
+                "high_confidence_count": high_conf,
+                "low_confidence_count": low_conf,
+                "truth_note": "Detected items are not added to pantry until confirmed.",
             },
             requires_confirmation=requires_confirmation,
             message=message,
@@ -1119,6 +2491,16 @@ async def confirm_ingredients(
         item_state = "raw"
         scan_image_url = scan_record.get("image_url")
 
+        scan_session_id = scan_record.get("session_id")
+        scan_correlation_id = scan_record.get("correlation_id")
+        scan_model_version = scan_record.get("model_version")
+        scan_release_version = scan_record.get("release_version")
+        scan_app_version = scan_record.get("app_version")
+
+        scan_created_at = scan_record.get("created_at")
+
+        taxonomy_version = os.getenv("SAVO_TAXONOMY_VERSION")
+
         # Track scan time early for consistent last_seen_* stamps.
         now_iso = datetime.utcnow().isoformat()
 
@@ -1151,6 +2533,12 @@ async def confirm_ingredients(
             confirmed_name = confirmation.get("confirmed_name")
             quantity = confirmation.get("quantity")
             unit = confirmation.get("unit")
+
+            # Optional per-item barcode context (client may attach this only for modified items).
+            confirmation_barcode = (confirmation.get("barcode") or "").strip()
+            confirmation_barcode_name_hint = (confirmation.get("barcode_name_hint") or "").strip()
+            confirmation_barcode_unit_hint = (confirmation.get("barcode_unit_hint") or "").strip()
+            confirmation_barcode_quantity_hint = confirmation.get("barcode_quantity_hint")
             
             # Verify detected ingredient exists
             detected = db.table("detected_ingredients").select("*").eq("id", detected_id).eq("user_id", user_id).execute()
@@ -1159,12 +2547,46 @@ async def confirm_ingredients(
                 continue
             
             detected_item = detected.data[0]
+
+            md0 = detected_item.get("metadata")
+            if not isinstance(md0, dict):
+                md0 = {}
+            container_hash = md0.get("container_hash")
+            item_signature = _anonymized_item_signature(user_id, detected_item)
+
+            # Snapshot before-values for opt-in learning logs.
+            before_snapshot = {
+                "detected_name": detected_item.get("detected_name"),
+                "canonical_name": detected_item.get("canonical_name"),
+                "detected_quantity": detected_item.get("detected_quantity"),
+                "detected_unit": detected_item.get("detected_unit"),
+                "confirmed_name": detected_item.get("confirmed_name"),
+                "confirmation_status": detected_item.get("confirmation_status"),
+            }
             
             # Update confirmation status
             update_data = {
                 "confirmation_status": action,
                 "confirmed_at": datetime.utcnow().isoformat()
             }
+
+            # If barcode info is provided, persist it onto the detected ingredient for audit/learning.
+            if confirmation_barcode or confirmation_barcode_name_hint or confirmation_barcode_quantity_hint is not None:
+                try:
+                    md = detected_item.get("metadata")
+                    if not isinstance(md, dict):
+                        md = {}
+                    if confirmation_barcode:
+                        md["barcode"] = confirmation_barcode
+                    if confirmation_barcode_name_hint:
+                        md["barcode_name_hint"] = confirmation_barcode_name_hint
+                    if confirmation_barcode_quantity_hint is not None:
+                        md["barcode_quantity_hint"] = confirmation_barcode_quantity_hint
+                    if confirmation_barcode_unit_hint:
+                        md["barcode_unit_hint"] = _normalize_unit(confirmation_barcode_unit_hint)
+                    update_data["metadata"] = md
+                except Exception as e:
+                    logger.warning(f"Failed to merge barcode metadata for detected_ingredient {detected_id}: {e}")
             
             if action in ["confirmed", "modified"]:
                 # Determine final confirmed name
@@ -1179,10 +2601,84 @@ async def confirm_ingredients(
                 canonical_name = normalizer.normalize_name(final_name or "")
                 update_data["confirmed_name"] = canonical_name
 
+                # Resolve stable canonical ingredient ID (best-effort)
+                resolved_ingredient_id: Optional[str] = None
+                try:
+                    resolved_ingredient_id = _resolve_master_ingredient_id(db, canonical_name)
+                except Exception:
+                    resolved_ingredient_id = None
+
+                # Telemetry: pantry.item_corrected (modified items only)
+                if action == "modified":
+                    try:
+                        original_name = normalizer.normalize_name(
+                            (detected_item.get("canonical_name") or detected_item.get("detected_name") or "")
+                        )
+                        correction_type = "rename" if (canonical_name and original_name and canonical_name != original_name) else "edit"
+
+                        emit_event(
+                            event_type="pantry.item_corrected",
+                            event_ts=now_iso,
+                            user_id=user_id,
+                            household_id=None,
+                            session_id=scan_session_id,
+                            model_version=scan_model_version,
+                            release_version=scan_release_version,
+                            app_version=scan_app_version,
+                            payload={
+                                "scan_id": request.scan_id,
+                                "detected_id": detected_id,
+                                "correction_type": correction_type,
+                                "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                                "before": before_snapshot,
+                                "after": {
+                                    "confirmation_status": action,
+                                    "confirmed_name": canonical_name,
+                                    "detected_quantity": update_data.get("detected_quantity", detected_item.get("detected_quantity")),
+                                    "detected_unit": update_data.get("detected_unit", detected_item.get("detected_unit")),
+                                },
+                                **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                            },
+                        )
+                    except Exception:
+                        pass
+
+                # Pantry vocabulary learning: record a feedback event when the user changes identity.
+                if action == "modified":
+                    try:
+                        original = normalizer.normalize_name(
+                            (detected_item.get("canonical_name") or detected_item.get("detected_name") or "")
+                        )
+                        if canonical_name and original and canonical_name != original:
+                            db.table("learning_feedback").insert(
+                                {
+                                    "user_id": user_id,
+                                    "feedback_type": "pantry_vocab_correction",
+                                    "source_entity_type": "detected_ingredient",
+                                    "source_entity_id": str(detected_id),
+                                    "was_correct": True,
+                                    "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                                    "correction_data": {
+                                        "scan_id": request.scan_id,
+                                        "original_detected_name": detected_item.get("detected_name"),
+                                        "original_canonical_name": detected_item.get("canonical_name"),
+                                        "corrected_canonical_name": canonical_name,
+                                        **({"barcode": confirmation_barcode} if confirmation_barcode else {}),
+                                        **({"barcode_name_hint": confirmation_barcode_name_hint} if confirmation_barcode_name_hint else {}),
+                                        **({"barcode_quantity_hint": confirmation_barcode_quantity_hint} if confirmation_barcode_quantity_hint is not None else {}),
+                                        **({"barcode_unit_hint": _normalize_unit(confirmation_barcode_unit_hint)} if confirmation_barcode_unit_hint else {}),
+                                    },
+                                }
+                            ).execute()
+                    except Exception as e:
+                        logger.warning(f"Failed to store pantry vocab feedback: {e}")
+
                 # Store ground-truth training label (only if explicitly opted-in)
                 if training_opt_in and retention_days > 0:
                     try:
                         expires_at = (datetime.utcnow() + timedelta(days=retention_days)).isoformat()
+                        # Prefer per-item crop (privacy) over full scan reference.
+                        training_image_url = detected_item.get("thumbnail_url") or scan_image_url
                         db.table("scan_training_labels").insert(
                             {
                                 "user_id": user_id,
@@ -1191,12 +2687,71 @@ async def confirm_ingredients(
                                 "confirmed_name": canonical_name,
                                 "original_detected_name": detected_item.get("detected_name"),
                                 "bbox": detected_item.get("bbox"),
-                                "image_url": scan_image_url,
+                                "image_url": training_image_url,
                                 "expires_at": expires_at,
+                                # Extra privacy/version fields (best-effort; schema may lag)
+                                "item_signature": item_signature,
+                                "anon_user_signature": hashlib.sha256((str(user_id) + "|" + item_signature).encode("utf-8")).hexdigest(),
+                                "model_version": scan_model_version,
+                                "release_version": scan_release_version,
+                                "app_version": scan_app_version,
+                                "taxonomy_version": taxonomy_version,
                             }
                         ).execute()
                     except Exception as e:
                         logger.warning(f"Failed to store training label: {e}")
+
+                # Append-only learning signal: observation -> confirmation delta
+                try:
+                    observed_qty = detected_item.get("detected_quantity")
+                    observed_unit = detected_item.get("detected_unit")
+                    confirmed_qty = quantity if quantity is not None else detected_item.get("detected_quantity")
+                    confirmed_unit = unit if unit is not None else detected_item.get("detected_unit")
+                    identity_was_correct = None
+                    quantity_was_correct = None
+                    if action in {"confirmed", "modified"}:
+                        original_canon = normalizer.normalize_name(
+                            (detected_item.get("canonical_name") or detected_item.get("detected_name") or "")
+                        )
+                        identity_was_correct = bool(original_canon and canonical_name and original_canon == canonical_name)
+                        if quantity is not None:
+                            try:
+                                quantity_was_correct = (float(observed_qty) == float(quantity)) if observed_qty is not None else False
+                            except Exception:
+                                quantity_was_correct = None
+
+                    db.table("confirmation_deltas").insert(
+                        {
+                            "user_id": user_id,
+                            "scan_id": request.scan_id,
+                            "detected_id": detected_id,
+                            "action": action,
+                            "observed_name": detected_item.get("detected_name"),
+                            "observed_canonical_name": detected_item.get("canonical_name"),
+                            "observed_ingredient_id": detected_item.get("ingredient_id"),
+                            "observed_confidence": float(detected_item.get("confidence") or 0) if detected_item.get("confidence") is not None else None,
+                            "observed_quantity": observed_qty,
+                            "observed_unit": observed_unit,
+                            "confirmed_name": canonical_name if action in {"confirmed", "modified"} else None,
+                            "confirmed_ingredient_id": resolved_ingredient_id,
+                            "confirmed_quantity": confirmed_qty if action in {"confirmed", "modified"} else None,
+                            "confirmed_unit": confirmed_unit if action in {"confirmed", "modified"} else None,
+                            "quantity_was_correct": quantity_was_correct,
+                            "identity_was_correct": identity_was_correct,
+                            "container_hash": container_hash,
+                            "item_signature": item_signature,
+                            "model_version": scan_model_version,
+                            "release_version": scan_release_version,
+                            "app_version": scan_app_version,
+                            "taxonomy_version": taxonomy_version,
+                            "metadata": {
+                                "bbox": detected_item.get("bbox"),
+                                "barcode": (detected_item.get("metadata") or {}).get("barcode") if isinstance(detected_item.get("metadata"), dict) else None,
+                            },
+                        }
+                    ).execute()
+                except Exception:
+                    pass
                 
                 # Update quantity if provided (user-entered)
                 if quantity is not None:
@@ -1215,20 +2770,55 @@ async def confirm_ingredients(
 
                 incoming_unit = _normalize_unit(unit or detected_item.get("detected_unit") or "pieces")
 
-                existing = (
-                    db.table("inventory_items")
-                    .select("*")
-                    .eq("user_id", user_id)
-                    .eq("canonical_name", canonical_name)
-                    .eq("storage_location", storage_location)
-                    .eq("item_state", item_state)
-                    .order("updated_at", desc=True)
-                    .limit(1)
-                    .execute()
-                )
+                existing = None
+                if resolved_ingredient_id:
+                    existing = (
+                        db.table("inventory_items")
+                        .select("*")
+                        .eq("user_id", user_id)
+                        .eq("ingredient_id", resolved_ingredient_id)
+                        .eq("storage_location", storage_location)
+                        .eq("item_state", item_state)
+                        .order("updated_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+
+                # Fallback to canonical_name matching for backward compatibility
+                if not existing or not getattr(existing, "data", None):
+                    existing = (
+                        db.table("inventory_items")
+                        .select("*")
+                        .eq("user_id", user_id)
+                        .eq("canonical_name", canonical_name)
+                        .eq("storage_location", storage_location)
+                        .eq("item_state", item_state)
+                        .order("updated_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
 
                 merged_qty = incoming_qty
                 merged_unit = incoming_unit
+
+                # Prefer cropped reference image if available.
+                reference_image_url = (
+                    detected_item.get("thumbnail_url")
+                    or detected_item.get("full_image_url")
+                    or scan_image_url
+                )
+
+                # Model audit fields (best-effort, schema may vary).
+                model_version = None
+                model_provider = None
+                try:
+                    md = detected_item.get("metadata")
+                    if isinstance(md, dict):
+                        model_version = md.get("model_version")
+                        model_provider = md.get("model_provider")
+                except Exception:
+                    model_version = None
+                    model_provider = None
 
                 if existing.data:
                     existing_item = existing.data[0]
@@ -1238,6 +2828,10 @@ async def confirm_ingredients(
                     if incoming_unit == existing_unit:
                         merged_qty = existing_qty + incoming_qty
                         merged_unit = existing_unit
+                        should_set_reference = bool(reference_image_url) and (
+                            (not existing_item.get("image_url"))
+                            or (str(existing_item.get("image_source") or "").strip().lower() == "scan")
+                        )
                         update_payload = {
                             "quantity": merged_qty,
                             "unit": merged_unit,
@@ -1245,17 +2839,28 @@ async def confirm_ingredients(
                             or _titleize(canonical_name),
                             "source": "scan",
                             "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                            **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
                             "last_seen_scan_id": request.scan_id,
+                            "last_confirmed_at": now_iso,
+                            **({"model_version": model_version} if model_version else {}),
+                            **({"model_provider": model_provider} if model_provider else {}),
                         }
-                        if scan_image_url and not existing_item.get("image_url"):
-                            update_payload["image_url"] = scan_image_url
-                        db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                        if should_set_reference:
+                            update_payload["image_url"] = reference_image_url
+                            update_payload["image_source"] = "scan"
+                            update_payload["reference_detected_id"] = detected_id
+                        _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": existing_item["id"]})
                     elif UnitConverter.can_convert(incoming_unit, existing_unit):
                         converted = UnitConverter.convert(incoming_qty, incoming_unit, existing_unit)
                         merged_qty = existing_qty + float(converted)
                         merged_unit = existing_unit
+                        should_set_reference = bool(reference_image_url) and (
+                            (not existing_item.get("image_url"))
+                            or (str(existing_item.get("image_source") or "").strip().lower() == "scan")
+                        )
                         update_payload = {
                             "quantity": merged_qty,
                             "unit": merged_unit,
@@ -1263,59 +2868,113 @@ async def confirm_ingredients(
                             or _titleize(canonical_name),
                             "source": "scan",
                             "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                            **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
                             "last_seen_scan_id": request.scan_id,
+                            "last_confirmed_at": now_iso,
+                            **({"model_version": model_version} if model_version else {}),
+                            **({"model_provider": model_provider} if model_provider else {}),
                         }
-                        if scan_image_url and not existing_item.get("image_url"):
-                            update_payload["image_url"] = scan_image_url
-                        db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                        if should_set_reference:
+                            update_payload["image_url"] = reference_image_url
+                            update_payload["image_source"] = "scan"
+                            update_payload["reference_detected_id"] = detected_id
+                        _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": existing_item["id"]})
                     else:
-                        created = (
-                            db.table("inventory_items")
-                            .insert(
-                                {
-                                    "user_id": user_id,
-                                    "canonical_name": canonical_name,
-                                    "display_name": _titleize(final_name or canonical_name),
-                                    "quantity": incoming_qty,
-                                    "unit": incoming_unit,
-                                    "storage_location": storage_location,
-                                    "item_state": item_state,
-                                    "source": "scan",
-                                    "scan_confidence": float(detected_item.get("confidence") or 1.0),
-                                    "image_url": scan_image_url,
-                                    "is_current": True,
-                                    "last_seen_at": now_iso,
-                                    "last_seen_scan_id": request.scan_id,
-                                }
-                            )
-                            .execute()
-                        )
-                        existing_item = created.data[0] if created.data else None
+                        insert_payload = {
+                            "user_id": user_id,
+                            "canonical_name": canonical_name,
+                            "display_name": _titleize(final_name or canonical_name),
+                            "quantity": incoming_qty,
+                            "unit": incoming_unit,
+                            "storage_location": storage_location,
+                            "item_state": item_state,
+                            "source": "scan",
+                            "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                            "image_url": reference_image_url,
+                            **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            **({"session_id": scan_session_id} if scan_session_id else {}),
+                            **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                            "image_source": "scan",
+                            "reference_detected_id": detected_id,
+                            **({"model_version": model_version} if model_version else {}),
+                            **({"model_provider": model_provider} if model_provider else {}),
+                            "pantry_status": "active",
+                            "is_current": True,
+                            "last_seen_at": now_iso,
+                            **({"session_id": scan_session_id} if scan_session_id else {}),
+                            **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                            "last_seen_scan_id": request.scan_id,
+                            "last_confirmed_at": now_iso,
+                        }
+                        created = _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
+                        existing_item = created.data[0] if getattr(created, "data", None) else None
                 else:
-                    created = (
-                        db.table("inventory_items")
-                        .insert(
-                            {
-                                "user_id": user_id,
-                                "canonical_name": canonical_name,
-                                "display_name": _titleize(final_name or canonical_name),
-                                "quantity": incoming_qty,
-                                "unit": incoming_unit,
-                                "storage_location": storage_location,
-                                "item_state": item_state,
-                                "source": "scan",
-                                "scan_confidence": float(detected_item.get("confidence") or 1.0),
-                                "image_url": scan_image_url,
-                                "is_current": True,
-                                "last_seen_at": now_iso,
-                                "last_seen_scan_id": request.scan_id,
-                            }
-                        )
-                        .execute()
+                    insert_payload = {
+                        "user_id": user_id,
+                        "canonical_name": canonical_name,
+                        "display_name": _titleize(final_name or canonical_name),
+                        "quantity": incoming_qty,
+                        "unit": incoming_unit,
+                        "storage_location": storage_location,
+                        "item_state": item_state,
+                        "source": "scan",
+                        "scan_confidence": float(detected_item.get("confidence") or 1.0),
+                        "image_url": reference_image_url,
+                        "image_source": "scan",
+                        "reference_detected_id": detected_id,
+                        **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                        **({"model_version": model_version} if model_version else {}),
+                        **({"model_provider": model_provider} if model_provider else {}),
+                        "pantry_status": "active",
+                        "is_current": True,
+                        "last_seen_at": now_iso,
+                        "last_seen_scan_id": request.scan_id,
+                        "last_confirmed_at": now_iso,
+                    }
+                    created = _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
+                    existing_item = created.data[0] if getattr(created, "data", None) else None
+
+                # Telemetry: pantry.item_confirmed (confirmed or modified)
+                try:
+                    emit_event(
+                        event_type="pantry.item_confirmed",
+                        event_ts=now_iso,
+                        user_id=user_id,
+                        household_id=None,
+                        session_id=scan_session_id,
+                        model_version=scan_model_version,
+                        release_version=scan_release_version,
+                        app_version=scan_app_version,
+                        payload={
+                            "scan_id": request.scan_id,
+                            "detected_id": detected_id,
+                            "inventory_item_id": (existing_item.get("id") if isinstance(existing_item, dict) else None),
+                            "action": action,
+                            "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                            "confirmed_name": canonical_name,
+                            "quantity": merged_qty,
+                            "unit": merged_unit,
+                            "before": before_snapshot,
+                            **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                        },
                     )
-                    existing_item = created.data[0] if created.data else None
+                except Exception:
+                    pass
+
+                # If this item came from a barcode scan, mark it as added_to_inventory.
+                try:
+                    md = detected_item.get("metadata")
+                    if isinstance(md, dict):
+                        bsid = md.get("barcode_scan_id")
+                        if bsid and existing_item and isinstance(existing_item, dict) and existing_item.get("id"):
+                            db.table("barcode_scans").update(
+                                {"added_to_inventory": True, "inventory_item_id": existing_item.get("id")}
+                            ).eq("id", bsid).eq("user_id", user_id).execute()
+                except Exception:
+                    pass
                 
                 # Add to pantry (trigger will handle this automatically)
                 # But we'll track for response
@@ -1329,6 +2988,53 @@ async def confirm_ingredients(
                 
             elif action == "rejected":
                 rejected_count += 1
+
+                # Telemetry: pantry.item_corrected (delete)
+                try:
+                    emit_event(
+                        event_type="pantry.item_corrected",
+                        event_ts=now_iso,
+                        user_id=user_id,
+                        household_id=None,
+                        session_id=scan_session_id,
+                        model_version=scan_model_version,
+                        release_version=scan_release_version,
+                        app_version=scan_app_version,
+                        payload={
+                            "scan_id": request.scan_id,
+                            "detected_id": detected_id,
+                            "correction_type": "delete",
+                            "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                            "before": before_snapshot,
+                            "after": {"confirmation_status": action},
+                            **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                        },
+                    )
+                except Exception:
+                    pass
+
+                # Telemetry: pantry.item_removed
+                try:
+                    emit_event(
+                        event_type="pantry.item_removed",
+                        event_ts=now_iso,
+                        user_id=user_id,
+                        household_id=None,
+                        session_id=scan_session_id,
+                        model_version=scan_model_version,
+                        release_version=scan_release_version,
+                        app_version=scan_app_version,
+                        payload={
+                            "scan_id": request.scan_id,
+                            "detected_id": detected_id,
+                            "action": "rejected",
+                            "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                            "before": before_snapshot,
+                            **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
+                        },
+                    )
+                except Exception:
+                    pass
             
             # Update detected ingredient
             try:
@@ -1346,6 +3052,42 @@ async def confirm_ingredients(
                     )
                 else:
                     raise
+
+            # Opt-in ML correction event logging.
+            if training_opt_in:
+                try:
+                    after_snapshot = {
+                        "action": action,
+                        "confirmed_name": update_data.get("confirmed_name"),
+                        "detected_quantity": update_data.get("detected_quantity", detected_item.get("detected_quantity")),
+                        "detected_unit": update_data.get("detected_unit", detected_item.get("detected_unit")),
+                    }
+                    sig = _anonymized_item_signature(
+                        user_id,
+                        detected_item,
+                        extra={
+                            "scan_id": request.scan_id,
+                            "after_action": action,
+                        },
+                    )
+                    db.table("learning_feedback").insert(
+                        {
+                            "user_id": user_id,
+                            "feedback_type": f"scan_{action}",
+                            "source_entity_type": "detected_ingredient",
+                            "source_entity_id": str(detected_id),
+                            "was_correct": True,
+                            "confidence_at_decision": float(detected_item.get("confidence") or 0),
+                            "correction_data": {
+                                "scan_id": request.scan_id,
+                                "before": before_snapshot,
+                                "after": after_snapshot,
+                                "item_signature": sig,
+                            },
+                        }
+                    ).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to store opt-in correction event: {e}")
 
         # Latest-scan semantics (safer): after upserting the confirmed items for this scan,
         # mark older scan-sourced raw items in the same storage location inactive.
@@ -1365,9 +3107,45 @@ async def confirm_ingredients(
         except Exception as e:
             logger.warning(f"Failed to deactivate previous scan inventory set: {e}")
         
-        # Mark scan as completed (best-effort)
+        # Mark scan as completed + store KPI counters (best-effort)
         try:
-            db.table("ingredient_scans").update({"status": "completed"}).eq("id", request.scan_id).execute()
+            confirm_ms = None
+            try:
+                if scan_created_at:
+                    created_dt = datetime.fromisoformat(str(scan_created_at).replace("Z", "+00:00"))
+                    if created_dt.tzinfo is not None:
+                        created_dt = created_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                    confirm_ms = int(max(0.0, (datetime.utcnow() - created_dt).total_seconds() * 1000.0))
+            except Exception:
+                confirm_ms = None
+
+            detected_count = None
+            try:
+                det_res = (
+                    db.table("detected_ingredients")
+                    .select("id")
+                    .eq("scan_id", request.scan_id)
+                    .eq("user_id", user_id)
+                    .limit(5000)
+                    .execute()
+                )
+                detected_count = len(det_res.data or [])
+            except Exception:
+                detected_count = None
+
+            update_scan = {
+                "status": "completed",
+                "confirmed_at": now_iso,
+                "confirmed_count": int(confirmed_count),
+                "modified_count": int(modified_count),
+                "rejected_count": int(rejected_count),
+            }
+            if confirm_ms is not None:
+                update_scan["confirm_ms"] = confirm_ms
+            if detected_count is not None:
+                update_scan["detected_count"] = detected_count
+
+            _retry_without_missing_column(db, "ingredient_scans", "update", update_scan, where={"id": request.scan_id})
         except Exception:
             pass
         
@@ -1421,8 +3199,11 @@ async def scan_single_item(
         except Exception:
             profile = None
         
+        started = time.perf_counter()
         # Analyze with optimized single-item method
         vision_client = get_vision_client()
+        model_version = getattr(vision_client, "model", None)
+        model_provider = "openai"
         result = await vision_client.analyze_single_item(
             image_data=image_data,
             scan_type=scan_type,
@@ -1442,6 +3223,9 @@ async def scan_single_item(
 
         confidence = ingredient["confidence"]
         
+        analysis_ms = int(max(0.0, (time.perf_counter() - started) * 1000.0))
+        release_version = (os.getenv("SAVO_RELEASE_VERSION") or os.getenv("SAVO_RELEASE") or "").strip() or None
+
         # Auto-save high-confidence items
         auto_saved = False
         if confidence >= 0.85:
@@ -1454,6 +3238,36 @@ async def scan_single_item(
                     raise ValueError("Empty canonical name")
                 storage_location = _scan_type_to_storage_location(scan_type)
                 now_iso = datetime.utcnow().isoformat()
+
+                # Create a scan record for audit/KPI attribution.
+                scan_id = str(uuid4())
+                scan_payload = {
+                    "id": scan_id,
+                    "user_id": user_id,
+                    "image_url": None,
+                    "image_hash": None,
+                    "image_metadata": {
+                        "analysis_ms": analysis_ms,
+                        "auto_saved": True,
+                        **({"release_version": release_version} if release_version else {}),
+                        **({"model_version": model_version} if model_version else {}),
+                        "model_provider": model_provider,
+                    },
+                    "scan_type": f"single_{scan_type}",
+                    "location_hint": None,
+                    "status": "completed",
+                    "vision_provider": "openai",
+                    "api_cost_cents": 0,
+                    **({"model_version": model_version} if model_version else {}),
+                    "model_provider": model_provider,
+                    "analysis_ms": analysis_ms,
+                    **({"release_version": release_version} if release_version else {}),
+                    "auto_added_count": 1,
+                    "detected_count": 1,
+                    "confirmed_count": 1,
+                    "confirmed_at": now_iso,
+                }
+                _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
                 
                 # Upsert to inventory
                 existing = (
@@ -1475,15 +3289,20 @@ async def scan_single_item(
                     # Update existing
                     item = existing.data[0]
                     new_qty = float(item.get("quantity", 0)) + float(quantity)
-                    db.table("inventory_items").update({
+                    update_payload = {
                         "quantity": new_qty,
                         "unit": unit,
                         "scan_confidence": float(confidence),
-                        "last_seen_at": now_iso
-                    }).eq("id", item["id"]).execute()
+                        "last_seen_at": now_iso,
+                        "last_seen_scan_id": scan_id,
+                        **({"model_version": model_version} if model_version else {}),
+                        "model_provider": model_provider,
+                        **({"release_version": release_version} if release_version else {}),
+                    }
+                    _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": item["id"]})
                 else:
                     # Insert new
-                    db.table("inventory_items").insert({
+                    insert_payload = {
                         "user_id": user_id,
                         "canonical_name": canonical_name,
                         "display_name": _titleize(ingredient["detected_name"]),
@@ -1494,8 +3313,13 @@ async def scan_single_item(
                         "source": "scan",
                         "scan_confidence": float(confidence),
                         "is_current": True,
-                        "last_seen_at": now_iso
-                    }).execute()
+                        "last_seen_at": now_iso,
+                        "last_seen_scan_id": scan_id,
+                        **({"model_version": model_version} if model_version else {}),
+                        "model_provider": model_provider,
+                        **({"release_version": release_version} if release_version else {}),
+                    }
+                    _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
                 
                 auto_saved = True
             except Exception as e:
@@ -1630,10 +3454,15 @@ async def scan_receipt(
         # Best-effort upload to storage for traceability (optional).
         image_url = None
         try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
             image_url = upload_inventory_image(
                 user_id=user_id,
                 content=image_data,
                 content_type=image.content_type,
+                asset_type="receipt_image",
+                source="receipt_scan",
+                expires_at=expires_at,
+                links={"receipt_id": receipt_id},
             )
         except Exception as e:
             logger.warning(f"Failed to upload receipt image: {e}")
@@ -1883,10 +3712,15 @@ async def scan_receipt_preview(
 
         image_url = None
         try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
             image_url = upload_inventory_image(
                 user_id=user_id,
                 content=image_data,
                 content_type=image.content_type,
+                asset_type="receipt_image",
+                source="receipt_scan_preview",
+                expires_at=expires_at,
+                links={"receipt_id": receipt_id},
             )
         except Exception as e:
             logger.warning(f"Failed to upload receipt image: {e}")
@@ -2342,6 +4176,8 @@ async def pantry_summary(
                 "id": item.get("id"),
                 "ingredient_name": item.get("canonical_name"),
                 "display_name": item.get("display_name") or _titleize(item.get("canonical_name") or ""),
+                **({"session_id": session_id} if session_id else {}),
+                **({"correlation_id": correlation_id} if correlation_id else {}),
                 "quantity": item.get("quantity"),
                 "unit": item.get("unit"),
                 "storage_location": item.get("storage_location"),
@@ -3051,12 +4887,24 @@ async def scan_container(
         # Upload image
         image_bytes = await image.read()
         image_obj = Image.open(io.BytesIO(image_bytes))
-        
-        image_url = await upload_inventory_image(
-            image_bytes, 
-            user["id"],
-            f"container_scan_{uuid4()}.jpg"
-        )
+
+        # Create scan id early so we can link media assets.
+        scan_id = uuid4()
+
+        image_url = None
+        try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+            image_url = upload_inventory_image(
+                user_id=user["id"],
+                content=image_bytes,
+                content_type=image.content_type,
+                asset_type="container_scan",
+                source="container_scan",
+                expires_at=expires_at,
+                links={"container_scan_id": str(scan_id)},
+            )
+        except Exception:
+            image_url = None
         
         # Enhanced vision prompt for container recognition
         vision_client = get_vision_client()
@@ -3169,7 +5017,6 @@ Return JSON:
                     quantity_confidence = weight_estimate.confidence
         
         # Save container scan
-        scan_id = uuid4()
         await db.execute(
             """
             INSERT INTO container_scans

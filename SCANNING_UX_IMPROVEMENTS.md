@@ -1,5 +1,53 @@
 # Continuous Scanning UX Improvements
 
+## World-Class “Simple Scan” API Flows (Photo / Guided Multi-Frame / Barcode)
+
+The goal is one consistent user mental model:
+
+1) **Capture** (photo, guided multi-frame, or barcode)
+2) **Review + confirm** (only when needed)
+3) **Saved to inventory**
+
+### A) Single Photo (fastest path)
+- Call `POST /api/scanning/analyze-image` with:
+   - `image` (JPEG/PNG)
+   - `scan_type` (pantry/fridge/freezer/counter)
+   - optional `session_id`
+- If `requires_confirmation=true`, show the confirm UI.
+- Confirm via `POST /api/scanning/confirm-ingredients`.
+
+### B) Guided Multi-Frame (“Video-like” scanning without uploading video)
+This is the recommended approach for shelves/crowded scenes:
+
+1) Start a session: `POST /scan/session/start`
+2) During capture loop:
+    - For each frame, call `POST /scan/frame/upload` (updates quality + progress; does not store bytes)
+3) When user taps “Done”:
+    - Client submits the best 8–20 frames to `POST /api/scanning/analyze-frames` with `session_id`
+4) Confirm via `POST /api/scanning/confirm-ingredients`
+5) End session: `POST /scan/session/{session_id}/end`
+
+Notes:
+- Frames are **not persisted** by the backend during capture (privacy-first). Only hashes/quality signals are stored.
+- Inventory is saved when the scan results are confirmed.
+
+### C) Barcode-First (packaged items)
+Use this when the user is scanning a UPC/EAN code:
+
+- Call `POST /api/scanning/analyze-barcode` with:
+   - `barcode` (required)
+   - `scan_type` and optional `session_id`
+   - optional `barcode_name_hint` / `barcode_quantity_hint` / `barcode_unit_hint`
+
+Behavior:
+- If the barcode exists in `product_barcodes`, the API returns product name/brand/quantity.
+- Otherwise, the client can provide `barcode_name_hint` as a fallback.
+- Result is returned in the same shape as image scans (`AnalyzeImageResponse`) so the UI is consistent.
+- Confirm via `POST /api/scanning/confirm-ingredients` (this is when the item is actually added).
+
+Optional (for instant preview before creating a scan):
+- `GET /api/scanning/barcode/lookup?barcode=...` returns name/brand/quantity if known, without creating any scan records.
+
 ## ✅ What Was Fixed
 
 ### Problem

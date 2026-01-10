@@ -3,6 +3,41 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class BarcodeLookupService {
+  Future<Map<String, dynamic>?> lookupProduct(String barcode) async {
+    final code = barcode.trim();
+    if (code.isEmpty) return null;
+
+    final uri = Uri.parse('https://world.openfoodfacts.org/api/v2/product/$code.json');
+
+    final res = await http
+        .get(uri, headers: const {'Accept': 'application/json'})
+        .timeout(const Duration(seconds: 12));
+
+    if (res.statusCode != 200) return null;
+
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map) return null;
+
+    final status = decoded['status'];
+    if (status is num && status.toInt() != 1) return null;
+
+    final product = decoded['product'];
+    if (product is! Map) return null;
+
+    final rawName = (product['product_name'] ?? product['product_name_en'] ?? '').toString().trim();
+    final cleanedName = rawName.isEmpty ? null : _cleanProductName(rawName);
+
+    final rawQty = (product['quantity'] ?? '').toString().trim();
+    final parsed = _parseQuantity(rawQty);
+
+    if (cleanedName == null && parsed == null) return null;
+
+    return {
+      'name': cleanedName,
+      if (parsed != null) ...parsed,
+    };
+  }
+
   Future<String?> lookupName(String barcode) async {
     final code = barcode.trim();
     if (code.isEmpty) return null;
@@ -29,6 +64,27 @@ class BarcodeLookupService {
     if (rawName.isEmpty) return null;
 
     return _cleanProductName(rawName);
+  }
+
+  Map<String, dynamic>? _parseQuantity(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+
+    // Common formats: "500 g", "1kg", "16 oz", "2 x 250 g"
+    final m = RegExp(r'(\d+(?:\.\d+)?)\s*(kg|g|mg|l|ml|oz|lb|lbs)\b', caseSensitive: false).firstMatch(s);
+    if (m == null) return null;
+    final qty = double.tryParse(m.group(1) ?? '');
+    final unit = (m.group(2) ?? '').toLowerCase();
+    if (qty == null) return null;
+
+    String normUnit = unit;
+    if (unit == 'lbs') normUnit = 'lb';
+
+    return {
+      'quantity': qty,
+      'unit': normUnit,
+      'raw_quantity': s,
+    };
   }
 
   String _cleanProductName(String raw) {

@@ -139,7 +139,8 @@ class EmbeddingService:
         limit: int = 20,
         min_similarity: float = 0.5,
         category_filter: Optional[str] = None,
-        language_filter: Optional[str] = None
+        language_filter: Optional[str] = None,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Search ingredients using semantic similarity
@@ -163,28 +164,71 @@ class EmbeddingService:
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
             
             # Build SQL query with vector similarity
-            sql = """
-                SELECT 
-                    mi.id,
-                    mi.canonical_name,
-                    mi.category,
-                    mi.subcategory,
-                    mi.names,
-                    mi.common_uses,
-                    mi.embedding_tags,
-                    ie.text_embedding,
-                    1 - (ie.text_embedding <=> $1::vector) as similarity
-                FROM master_ingredients mi
-                JOIN ingredient_embeddings ie ON mi.id = ie.ingredient_id
-                WHERE 1 - (ie.text_embedding <=> $1::vector) >= $2
-            """
+            if collapse_deprecated:
+                sql = """
+                    WITH candidates AS (
+                        SELECT
+                            public.resolve_master_ingredient_id(mi.id) AS resolved_id,
+                            mi_res.canonical_name,
+                            mi_res.category,
+                            mi_res.subcategory,
+                            mi_res.names,
+                            mi_res.common_uses,
+                            mi_res.embedding_tags,
+                            1 - (ie.text_embedding <=> $1::vector) as similarity
+                        FROM master_ingredients mi
+                        JOIN ingredient_embeddings ie ON mi.id = ie.ingredient_id
+                        JOIN master_ingredients mi_res
+                          ON mi_res.id = public.resolve_master_ingredient_id(mi.id)
+                        WHERE 1 - (ie.text_embedding <=> $1::vector) >= $2
+                    ),
+                    dedup AS (
+                        SELECT DISTINCT ON (resolved_id)
+                            resolved_id,
+                            canonical_name,
+                            category,
+                            subcategory,
+                            names,
+                            common_uses,
+                            embedding_tags,
+                            similarity
+                        FROM candidates
+                        ORDER BY resolved_id, similarity DESC
+                    )
+                    SELECT
+                        resolved_id AS id,
+                        canonical_name,
+                        category,
+                        subcategory,
+                        names,
+                        common_uses,
+                        embedding_tags,
+                        similarity
+                    FROM dedup
+                    WHERE similarity >= $2
+                """
+            else:
+                sql = """
+                    SELECT
+                        mi.id,
+                        mi.canonical_name,
+                        mi.category,
+                        mi.subcategory,
+                        mi.names,
+                        mi.common_uses,
+                        mi.embedding_tags,
+                        1 - (ie.text_embedding <=> $1::vector) as similarity
+                    FROM master_ingredients mi
+                    JOIN ingredient_embeddings ie ON mi.id = ie.ingredient_id
+                    WHERE 1 - (ie.text_embedding <=> $1::vector) >= $2
+                """
             
             params = [vector_str, min_similarity]
             param_idx = 3
             
             # Add category filter
             if category_filter:
-                sql += f" AND mi.category = ${param_idx}"
+                sql += f" AND category = ${param_idx}" if collapse_deprecated else f" AND mi.category = ${param_idx}"
                 params.append(category_filter)
                 param_idx += 1
             
@@ -193,7 +237,7 @@ class EmbeddingService:
                 sql += f"""
                     AND EXISTS (
                         SELECT 1 FROM ingredient_aliases ia
-                        WHERE ia.ingredient_id = mi.id
+                        WHERE ia.ingredient_id = {"resolved_id" if collapse_deprecated else "mi.id"}
                         AND ia.language_code = ${param_idx}
                     )
                 """

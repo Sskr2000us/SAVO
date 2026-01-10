@@ -5,8 +5,10 @@ import 'package:provider/provider.dart';
 
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
+import '../services/barcode_lookup_service.dart';
 import '../services/metrics_service.dart';
 import 'scanning/guided_scan_screen.dart';
+import 'scanning/barcode_scan_screen.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
   const ScanIngredientsScreen({super.key});
@@ -18,6 +20,7 @@ class ScanIngredientsScreen extends StatefulWidget {
 class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   final ImagePicker _picker = ImagePicker();
   final FocusNode _quantityFocus = FocusNode();
+  final BarcodeLookupService _barcodeLookup = BarcodeLookupService();
 
   static const double _lowQuantityConfidenceThreshold = 0.70;
 
@@ -26,6 +29,11 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   List<_Candidate> _candidates = [];
   String? _scanId;
   Map<String, dynamic>? _deltaSummary;
+
+  String? _barcode;
+  String? _barcodeNameHint;
+  double? _barcodeQuantityHint;
+  String? _barcodeUnitHint;
 
   int _currentIndex = 0;
   int _savedCount = 0;
@@ -124,12 +132,17 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       setState(() => _image = image);
 
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final fields = <String, String>{
+        'scan_type': 'pantry',
+        if (_barcode != null && _barcode!.trim().isNotEmpty) 'barcode': _barcode!.trim(),
+        if (_barcodeNameHint != null && _barcodeNameHint!.trim().isNotEmpty) 'barcode_name_hint': _barcodeNameHint!.trim(),
+        if (_barcodeQuantityHint != null && _barcodeQuantityHint! > 0) 'barcode_quantity_hint': _barcodeQuantityHint!.toString(),
+        if (_barcodeUnitHint != null && _barcodeUnitHint!.trim().isNotEmpty) 'barcode_unit_hint': _barcodeUnitHint!.trim(),
+      };
       final response = await apiClient.postMultipart(
         '/api/scanning/analyze-image',
         file: image,
-        fields: const {
-          'scan_type': 'pantry',
-        },
+        fields: fields,
       );
 
       if (!mounted) return;
@@ -208,6 +221,42 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     }
   }
 
+  Future<void> _scanBarcode() async {
+    if (_loading) return;
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const BarcodeScanScreen()),
+    );
+    if (!mounted) return;
+    if (code == null || code.trim().isEmpty) return;
+
+    setState(() {
+      _barcode = code.trim();
+      _barcodeNameHint = null;
+      _barcodeQuantityHint = null;
+      _barcodeUnitHint = null;
+    });
+
+    try {
+      final product = await _barcodeLookup.lookupProduct(_barcode!);
+      if (!mounted) return;
+      if (product != null) {
+        setState(() {
+          _barcodeNameHint = product['name']?.toString();
+          final q = product['quantity'];
+          _barcodeQuantityHint = (q is num) ? q.toDouble() : double.tryParse(q?.toString() ?? '');
+          _barcodeUnitHint = product['unit']?.toString();
+        });
+      }
+    } catch (_) {
+      // best-effort
+    }
+
+    final name = (_barcodeNameHint ?? '').trim();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(name.isNotEmpty ? 'Barcode: $name' : 'Barcode scanned')),
+    );
+  }
+
   Future<void> _guidedScan() async {
     setState(() {
       _loading = true;
@@ -224,7 +273,13 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     try {
       final res = await Navigator.of(context).push<GuidedScanResult>(
         MaterialPageRoute(
-          builder: (_) => const GuidedScanScreen(scanType: 'pantry'),
+          builder: (_) => GuidedScanScreen(
+            scanType: 'pantry',
+            barcode: _barcode,
+            barcodeNameHint: _barcodeNameHint,
+            barcodeQuantityHint: _barcodeQuantityHint,
+            barcodeUnitHint: _barcodeUnitHint,
+          ),
         ),
       );
 
@@ -362,6 +417,21 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         if (edited != original) {
           confirmation['action'] = 'modified';
           confirmation['confirmed_name'] = name;
+
+          // If the user scanned a barcode during this scan session,
+          // attach it to the correction so the backend can learn pantry vocabulary.
+          if (_barcode != null && _barcode!.trim().isNotEmpty) {
+            confirmation['barcode'] = _barcode!.trim();
+          }
+          if (_barcodeNameHint != null && _barcodeNameHint!.trim().isNotEmpty) {
+            confirmation['barcode_name_hint'] = _barcodeNameHint!.trim();
+          }
+          if (_barcodeQuantityHint != null && _barcodeQuantityHint! > 0) {
+            confirmation['barcode_quantity_hint'] = _barcodeQuantityHint;
+          }
+          if (_barcodeUnitHint != null && _barcodeUnitHint!.trim().isNotEmpty) {
+            confirmation['barcode_unit_hint'] = _barcodeUnitHint!.trim();
+          }
         } else {
           confirmation['action'] = 'confirmed';
         }
@@ -714,6 +784,11 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       appBar: AppBar(
         title: const Text('Scan Ingredients'),
         actions: [
+          IconButton(
+            tooltip: 'Scan barcode (optional)',
+            onPressed: _loading ? null : _scanBarcode,
+            icon: const Icon(Icons.qr_code_scanner),
+          ),
           if (hasResults)
             TextButton(
               onPressed: _loading ? null : _finish,

@@ -7,12 +7,20 @@ class IngredientConfirmationScreen extends StatefulWidget {
   final String scanId;
   final List<dynamic> ingredients;
   final Map<String, dynamic> metadata;
+  final String? barcode;
+  final String? barcodeNameHint;
+  final double? barcodeQuantityHint;
+  final String? barcodeUnitHint;
 
   const IngredientConfirmationScreen({
     Key? key,
     required this.scanId,
     required this.ingredients,
     required this.metadata,
+    this.barcode,
+    this.barcodeNameHint,
+    this.barcodeQuantityHint,
+    this.barcodeUnitHint,
   }) : super(key: key);
 
   @override
@@ -186,9 +194,10 @@ class _IngredientConfirmationScreenState
     try {
       // Build confirmations list
       final confirmations = _userChoices.entries.map((entry) {
-        return {
+        final action = entry.value['action'];
+        final out = {
           'detected_id': entry.key,
-          'action': entry.value['action'],
+          'action': action,
           if (entry.value['confirmed_name'] != null)
             'confirmed_name': entry.value['confirmed_name'],
           // Add quantity and unit
@@ -197,6 +206,21 @@ class _IngredientConfirmationScreenState
           if (_units.containsKey(entry.key))
             'unit': _units[entry.key],
         };
+
+        // Attach barcode metadata only for user identity corrections.
+        if (action == 'modified') {
+          final bc = (widget.barcode ?? '').trim();
+          if (bc.isNotEmpty) out['barcode'] = bc;
+          final bcn = (widget.barcodeNameHint ?? '').trim();
+          if (bcn.isNotEmpty) out['barcode_name_hint'] = bcn;
+          if (widget.barcodeQuantityHint != null && widget.barcodeQuantityHint! > 0) {
+            out['barcode_quantity_hint'] = widget.barcodeQuantityHint;
+          }
+          final bcu = (widget.barcodeUnitHint ?? '').trim();
+          if (bcu.isNotEmpty) out['barcode_unit_hint'] = bcu;
+        }
+
+        return out;
       }).toList();
 
       final result = await _scanningService.confirmIngredients(

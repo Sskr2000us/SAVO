@@ -27,7 +27,8 @@ class SearchService:
         query: str,
         limit: int = 20,
         language: Optional[str] = None,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Search ingredients across all languages using aliases
@@ -44,52 +45,132 @@ class SearchService:
         """
         try:
             # Build SQL query
-            sql = """
-                SELECT DISTINCT
-                    mi.id,
-                    mi.canonical_name,
-                    mi.category,
-                    mi.subcategory,
-                    mi.names,
-                    mi.common_uses,
-                    mi.taste_profile,
-                    mi.embedding_tags,
-                    ia.alias_name as matched_alias,
-                    ia.language_code as matched_language,
-                    CASE 
-                        WHEN LOWER(mi.canonical_name) = LOWER($1) THEN 100
-                        WHEN LOWER(ia.alias_name) = LOWER($1) THEN 95
-                        WHEN LOWER(mi.canonical_name) LIKE LOWER($1 || '%') THEN 90
-                        WHEN LOWER(ia.alias_name) LIKE LOWER($1 || '%') THEN 85
-                        WHEN LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%') THEN 70
-                        WHEN LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%') THEN 65
-                        ELSE 50
-                    END as relevance_score
-                FROM master_ingredients mi
-                LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
-                WHERE (
-                    LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%')
-                    OR LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%')
-                )
-            """
-            
-            params = [query]
-            param_idx = 2
-            
-            # Add language filter
-            if language:
-                sql += f" AND ia.language_code = ${param_idx}"
-                params.append(language)
-                param_idx += 1
-            
-            # Add category filter
-            if category:
-                sql += f" AND mi.category = ${param_idx}"
-                params.append(category)
-                param_idx += 1
-            
-            sql += f" ORDER BY relevance_score DESC, mi.canonical_name LIMIT ${param_idx}"
-            params.append(limit)
+            if collapse_deprecated:
+                params = [query]
+                param_idx = 2
+
+                candidates_extra = ""
+                if language:
+                    candidates_extra += f" AND ia.language_code = ${param_idx}"
+                    params.append(language)
+                    param_idx += 1
+                if category:
+                    candidates_extra += f" AND mi_res.category = ${param_idx}"
+                    params.append(category)
+                    param_idx += 1
+
+                sql = f"""
+                    WITH candidates AS (
+                        SELECT
+                            public.resolve_master_ingredient_id(mi.id) AS resolved_id,
+                            mi_res.canonical_name,
+                            mi_res.category,
+                            mi_res.subcategory,
+                            mi_res.names,
+                            mi_res.common_uses,
+                            mi_res.taste_profile,
+                            mi_res.embedding_tags,
+                            ia.alias_name as matched_alias,
+                            ia.language_code as matched_language,
+                            CASE
+                                WHEN LOWER(mi.canonical_name) = LOWER($1) THEN 100
+                                WHEN LOWER(ia.alias_name) = LOWER($1) THEN 95
+                                WHEN LOWER(mi.canonical_name) LIKE LOWER($1 || '%') THEN 90
+                                WHEN LOWER(ia.alias_name) LIKE LOWER($1 || '%') THEN 85
+                                WHEN LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%') THEN 70
+                                WHEN LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%') THEN 65
+                                ELSE 50
+                            END as relevance_score
+                        FROM master_ingredients mi
+                        JOIN master_ingredients mi_res
+                          ON mi_res.id = public.resolve_master_ingredient_id(mi.id)
+                        LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
+                        WHERE (
+                            LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%')
+                            OR LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%')
+                        )
+                        {candidates_extra}
+                    ),
+                    dedup AS (
+                        SELECT DISTINCT ON (resolved_id)
+                            resolved_id,
+                            canonical_name,
+                            category,
+                            subcategory,
+                            names,
+                            common_uses,
+                            taste_profile,
+                            embedding_tags,
+                            matched_alias,
+                            matched_language,
+                            relevance_score
+                        FROM candidates
+                        ORDER BY resolved_id, relevance_score DESC
+                    )
+                    SELECT
+                        resolved_id AS id,
+                        canonical_name,
+                        category,
+                        subcategory,
+                        names,
+                        common_uses,
+                        taste_profile,
+                        embedding_tags,
+                        matched_alias,
+                        matched_language,
+                        relevance_score
+                    FROM dedup
+                    ORDER BY relevance_score DESC, canonical_name
+                    LIMIT ${param_idx}
+                """
+                params.append(limit)
+            else:
+                sql = """
+                    SELECT DISTINCT
+                        mi.id,
+                        mi.canonical_name,
+                        mi.category,
+                        mi.subcategory,
+                        mi.names,
+                        mi.common_uses,
+                        mi.taste_profile,
+                        mi.embedding_tags,
+                        ia.alias_name as matched_alias,
+                        ia.language_code as matched_language,
+                        CASE
+                            WHEN LOWER(mi.canonical_name) = LOWER($1) THEN 100
+                            WHEN LOWER(ia.alias_name) = LOWER($1) THEN 95
+                            WHEN LOWER(mi.canonical_name) LIKE LOWER($1 || '%') THEN 90
+                            WHEN LOWER(ia.alias_name) LIKE LOWER($1 || '%') THEN 85
+                            WHEN LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%') THEN 70
+                            WHEN LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%') THEN 65
+                            ELSE 50
+                        END as relevance_score
+                    FROM master_ingredients mi
+                    LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
+                    WHERE (
+                        LOWER(mi.canonical_name) LIKE LOWER('%' || $1 || '%')
+                        OR LOWER(ia.alias_name) LIKE LOWER('%' || $1 || '%')
+                    )
+                """
+
+                params = [query]
+                param_idx = 2
+
+                # Add language filter
+                if language:
+                    sql += f" AND ia.language_code = ${param_idx}"
+                    params.append(language)
+                    param_idx += 1
+
+                # Add category filter
+                if category:
+                    sql += f" AND mi.category = ${param_idx}"
+                    params.append(category)
+                    param_idx += 1
+
+                sql += f" ORDER BY relevance_score DESC, mi.canonical_name LIMIT ${param_idx}"
+                params.append(limit)
             
             # Execute query
             results = await conn.fetch(sql, *params)
@@ -124,7 +205,8 @@ class SearchService:
         query: str,
         limit: int = 20,
         threshold: Optional[int] = None,
-        language: Optional[str] = None
+        language: Optional[str] = None,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Fuzzy search for typo tolerance using Levenshtein distance
@@ -143,19 +225,36 @@ class SearchService:
         
         try:
             # Get all ingredient names and aliases
-            sql = """
-                SELECT 
-                    mi.id,
-                    mi.canonical_name,
-                    mi.category,
-                    mi.subcategory,
-                    mi.names,
-                    mi.common_uses,
-                    ia.alias_name,
-                    ia.language_code
-                FROM master_ingredients mi
-                LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
-            """
+            if collapse_deprecated:
+                sql = """
+                    SELECT
+                        public.resolve_master_ingredient_id(mi.id) AS resolved_id,
+                        mi_res.canonical_name,
+                        mi_res.category,
+                        mi_res.subcategory,
+                        mi_res.names,
+                        mi_res.common_uses,
+                        ia.alias_name,
+                        ia.language_code
+                    FROM master_ingredients mi
+                    JOIN master_ingredients mi_res
+                      ON mi_res.id = public.resolve_master_ingredient_id(mi.id)
+                    LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
+                """
+            else:
+                sql = """
+                    SELECT 
+                        mi.id,
+                        mi.canonical_name,
+                        mi.category,
+                        mi.subcategory,
+                        mi.names,
+                        mi.common_uses,
+                        ia.alias_name,
+                        ia.language_code
+                    FROM master_ingredients mi
+                    LEFT JOIN ingredient_aliases ia ON mi.id = ia.ingredient_id
+                """
             
             params = []
             if language:
@@ -167,7 +266,7 @@ class SearchService:
             # Build searchable text list
             search_items = {}  # {text: ingredient_data}
             for row in results:
-                ingredient_id = str(row["id"])
+                ingredient_id = str(row["resolved_id"] if collapse_deprecated else row["id"])
                 
                 # Add canonical name
                 search_items[row["canonical_name"]] = {
@@ -250,7 +349,8 @@ class SearchService:
         language: Optional[str] = None,
         category: Optional[str] = None,
         use_semantic: bool = True,
-        use_fuzzy: bool = True
+        use_fuzzy: bool = True,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search combining multiple search strategies
@@ -271,7 +371,7 @@ class SearchService:
         
         # 1. Multi-language exact/partial match (highest priority)
         ml_results = await self.multi_language_search(
-            conn, query, limit=limit, language=language, category=category
+            conn, query, limit=limit, language=language, category=category, collapse_deprecated=collapse_deprecated
         )
         for result in ml_results:
             ingredient_id = result["id"]
@@ -282,7 +382,7 @@ class SearchService:
         # 2. Fuzzy search for typo tolerance
         if use_fuzzy and len(all_results) < limit:
             fuzzy_results = await self.fuzzy_search(
-                conn, query, limit=limit, language=language
+                conn, query, limit=limit, language=language, collapse_deprecated=collapse_deprecated
             )
             for result in fuzzy_results:
                 ingredient_id = result["id"]
@@ -301,7 +401,8 @@ class SearchService:
             try:
                 semantic_results = await self.embedding_service.semantic_search(
                     conn, query, limit=limit, 
-                    category_filter=category, language_filter=language
+                    category_filter=category, language_filter=language,
+                    collapse_deprecated=collapse_deprecated,
                 )
                 for result in semantic_results:
                     ingredient_id = result["id"]
@@ -333,7 +434,8 @@ class SearchService:
         conn,
         audio_text: str,
         limit: int = 20,
-        language: Optional[str] = None
+        language: Optional[str] = None,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Search optimized for voice input (speech-to-text)
@@ -364,7 +466,8 @@ class SearchService:
                 limit=limit,
                 language=language,
                 use_semantic=True,
-                use_fuzzy=True
+                use_fuzzy=True,
+                collapse_deprecated=collapse_deprecated,
             )
             
             # Add voice search metadata
@@ -383,7 +486,8 @@ class SearchService:
         conn,
         prefix: str,
         limit: int = 10,
-        language: Optional[str] = None
+        language: Optional[str] = None,
+        collapse_deprecated: bool = True,
     ) -> List[Dict[str, str]]:
         """
         Autocomplete suggestions for search input
@@ -398,16 +502,30 @@ class SearchService:
             List of autocomplete suggestions
         """
         try:
-            sql = """
-                SELECT DISTINCT
-                    ia.alias_name as suggestion,
-                    ia.language_code,
-                    mi.canonical_name,
-                    mi.category
-                FROM ingredient_aliases ia
-                JOIN master_ingredients mi ON ia.ingredient_id = mi.id
-                WHERE LOWER(ia.alias_name) LIKE LOWER($1 || '%')
-            """
+            if collapse_deprecated:
+                sql = """
+                    SELECT DISTINCT
+                        ia.alias_name as suggestion,
+                        ia.language_code,
+                        mi_res.canonical_name,
+                        mi_res.category
+                    FROM ingredient_aliases ia
+                    JOIN master_ingredients mi ON ia.ingredient_id = mi.id
+                    JOIN master_ingredients mi_res
+                      ON mi_res.id = public.resolve_master_ingredient_id(mi.id)
+                    WHERE LOWER(ia.alias_name) LIKE LOWER($1 || '%')
+                """
+            else:
+                sql = """
+                    SELECT DISTINCT
+                        ia.alias_name as suggestion,
+                        ia.language_code,
+                        mi.canonical_name,
+                        mi.category
+                    FROM ingredient_aliases ia
+                    JOIN master_ingredients mi ON ia.ingredient_id = mi.id
+                    WHERE LOWER(ia.alias_name) LIKE LOWER($1 || '%')
+                """
             
             params = [prefix]
             

@@ -238,6 +238,34 @@ async def get_pairings(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/derived-from/{ingredient_id}")
+async def get_derived_from(
+    ingredient_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    conn: asyncpg.Connection = Depends(get_db_connection),
+):
+    """Get base ingredients that this ingredient is derived from."""
+    try:
+        rows = await graph_service.get_derived_from(conn, ingredient_id, limit=limit)
+        return {"ingredient_id": ingredient_id, "derived_from": rows, "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/derivatives/{ingredient_id}")
+async def get_derivatives(
+    ingredient_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    conn: asyncpg.Connection = Depends(get_db_connection),
+):
+    """Get ingredients derived from this base ingredient."""
+    try:
+        rows = await graph_service.get_derivatives(conn, ingredient_id, limit=limit)
+        return {"ingredient_id": ingredient_id, "derivatives": rows, "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/recipe-compatibility")
 async def calculate_recipe_compatibility(
     request: RecipeCompatibilityRequest,
