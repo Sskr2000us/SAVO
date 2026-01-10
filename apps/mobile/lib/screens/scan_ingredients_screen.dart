@@ -17,6 +17,9 @@ class ScanIngredientsScreen extends StatefulWidget {
 
 class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   final ImagePicker _picker = ImagePicker();
+  final FocusNode _quantityFocus = FocusNode();
+
+  static const double _lowQuantityConfidenceThreshold = 0.70;
 
   bool _loading = false;
   XFile? _image;
@@ -26,6 +29,55 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _currentIndex = 0;
   int _savedCount = 0;
   int _skippedCount = 0;
+
+  bool _quantityNeedsConfirmation(_Candidate c) {
+    final hasSuggestion = (c.quantityController.text.trim().isNotEmpty);
+    if (!hasSuggestion) return false;
+
+    // If quantity confidence is missing, treat as low confidence to be safe.
+    final qc = c.quantityConfidence;
+    return qc == null || qc < _lowQuantityConfidenceThreshold;
+  }
+
+  Future<void> _editQuantityDialog(_Candidate c) async {
+    final initial = c.quantityController.text.trim();
+    final controller = TextEditingController(text: initial);
+
+    final res = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit quantity'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'e.g., 500 g, 2 kg, 3 pieces',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (res == null) return;
+
+    setState(() {
+      c.quantityController.text = res;
+      c.quantityEstimate = res;
+      c.quantityConfirmed = true;
+    });
+  }
 
   int? _nextPendingIndex({int startAt = 0}) {
     if (_candidates.isEmpty) return null;
@@ -259,6 +311,16 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     });
 
     try {
+      if (save && _quantityNeedsConfirmation(c) && !c.quantityConfirmed) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Confirm or edit the quantity first.')),
+          );
+        }
+        setState(() => _loading = false);
+        return;
+      }
+
       final apiClient = Provider.of<ApiClient>(context, listen: false);
 
       final name = c.ingredientController.text.trim();
@@ -343,6 +405,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     Navigator.pop(context, _savedCount > 0);
   }
 
+  @override
+  void dispose() {
+    _quantityFocus.dispose();
+    super.dispose();
+  }
+
   void _showError(String message) {
     showDialog(
       context: context,
@@ -388,6 +456,17 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       backgroundColor: color.withOpacity(0.1),
       side: BorderSide(color: color.withOpacity(0.3)),
       padding: const EdgeInsets.symmetric(horizontal: 4),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildFormChip(String? itemForm) {
+    final raw = (itemForm ?? '').trim().toLowerCase();
+    if (raw.isEmpty || raw == 'unknown') return const SizedBox.shrink();
+
+    final label = raw == 'packaged' ? 'Packaged' : (raw == 'loose' ? 'Loose' : raw);
+    return Chip(
+      label: Text(label, style: const TextStyle(fontSize: 13)),
       visualDensity: VisualDensity.compact,
     );
   }
@@ -457,6 +536,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
+                  _buildFormChip(current.itemForm),
+                  const SizedBox(width: 8),
                   _buildConfidenceChip(current.confidence),
                 ],
               ),
@@ -471,15 +552,58 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                 onChanged: (v) => current.ingredient = v,
               ),
               const SizedBox(height: 10),
+              if (current.quantityController.text.trim().isNotEmpty) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _quantityNeedsConfirmation(current) && !current.quantityConfirmed
+                            ? 'Looks like ${current.quantityController.text.trim()} — correct?'
+                            : 'Looks like ${current.quantityController.text.trim()}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                    if (_quantityNeedsConfirmation(current) && !current.quantityConfirmed) ...[
+                      TextButton(
+                        onPressed: _loading
+                            ? null
+                            : () => setState(() {
+                                  current.quantityConfirmed = true;
+                                }),
+                        child: const Text('Correct'),
+                      ),
+                      TextButton(
+                        onPressed: _loading ? null : () => _editQuantityDialog(current),
+                        child: const Text('Edit'),
+                      ),
+                    ] else ...[
+                      TextButton(
+                        onPressed: _loading ? null : () => _editQuantityDialog(current),
+                        child: const Text('Edit'),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
               TextField(
                 controller: current.quantityController,
+                focusNode: _quantityFocus,
                 enabled: !_loading,
-                decoration: const InputDecoration(
-                  labelText: 'Quantity (optional, e.g., 2 kg)',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _quantityNeedsConfirmation(current)
+                      ? 'Quantity (required review)'
+                      : 'Quantity (optional, e.g., 2 kg)',
+                  border: const OutlineInputBorder(),
                 ),
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (v) => current.quantityEstimate = v,
+                onChanged: (v) {
+                  current.quantityEstimate = v;
+                  // Any edit counts as confirmation for low-confidence quantities.
+                  if (_quantityNeedsConfirmation(current)) {
+                    current.quantityConfirmed = true;
+                  }
+                },
               ),
               const SizedBox(height: 12),
               Row(
@@ -493,12 +617,22 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _loading ? null : () => _confirmCurrentAndAdvance(save: true),
+                      onPressed: (_loading || (_quantityNeedsConfirmation(current) && !current.quantityConfirmed))
+                          ? null
+                          : () => _confirmCurrentAndAdvance(save: true),
                       child: const Text('Save to inventory'),
                     ),
                   ),
                 ],
               ),
+              if (_quantityNeedsConfirmation(current) && !current.quantityConfirmed) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Please confirm or edit the quantity before saving.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
+              ],
               const SizedBox(height: 8),
               Text(
                 'Saved: $_savedCount  Skipped: $_skippedCount',
@@ -563,11 +697,16 @@ class _Candidate {
   String ingredient;
   final String originalIngredient;
   String? quantityEstimate;
+  final String? originalQuantityEstimate;
   double confidence;
+  double? quantityConfidence;
+  String? quantitySource;
+  String? itemForm;
   String? storageHint;
   bool selected;
 
   bool processed;
+  bool quantityConfirmed;
 
   final TextEditingController ingredientController;
   final TextEditingController quantityController;
@@ -577,10 +716,15 @@ class _Candidate {
     required this.ingredient,
     required this.originalIngredient,
     required this.quantityEstimate,
+    required this.originalQuantityEstimate,
     required this.confidence,
+    required this.quantityConfidence,
+    required this.quantitySource,
+    required this.itemForm,
     required this.storageHint,
     required this.selected,
     required this.processed,
+    required this.quantityConfirmed,
   })  : ingredientController = TextEditingController(text: ingredient),
         quantityController = TextEditingController(text: quantityEstimate ?? '');
 
@@ -596,6 +740,17 @@ class _Candidate {
 
     final confidenceRaw = json['confidence'];
     final confidence = (confidenceRaw is num) ? confidenceRaw.toDouble() : 0.0;
+
+    final qcRaw = json['quantity_confidence'];
+    final quantityConfidence = (qcRaw is num) ? qcRaw.toDouble().clamp(0.0, 1.0) : null;
+    final quantitySource = json['quantity_source']?.toString();
+    final itemForm = json['item_form']?.toString();
+
+    // Low-confidence quantities must be explicitly confirmed/edited.
+    final quantityConfirmed = (quantityEstimate == null || quantityEstimate.trim().isEmpty)
+        ? true
+        : (quantityConfidence != null && quantityConfidence >= _ScanIngredientsScreenState._lowQuantityConfidenceThreshold);
+
     final storageHint = null;
 
     return _Candidate(
@@ -603,10 +758,15 @@ class _Candidate {
       ingredient: detectedName,
       originalIngredient: detectedName,
       quantityEstimate: quantityEstimate,
+      originalQuantityEstimate: quantityEstimate,
       confidence: confidence.clamp(0.0, 1.0),
+      quantityConfidence: quantityConfidence,
+      quantitySource: quantitySource,
+      itemForm: itemForm,
       storageHint: storageHint,
       selected: true,
       processed: false,
+      quantityConfirmed: quantityConfirmed,
     );
   }
 }

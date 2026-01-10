@@ -349,10 +349,12 @@ DETECTION REQUIREMENTS:
 2. Provide confidence score (0.0 to 1.0) for each detection
 3. Use common grocery names (e.g., "eggs" not "chicken eggs")
 4. Include category: protein/vegetable/fruit/dairy/grain/spice/condiment/beverage/other
-5. For uncertain items: suggest 2-3 close alternatives
-6. **EXTRACT QUANTITIES** from package labels, nutrition labels, or visible text
-7. **COUNT** items if countable (e.g., "3 apples", "2 cans")
-8. **ESTIMATE** quantities if no label visible
+5. Detect BOTH packaged goods and loose items (produce, grains, pulses, spices)
+6. For each item, set item_form: packaged|loose|unknown
+7. For uncertain items: suggest 2-3 close alternatives
+8. **EXTRACT QUANTITIES** from package labels, nutrition labels, or visible text
+9. **COUNT** items if countable (e.g., "3 apples", "2 cans")
+10. **ESTIMATE** quantities if no label visible
 
 QUANTITY DETECTION RULES:
 - Read package labels: "16 oz", "500g", "2 lbs", "1 gallon", "250 ml"
@@ -375,6 +377,7 @@ RESPONSE FORMAT (JSON):
       "detected_name": "ingredient name",
       "confidence": 0.85,
       "category": "vegetable",
+            "item_form": "packaged|loose|unknown",
       "reason": "why you're confident/uncertain",
       "quantity": 500,
       "unit": "grams",
@@ -451,6 +454,26 @@ RESPONSE FORMAT (JSON):
         unit = item.get("unit")
         quantity_confidence = item.get("quantity_confidence", 0.0) if quantity else None
         quantity_source = item.get("quantity_source", "")
+
+        # Packaged vs loose (best-effort)
+        item_form = item.get("item_form")
+        if isinstance(item_form, str):
+            item_form = item_form.strip().lower()
+        else:
+            item_form = None
+
+        if item_form not in {"packaged", "loose", "unknown"}:
+            # Heuristic fallback if the model didn't provide it.
+            qs = (quantity_source or "").strip().lower()
+            cat = (item.get("category") or "other").strip().lower()
+            if qs == "package_label":
+                item_form = "packaged"
+            elif cat in {"vegetable", "fruit"}:
+                item_form = "loose"
+            elif cat in {"grain", "spice"} and qs in {"estimate", "count", ""}:
+                item_form = "loose"
+            else:
+                item_form = "unknown"
         
         # Normalize ingredient name
         canonical_name = normalizer.normalize_name(detected_name) if detected_name else ""
@@ -485,6 +508,7 @@ RESPONSE FORMAT (JSON):
             "canonical_name": canonical_name,
             "confidence": confidence,
             "category": item.get("category", "other"),
+            "item_form": item_form,
             "reason": item.get("reason", ""),
             "quantity": quantity,
             "unit": unit,

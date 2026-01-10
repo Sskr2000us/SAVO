@@ -194,6 +194,7 @@ class DetectedIngredient(BaseModel):
     confidence: Decimal
     confidence_category: str  # "high", "medium", "low"
     category: str
+    item_form: Optional[str] = None  # packaged|loose|unknown
     quantity: Optional[float] = None
     unit: Optional[str] = None
     quantity_confidence: Optional[float] = None
@@ -477,6 +478,7 @@ async def analyze_image(
                 confidence=confidence,
                 confidence_category=vision_client.get_confidence_category(confidence),
                 category=ingredient_data.get("category", "other"),
+                item_form=ingredient_data.get("item_form"),
                 quantity=ingredient_data.get("quantity"),
                 unit=ingredient_data.get("unit"),
                 quantity_confidence=ingredient_data.get("quantity_confidence"),
@@ -734,6 +736,7 @@ async def analyze_frames(
                 confidence=Decimal(str(conf_val)),
                 confidence_category=vision_client.get_confidence_category(Decimal(str(conf_val))),
                 category=det.get("category", "other"),
+                item_form=det.get("item_form"),
                 quantity=det.get("quantity"),
                 unit=det.get("unit"),
                 quantity_confidence=det.get("quantity_confidence"),
