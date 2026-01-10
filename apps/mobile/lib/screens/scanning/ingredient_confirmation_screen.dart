@@ -26,16 +26,26 @@ class _IngredientConfirmationScreenState
   final Map<String, Map<String, dynamic>> _userChoices = {};
   final Map<String, double> _quantities = {};
   final Map<String, String> _units = {};
+  final Map<String, bool> _quantityConfirmed = {};
+  final Map<String, double?> _suggestedQuantities = {};
+  final Map<String, String?> _suggestedUnits = {};
   bool _isSubmitting = false;
+
+  static const double _lowQuantityConfidenceThreshold = 0.70;
 
   @override
   void initState() {
     super.initState();
     // Initialize default choices (auto-confirm high confidence)
     for (var ingredient in widget.ingredients) {
+      final detectedId = ingredient['id']?.toString() ?? '';
+      if (detectedId.trim().isEmpty) {
+        continue;
+      }
+
       final confidenceCategory = ingredient['confidence_category'];
       if (confidenceCategory == 'high') {
-        _userChoices[ingredient['id']] = {
+        _userChoices[detectedId] = {
           'action': 'confirmed',
           'confirmed_name': ingredient['canonical_name'] ?? ingredient['detected_name'],
         };
@@ -44,20 +54,60 @@ class _IngredientConfirmationScreenState
       // Initialize quantities from OCR detection or defaults
       final detectedQuantity = ingredient['quantity'];
       final detectedUnit = ingredient['unit'];
+      final qcRaw = ingredient['quantity_confidence'];
+      final double? quantityConfidence = (qcRaw is num)
+          ? qcRaw.toDouble().clamp(0.0, 1.0)
+          : double.tryParse(qcRaw?.toString() ?? '');
       
       if (detectedQuantity != null && detectedQuantity > 0) {
-        _quantities[ingredient['id']] = (detectedQuantity as num).toDouble();
-        _units[ingredient['id']] = detectedUnit ?? 'pieces';
+        final q = (detectedQuantity as num).toDouble();
+        final u = (detectedUnit ?? 'pieces').toString();
+        _quantities[detectedId] = q;
+        _units[detectedId] = u;
+        _suggestedQuantities[detectedId] = q;
+        _suggestedUnits[detectedId] = u;
+
+        // Low-confidence quantities must be explicitly confirmed/edited.
+        final needsConfirm = (quantityConfidence == null) || (quantityConfidence < _lowQuantityConfidenceThreshold);
+        _quantityConfirmed[detectedId] = !needsConfirm;
       } else {
         // Default values
-        _quantities[ingredient['id']] = 1.0;
+        _quantities[detectedId] = 1.0;
         final smartUnits = getSmartUnitSuggestions(
           ingredient['category'],
           ingredient['detected_name'],
         );
-        _units[ingredient['id']] = smartUnits.first;
+        _units[detectedId] = smartUnits.first;
+
+        // No auto-detected quantity => no gating.
+        _suggestedQuantities[detectedId] = null;
+        _suggestedUnits[detectedId] = null;
+        _quantityConfirmed[detectedId] = true;
       }
     }
+  }
+
+  bool _quantityNeedsConfirmation(Map<String, dynamic> ingredient) {
+    final detectedId = ingredient['id']?.toString() ?? '';
+    if (detectedId.trim().isEmpty) return false;
+    if ((_userChoices[detectedId]?['action'] ?? '') == 'rejected') return false;
+
+    // Only gate when we had an auto-detected quantity.
+    final suggestedQty = _suggestedQuantities[detectedId];
+    return suggestedQty != null;
+  }
+
+  bool _hasUnconfirmedLowConfidenceQuantities() {
+    for (final ing in widget.ingredients) {
+      if (ing is! Map) continue;
+      final ingredient = ing.cast<String, dynamic>();
+      final detectedId = ingredient['id']?.toString() ?? '';
+      if (detectedId.trim().isEmpty) continue;
+      if ((_userChoices[detectedId]?['action'] ?? '') == 'rejected') continue;
+      if (!_quantityNeedsConfirmation(ingredient)) continue;
+      if (_quantityConfirmed[detectedId] != true) return true;
+    }
+    return false;
   }
 
   void _handleConfirm(String detectedId, String name) {
@@ -87,6 +137,11 @@ class _IngredientConfirmationScreenState
   }
 
   Future<void> _submitConfirmations() async {
+    if (_hasUnconfirmedLowConfidenceQuantities()) {
+      _showError('Please confirm or edit low-confidence quantities first.');
+      return;
+    }
+
     setState(() {
       _isSubmitting = true;
     });
@@ -260,7 +315,7 @@ class _IngredientConfirmationScreenState
             ),
             child: SafeArea(
               child: ElevatedButton(
-                onPressed: _isSubmitting ? null : _submitConfirmations,
+                onPressed: (_isSubmitting || _hasUnconfirmedLowConfidenceQuantities()) ? null : _submitConfirmations,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF4CAF50),
                   foregroundColor: Colors.white,
@@ -384,6 +439,11 @@ class _IngredientConfirmationScreenState
     final isModified = userChoice?['action'] == 'modified';
     final isRejected = userChoice?['action'] == 'rejected';
 
+    final needsQuantityConfirm = _quantityNeedsConfirmation(ingredient);
+    final quantityConfirmed = _quantityConfirmed[detectedId] == true;
+    final currentQty = _quantities[detectedId] ?? 1.0;
+    final currentUnit = _units[detectedId] ?? 'pieces';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 2,
@@ -495,6 +555,34 @@ class _IngredientConfirmationScreenState
                         ],
                       ],
                     ),
+
+                    if (needsQuantityConfirm && !quantityConfirmed) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Looks like ${currentQty.toStringAsFixed(currentQty == currentQty.roundToDouble() ? 0 : 1)} $currentUnit — correct?',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _quantityConfirmed[detectedId] = true;
+                              });
+                            },
+                            child: const Text('Correct'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'If not, adjust the quantity below.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                      ),
+                    ],
+
                     const SizedBox(height: 8),
                     QuantityPicker(
                       initialQuantity: _quantities[detectedId] ?? 1.0,
@@ -507,6 +595,11 @@ class _IngredientConfirmationScreenState
                         setState(() {
                           _quantities[detectedId] = qty;
                           _units[detectedId] = unit;
+
+                          // Any edit counts as confirmation for low-confidence quantities.
+                          if (needsQuantityConfirm) {
+                            _quantityConfirmed[detectedId] = true;
+                          }
                         });
                       },
                       enabled: true,
@@ -561,7 +654,9 @@ class _IngredientConfirmationScreenState
                       style: OutlinedButton.styleFrom(
                         foregroundColor: isConfirmed || isModified ? Colors.green : Colors.black87,
                         side: BorderSide(
-                          color: isConfirmed || isModified ? Colors.green : Colors.grey,
+                          onPressed: (needsQuantityConfirm && !quantityConfirmed)
+                              ? null
+                              : () => _handleConfirm(detectedId, canonicalName),
                         ),
                       ),
                     ),
