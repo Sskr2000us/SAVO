@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import logging
 import io
+import statistics
 
 from pydantic import BaseModel, Field
 
@@ -113,6 +114,221 @@ def _assess_image_quality(image_data: bytes) -> Dict[str, Any]:
     }
 
 
+def _safe_crop_by_bbox(image_data: bytes, bbox: Optional[Dict[str, Any]]) -> Optional[Image.Image]:
+    if not bbox or not isinstance(bbox, dict):
+        return None
+    if not all(k in bbox for k in ["x", "y", "width", "height"]):
+        return None
+
+    try:
+        img = Image.open(io.BytesIO(image_data)).convert("RGB")
+    except Exception:
+        return None
+
+    try:
+        img_width, img_height = img.size
+        x = float(bbox.get("x"))
+        y = float(bbox.get("y"))
+        w = float(bbox.get("width"))
+        h = float(bbox.get("height"))
+    except Exception:
+        return None
+
+    if img_width <= 1 or img_height <= 1:
+        return None
+
+    # Clamp normalized coords.
+    x = max(0.0, min(1.0, x))
+    y = max(0.0, min(1.0, y))
+    w = max(0.0, min(1.0, w))
+    h = max(0.0, min(1.0, h))
+    if w <= 0.0 or h <= 0.0:
+        return None
+
+    left = int(x * img_width)
+    top = int(y * img_height)
+    right = int((x + w) * img_width)
+    bottom = int((y + h) * img_height)
+
+    # Small padding to reduce sensitivity to bbox jitter.
+    pad_x = int(max(2, (right - left) * 0.08))
+    pad_y = int(max(2, (bottom - top) * 0.08))
+    left = max(0, left - pad_x)
+    top = max(0, top - pad_y)
+    right = min(img_width, right + pad_x)
+    bottom = min(img_height, bottom + pad_y)
+    if right <= left or bottom <= top:
+        return None
+
+    try:
+        return img.crop((left, top, right, bottom))
+    except Exception:
+        return None
+
+
+def _average_hash(img: Image.Image) -> str:
+    """Simple 8x8 aHash for lightweight visual fingerprinting."""
+    try:
+        gray = img.convert("L").resize((8, 8), Image.Resampling.LANCZOS)
+        pixels = list(gray.getdata())
+        avg = sum(pixels) / max(1, len(pixels))
+        bits = [1 if p >= avg else 0 for p in pixels]
+        hex_str = ""
+        for i in range(0, 64, 4):
+            nibble = (bits[i] << 3) | (bits[i + 1] << 2) | (bits[i + 2] << 1) | bits[i + 3]
+            hex_str += format(nibble, "x")
+        return hex_str
+    except Exception:
+        return ""
+
+
+def _compute_container_hash(image_data: bytes, bbox: Optional[Dict[str, Any]]) -> Optional[str]:
+    cropped = _safe_crop_by_bbox(image_data, bbox)
+    if cropped is None:
+        return None
+    ah = _average_hash(cropped)
+    return ah or None
+
+
+def _load_previous_scan_quantities(db, user_id: str) -> Dict[str, Dict[str, Any]]:
+    """Load the latest prior scan's detected quantities (best-effort)."""
+    try:
+        scans = (
+            db.table("ingredient_scans")
+            .select("id, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not scans.data:
+            return {}
+        prev_scan_id = scans.data[0].get("id")
+        if not prev_scan_id:
+            return {}
+
+        rows = (
+            db.table("detected_ingredients")
+            .select("canonical_name, detected_name, detected_quantity, detected_unit")
+            .eq("user_id", user_id)
+            .eq("scan_id", prev_scan_id)
+            .execute()
+        )
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows.data or []:
+            key = (r.get("canonical_name") or r.get("detected_name") or "").strip().lower()
+            if not key:
+                continue
+            out[key] = {
+                "quantity": r.get("detected_quantity"),
+                "unit": r.get("detected_unit"),
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def _apply_scan_delta(current: List[Dict[str, Any]], previous: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    current_keys = set()
+    new_count = 0
+    changed_count = 0
+
+    for det in current:
+        if not isinstance(det, dict):
+            continue
+        key = (det.get("canonical_name") or det.get("detected_name") or "").strip().lower()
+        if not key:
+            continue
+        current_keys.add(key)
+        prev = previous.get(key)
+        if not prev:
+            det["change_status"] = "new"
+            new_count += 1
+            continue
+
+        prev_q = prev.get("quantity")
+        prev_u = prev.get("unit")
+        det["previous_quantity"] = prev_q
+        det["previous_unit"] = prev_u
+
+        q = det.get("quantity")
+        u = det.get("unit")
+        try:
+            qf = float(q) if q is not None else None
+            pqf = float(prev_q) if prev_q is not None else None
+        except Exception:
+            qf, pqf = None, None
+
+        if qf is None or pqf is None:
+            det["change_status"] = "unchanged"
+            continue
+        if (u or "") and (prev_u or "") and _normalize_unit(u) != _normalize_unit(prev_u):
+            det["change_status"] = "unchanged"
+            continue
+
+        baseline = max(abs(pqf), 1.0)
+        if abs(qf - pqf) / baseline >= 0.25:
+            det["change_status"] = "changed"
+            changed_count += 1
+        else:
+            det["change_status"] = "unchanged"
+
+    removed = sorted(list(set(previous.keys()) - current_keys))
+    return {
+        "new_count": new_count,
+        "removed_count": len(removed),
+        "changed_count": changed_count,
+        "removed_items": [{"name": k} for k in removed[:20]],
+    }
+
+
+def _get_container_quantity_prior(db, user_id: str, container_hash: str) -> Optional[Dict[str, Any]]:
+    """Learn a typical quantity for a reused container fingerprint (jar/tin/etc)."""
+    if not container_hash:
+        return None
+    try:
+        rows = (
+            db.table("detected_ingredients")
+            .select("detected_quantity, detected_unit, confirmation_status")
+            .eq("user_id", user_id)
+            .eq("metadata->>container_hash", container_hash)
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+
+        samples: List[float] = []
+        units: List[str] = []
+        for r in rows.data or []:
+            if r.get("confirmation_status") not in {"confirmed", "modified"}:
+                continue
+            q = r.get("detected_quantity")
+            u = r.get("detected_unit")
+            try:
+                qf = float(q)
+            except Exception:
+                continue
+            if qf <= 0:
+                continue
+            samples.append(qf)
+            units.append(_normalize_unit(u))
+
+        if len(samples) < 2:
+            return None
+
+        unit = max(set(units), key=lambda x: units.count(x)) if units else "pieces"
+        median_qty = float(statistics.median(samples))
+        confidence = min(0.95, 0.60 + 0.05 * len(samples))
+        return {
+            "quantity": median_qty,
+            "unit": unit,
+            "sample_count": len(samples),
+            "confidence": confidence,
+        }
+    except Exception:
+        return None
+
+
 def _parse_ts(ts: Any) -> Optional[datetime]:
     if ts is None:
         return None
@@ -199,6 +415,9 @@ class DetectedIngredient(BaseModel):
     unit: Optional[str] = None
     quantity_confidence: Optional[float] = None
     quantity_source: Optional[str] = None
+    change_status: Optional[str] = None  # new|changed|unchanged
+    previous_quantity: Optional[float] = None
+    previous_unit: Optional[str] = None
     close_alternatives: List[Dict] = []
     visual_similarity_group: Optional[str]
     allergen_warnings: List[Dict] = []
@@ -388,6 +607,9 @@ async def analyze_image(
         db = get_db_client()
         scan_id = str(uuid4())
 
+        # Best-effort delta baseline (latest prior scan).
+        previous_quantities = _load_previous_scan_quantities(db, user_id)
+
         # Upload image to Supabase Storage (best-effort)
         image_url = None
         try:
@@ -421,10 +643,34 @@ async def analyze_image(
             "api_cost_cents": api_cost
         }).execute()
         
+        # Pre-pass: container fingerprint + learned quantity priors.
+        for ingredient_data in analysis_result["ingredients"]:
+            container_hash = _compute_container_hash(image_data, ingredient_data.get("bbox"))
+            if container_hash:
+                ingredient_data["container_hash"] = container_hash
+                prior = _get_container_quantity_prior(db, user_id, container_hash)
+                if prior is not None:
+                    qc = ingredient_data.get("quantity_confidence")
+                    try:
+                        qc_val = float(qc) if qc is not None else None
+                    except Exception:
+                        qc_val = None
+                    if ingredient_data.get("quantity") is None or qc_val is None or qc_val < 0.65:
+                        ingredient_data["quantity"] = prior.get("quantity")
+                        ingredient_data["unit"] = prior.get("unit")
+                        ingredient_data["quantity_source"] = "container_history"
+                        ingredient_data["quantity_confidence"] = float(prior.get("confidence") or 0.75)
+                        ingredient_data["container_match_count"] = int(prior.get("sample_count") or 0)
+
+        # Annotate delta vs previous scan and include a summary in metadata.
+        delta = _apply_scan_delta(analysis_result["ingredients"], previous_quantities)
+        analysis_result["metadata"] = analysis_result.get("metadata") or {}
+        analysis_result["metadata"]["delta"] = delta
+
         # Insert detected ingredients
         detected_ingredients = []
         requires_confirmation = False
-        
+
         for ingredient_data in analysis_result["ingredients"]:
             detected_id = str(uuid4())
             confidence = ingredient_data["confidence"]
@@ -467,7 +713,11 @@ async def analyze_image(
                 "allergen_warnings": ingredient_data.get("allergen_warnings", []),
                 "thumbnail_url": thumbnail_url,
                 "full_image_url": image_url,
-                "confirmation_status": "pending"
+                "confirmation_status": "pending",
+                "metadata": {
+                    "container_hash": ingredient_data.get("container_hash"),
+                    "container_match_count": ingredient_data.get("container_match_count"),
+                },
             }).execute()
             
             # Build response ingredient
@@ -483,6 +733,9 @@ async def analyze_image(
                 unit=ingredient_data.get("unit"),
                 quantity_confidence=ingredient_data.get("quantity_confidence"),
                 quantity_source=ingredient_data.get("quantity_source"),
+                change_status=ingredient_data.get("change_status"),
+                previous_quantity=ingredient_data.get("previous_quantity"),
+                previous_unit=ingredient_data.get("previous_unit"),
                 close_alternatives=ingredient_data.get("close_alternatives", []),
                 visual_similarity_group=ingredient_data.get("visual_similarity_group"),
                 allergen_warnings=ingredient_data.get("allergen_warnings", []),
@@ -597,6 +850,7 @@ async def analyze_frames(
 
         representative_image_url = None
         all_detections: List[Dict] = []
+        usable_frame_bytes: Dict[int, bytes] = {}
         any_ok_frame = False
         aggregated_issues: set[str] = set()
         last_metrics: Dict[str, Any] = {}
@@ -625,6 +879,7 @@ async def analyze_frames(
                 continue
 
             any_ok_frame = True
+            usable_frame_bytes[idx] = image_data
 
             if representative_image_url is None:
                 try:
@@ -646,6 +901,7 @@ async def analyze_frames(
                 if isinstance(analysis_result, dict) and analysis_result.get("success") and analysis_result.get("ingredients"):
                     for det in analysis_result.get("ingredients") or []:
                         if isinstance(det, dict):
+                            det["_frame_idx"] = idx
                             all_detections.append(det)
             except Exception as e:
                 logger.warning("Frame %s analysis failed: %s", idx, e)
@@ -676,6 +932,35 @@ async def analyze_frames(
             raise HTTPException(status_code=400, detail="No ingredients detected. Try scanning again with better coverage.")
 
         unique_detections = _dedupe(all_detections)
+
+        previous_quantities = _load_previous_scan_quantities(db, user_id)
+
+        # Apply container fingerprint + learned priors using the best source frame.
+        for det in unique_detections:
+            frame_idx = det.get("_frame_idx")
+            if not isinstance(frame_idx, int):
+                continue
+            frame_bytes = usable_frame_bytes.get(frame_idx)
+            if not frame_bytes:
+                continue
+            container_hash = _compute_container_hash(frame_bytes, det.get("bbox"))
+            if container_hash:
+                det["container_hash"] = container_hash
+                prior = _get_container_quantity_prior(db, user_id, container_hash)
+                if prior is not None:
+                    qc = det.get("quantity_confidence")
+                    try:
+                        qc_val = float(qc) if qc is not None else None
+                    except Exception:
+                        qc_val = None
+                    if det.get("quantity") is None or qc_val is None or qc_val < 0.65:
+                        det["quantity"] = prior.get("quantity")
+                        det["unit"] = prior.get("unit")
+                        det["quantity_source"] = "container_history"
+                        det["quantity_confidence"] = float(prior.get("confidence") or 0.75)
+                        det["container_match_count"] = int(prior.get("sample_count") or 0)
+
+        delta = _apply_scan_delta(unique_detections, previous_quantities)
 
         # Insert scan record
         db.table("ingredient_scans").insert({
@@ -726,6 +1011,8 @@ async def analyze_frames(
                 "confirmation_status": "pending",
                 "metadata": {
                     "detection_count": det.get("detection_count", 1),
+                    "container_hash": det.get("container_hash"),
+                    "container_match_count": det.get("container_match_count"),
                 },
             }).execute()
 
@@ -741,6 +1028,9 @@ async def analyze_frames(
                 unit=det.get("unit"),
                 quantity_confidence=det.get("quantity_confidence"),
                 quantity_source=det.get("quantity_source"),
+                change_status=det.get("change_status"),
+                previous_quantity=det.get("previous_quantity"),
+                previous_unit=det.get("previous_unit"),
                 close_alternatives=det.get("close_alternatives", []),
                 visual_similarity_group=det.get("visual_similarity_group"),
                 allergen_warnings=det.get("allergen_warnings", []),
@@ -765,6 +1055,7 @@ async def analyze_frames(
                 "frames_received": len(images),
                 "total_raw_detections": len(all_detections),
                 "unique_ingredients": len(detected_ingredients),
+                "delta": delta,
             },
             requires_confirmation=requires_confirmation,
             message=message,

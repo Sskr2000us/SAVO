@@ -25,6 +25,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   XFile? _image;
   List<_Candidate> _candidates = [];
   String? _scanId;
+  Map<String, dynamic>? _deltaSummary;
 
   int _currentIndex = 0;
   int _savedCount = 0;
@@ -102,6 +103,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       _candidates = [];
       _image = null;
       _scanId = null;
+      _deltaSummary = null;
 
       _currentIndex = 0;
       _savedCount = 0;
@@ -158,6 +160,16 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       final scanId = response['scan_id']?.toString();
+      final meta = response['metadata'];
+      Map<String, dynamic>? delta;
+      if (meta is Map) {
+        final d = meta['delta'];
+        if (d is Map<String, dynamic>) {
+          delta = d;
+        } else if (d is Map) {
+          delta = d.cast<String, dynamic>();
+        }
+      }
       final items = response['ingredients'];
       final parsed = <_Candidate>[];
       if (items is List) {
@@ -180,6 +192,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       setState(() {
         _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
         _candidates = parsed;
+        _deltaSummary = delta;
         _loading = false;
 
         _currentIndex = 0;
@@ -201,6 +214,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       _candidates = [];
       _image = null;
       _scanId = null;
+      _deltaSummary = null;
 
       _currentIndex = 0;
       _savedCount = 0;
@@ -234,6 +248,16 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       final scanId = response['scan_id']?.toString();
+      final meta = response['metadata'];
+      Map<String, dynamic>? delta;
+      if (meta is Map) {
+        final d = meta['delta'];
+        if (d is Map<String, dynamic>) {
+          delta = d;
+        } else if (d is Map) {
+          delta = d.cast<String, dynamic>();
+        }
+      }
       final items = response['ingredients'];
       final parsed = <_Candidate>[];
       if (items is List) {
@@ -256,6 +280,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       setState(() {
         _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
         _candidates = parsed;
+        _deltaSummary = delta;
         _loading = false;
 
         _currentIndex = 0;
@@ -471,6 +496,32 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     );
   }
 
+  Widget _buildDeltaSummary() {
+    final delta = _deltaSummary;
+    if (delta == null) return const SizedBox.shrink();
+
+    final newCount = (delta['new_count'] is num) ? (delta['new_count'] as num).toInt() : 0;
+    final removedCount = (delta['removed_count'] is num) ? (delta['removed_count'] as num).toInt() : 0;
+    final changedCount = (delta['changed_count'] is num) ? (delta['changed_count'] as num).toInt() : 0;
+
+    if (newCount == 0 && removedCount == 0 && changedCount == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Expanded(child: Text('New: $newCount')),
+            Expanded(child: Text('Removed: $removedCount')),
+            Expanded(child: Text('Changed: $changedCount')),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (kDebugMode || kProfileMode) {
@@ -536,6 +587,13 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
+                  if ((current.changeStatus ?? '').toLowerCase() == 'new') ...[
+                    const Chip(label: Text('NEW'), visualDensity: VisualDensity.compact),
+                    const SizedBox(width: 8),
+                  ] else if ((current.changeStatus ?? '').toLowerCase() == 'changed') ...[
+                    const Chip(label: Text('CHANGED'), visualDensity: VisualDensity.compact),
+                    const SizedBox(width: 8),
+                  ],
                   _buildFormChip(current.itemForm),
                   const SizedBox(width: 8),
                   _buildConfidenceChip(current.confidence),
@@ -584,6 +642,13 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                     ],
                   ],
                 ),
+                if ((current.changeStatus ?? '').toLowerCase() == 'changed' && current.previousQuantity != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Was ${current.previousQuantity}${(current.previousUnit != null && current.previousUnit!.trim().isNotEmpty) ? ' ${current.previousUnit}' : ''}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 10),
               ],
               TextField(
@@ -661,6 +726,10 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (hasResults) ...[
+              _buildDeltaSummary(),
+              const SizedBox(height: 12),
+            ],
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -702,6 +771,9 @@ class _Candidate {
   double? quantityConfidence;
   String? quantitySource;
   String? itemForm;
+  String? changeStatus;
+  double? previousQuantity;
+  String? previousUnit;
   String? storageHint;
   bool selected;
 
@@ -721,6 +793,9 @@ class _Candidate {
     required this.quantityConfidence,
     required this.quantitySource,
     required this.itemForm,
+    required this.changeStatus,
+    required this.previousQuantity,
+    required this.previousUnit,
     required this.storageHint,
     required this.selected,
     required this.processed,
@@ -746,6 +821,11 @@ class _Candidate {
     final quantitySource = json['quantity_source']?.toString();
     final itemForm = json['item_form']?.toString();
 
+    final changeStatus = json['change_status']?.toString();
+    final prevQtyRaw = json['previous_quantity'];
+    final previousQuantity = (prevQtyRaw is num) ? prevQtyRaw.toDouble() : double.tryParse(prevQtyRaw?.toString() ?? '');
+    final previousUnit = json['previous_unit']?.toString();
+
     // Low-confidence quantities must be explicitly confirmed/edited.
     final quantityConfirmed = (quantityEstimate == null || quantityEstimate.trim().isEmpty)
         ? true
@@ -763,6 +843,9 @@ class _Candidate {
       quantityConfidence: quantityConfidence,
       quantitySource: quantitySource,
       itemForm: itemForm,
+      changeStatus: changeStatus,
+      previousQuantity: previousQuantity,
+      previousUnit: previousUnit,
       storageHint: storageHint,
       selected: true,
       processed: false,
