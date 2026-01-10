@@ -33,6 +33,43 @@ class _IngredientConfirmationScreenState
 
   static const double _lowQuantityConfidenceThreshold = 0.70;
 
+  Map<String, dynamic>? get _delta {
+    final d = widget.metadata['delta'];
+    if (d is Map<String, dynamic>) return d;
+    if (d is Map) return d.cast<String, dynamic>();
+    return null;
+  }
+
+  Widget _buildDeltaSummary() {
+    final delta = _delta;
+    if (delta == null) return const SizedBox.shrink();
+
+    final newCount = (delta['new_count'] is num) ? (delta['new_count'] as num).toInt() : 0;
+    final removedCount = (delta['removed_count'] is num) ? (delta['removed_count'] as num).toInt() : 0;
+    final changedCount = (delta['changed_count'] is num) ? (delta['changed_count'] as num).toInt() : 0;
+
+    if (newCount == 0 && removedCount == 0 && changedCount == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: Text('New: $newCount', style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text('Removed: $removedCount', style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text('Changed: $changedCount', style: const TextStyle(fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -270,6 +307,8 @@ class _IngredientConfirmationScreenState
                     ),
                   ],
                 ),
+
+                _buildDeltaSummary(),
               ],
             ),
           ),
@@ -439,6 +478,13 @@ class _IngredientConfirmationScreenState
     final isModified = userChoice?['action'] == 'modified';
     final isRejected = userChoice?['action'] == 'rejected';
 
+    final changeStatus = (ingredient['change_status'] ?? '').toString().toLowerCase();
+    final prevQtyRaw = ingredient['previous_quantity'];
+    final double? previousQuantity = (prevQtyRaw is num)
+      ? prevQtyRaw.toDouble()
+      : double.tryParse(prevQtyRaw?.toString() ?? '');
+    final previousUnit = ingredient['previous_unit']?.toString();
+
     final needsQuantityConfirm = _quantityNeedsConfirmation(ingredient);
     final quantityConfirmed = _quantityConfirmed[detectedId] == true;
     final currentQty = _quantities[detectedId] ?? 1.0;
@@ -475,9 +521,40 @@ class _IngredientConfirmationScreenState
                     ),
                   ),
                 ),
+                if (changeStatus == 'new') ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: const Text('NEW', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                ] else if (changeStatus == 'changed') ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: const Text('CHANGED', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                ],
                 _buildConfidenceIndicator(confidence, confidenceCategory),
               ],
             ),
+
+            if (changeStatus == 'changed' && previousQuantity != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Was ${previousQuantity.toStringAsFixed(previousQuantity == previousQuantity.roundToDouble() ? 0 : 1)}${(previousUnit != null && previousUnit.trim().isNotEmpty) ? ' $previousUnit' : ''}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
+            ],
 
             // Allergen warnings
             if (allergenWarnings.isNotEmpty) ...[

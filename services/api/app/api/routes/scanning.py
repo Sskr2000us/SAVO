@@ -287,15 +287,37 @@ def _get_container_quantity_prior(db, user_id: str, container_hash: str) -> Opti
     if not container_hash:
         return None
     try:
-        rows = (
-            db.table("detected_ingredients")
-            .select("detected_quantity, detected_unit, confirmation_status")
-            .eq("user_id", user_id)
-            .eq("metadata->>container_hash", container_hash)
-            .order("created_at", desc=True)
-            .limit(50)
-            .execute()
-        )
+        rows = None
+        try:
+            # Prefer server-side filtering (JSON path) when supported.
+            rows = (
+                db.table("detected_ingredients")
+                .select("detected_quantity, detected_unit, confirmation_status")
+                .eq("user_id", user_id)
+                .eq("metadata->>container_hash", container_hash)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+            )
+        except Exception:
+            rows = None
+
+        if rows is None:
+            # Fallback: fetch recent rows and filter metadata client-side.
+            recent = (
+                db.table("detected_ingredients")
+                .select("detected_quantity, detected_unit, confirmation_status, metadata")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(200)
+                .execute()
+            )
+            filtered = []
+            for r in recent.data or []:
+                md = r.get("metadata")
+                if isinstance(md, dict) and (md.get("container_hash") == container_hash):
+                    filtered.append(r)
+            rows = type("_Rows", (), {"data": filtered})
 
         samples: List[float] = []
         units: List[str] = []
