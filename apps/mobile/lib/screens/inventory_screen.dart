@@ -1319,6 +1319,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   if (!context.mounted) return;
                   _loadInventory();
                 }
+              } else if (value == 'video30' && !kIsWeb) {
+                final added = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ScanIngredientsScreen(autoStartVideoScan: true),
+                  ),
+                );
+                if (added == true) {
+                  if (!context.mounted) return;
+                  _loadInventory();
+                }
               } else {
                 final added = await Navigator.push<bool>(
                   context,
@@ -1341,6 +1352,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Icon(Icons.videocam),
                       SizedBox(width: 8),
                       Text('Real-time Scan'),
+                    ],
+                  ),
+                ),
+              if (!kIsWeb)
+                const PopupMenuItem(
+                  value: 'video30',
+                  child: Row(
+                    children: [
+                      Icon(Icons.video_camera_back_outlined),
+                      SizedBox(width: 8),
+                      Text('Video Scan (30s)'),
                     ],
                   ),
                 ),

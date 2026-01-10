@@ -7,8 +7,8 @@ import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
+import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
-import 'scanning/continuous_camera_screen.dart';
 
 class PantryUpdateEntryScreen extends StatefulWidget {
   const PantryUpdateEntryScreen({super.key});
@@ -116,7 +116,7 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
     );
   }
 
-  Future<void> _scanReceipt(BuildContext context) async {
+  Future<void> _scanReceipt() async {
     if (_scanningReceipt) return;
 
     setState(() => _scanningReceipt = true);
@@ -171,6 +171,8 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
         },
       );
 
+      if (!mounted) return;
+
       final added = (confirmRes['added_count'] is num) ? (confirmRes['added_count'] as num).toInt() : 0;
       final updated = (confirmRes['updated_count'] is num) ? (confirmRes['updated_count'] as num).toInt() : 0;
 
@@ -183,8 +185,9 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
         SnackBar(content: Text('Receipt scan failed: $e')),
       );
     } finally {
-      if (!mounted) return;
-      setState(() => _scanningReceipt = false);
+      if (mounted) {
+        setState(() => _scanningReceipt = false);
+      }
     }
   }
 
@@ -217,15 +220,15 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
               onTap: () {
                 Navigator.push(
                   context,
-                  AppMotion.createRoute(const ContinuousCameraScanScreen()),
+                  AppMotion.createRoute(const ScanIngredientsScreen(autoStartVideoScan: true)),
                 );
               },
               child: const Row(
                 children: [
-                  Icon(Icons.center_focus_strong),
+                  Icon(Icons.video_camera_back_outlined),
                   SizedBox(width: AppSpacing.md),
                   Expanded(
-                    child: Text('Scan items (one by one)'),
+                    child: Text('Scan items (30s video)'),
                   ),
                 ],
               ),
@@ -254,7 +257,7 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
             if (_scanningReceipt) const SizedBox(height: AppSpacing.md),
             SavoCard(
               elevated: false,
-              onTap: _scanningReceipt ? null : () => _scanReceipt(context),
+              onTap: _scanningReceipt ? null : _scanReceipt,
               child: Row(
                 children: [
                   Icon(

@@ -11,7 +11,9 @@ import 'scanning/guided_scan_screen.dart';
 import 'scanning/barcode_scan_screen.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
-  const ScanIngredientsScreen({super.key});
+  const ScanIngredientsScreen({super.key, this.autoStartVideoScan = false});
+
+  final bool autoStartVideoScan;
 
   @override
   State<ScanIngredientsScreen> createState() => _ScanIngredientsScreenState();
@@ -38,6 +40,17 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _currentIndex = 0;
   int _savedCount = 0;
   int _skippedCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoStartVideoScan && !kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _videoScan();
+      });
+    }
+  }
 
   bool _quantityNeedsConfirmation(_Candidate c) {
     final hasSuggestion = (c.quantityController.text.trim().isNotEmpty);
@@ -103,6 +116,40 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     final next = _nextPendingIndex(startAt: _currentIndex);
     if (next == null) return;
     setState(() => _currentIndex = next);
+  }
+
+  Future<void> _clearAllPending() async {
+    if (_loading || _candidates.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Clear all items?'),
+        content: const Text('This removes the current scan results.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _candidates = [];
+      _image = null;
+      _scanId = null;
+      _deltaSummary = null;
+      _currentIndex = 0;
+      _savedCount = 0;
+      _skippedCount = 0;
+    });
   }
 
   Future<void> _pickAndScan({required ImageSource source}) async {
@@ -241,7 +288,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       final video = await _picker.pickVideo(
         source: ImageSource.camera,
-        maxDuration: const Duration(seconds: 20),
+        maxDuration: const Duration(seconds: 30),
       );
       if (video == null) {
         setState(() => _loading = false);
@@ -254,7 +301,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         fieldName: 'video',
         fields: const <String, String>{
           'scan_type': 'pantry',
-          'max_frames': '10',
+          'max_frames': '20',
         },
         timeoutSeconds: 180,
       );
@@ -301,6 +348,107 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       });
 
       _jumpToNextPending();
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e.toString());
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _saveAllDetections() async {
+    if (_loading) return;
+    if (_scanId == null || _scanId!.trim().isEmpty) {
+      _showError('Missing scan id. Please rescan.');
+      return;
+    }
+    if (_candidates.isEmpty) return;
+
+    setState(() => _loading = true);
+
+    try {
+      final confirmations = <Map<String, dynamic>>[];
+      for (final c in _candidates) {
+        final detectedId = c.detectedId.trim();
+        if (detectedId.isEmpty) continue;
+
+        final name = c.ingredientController.text.trim();
+        final parsed = _parseQtyUnit(c.quantityController.text);
+
+        final conf = <String, dynamic>{
+          'detected_id': detectedId,
+          'action': 'confirmed',
+        };
+
+        final original = c.originalIngredient.trim().toLowerCase();
+        final edited = name.toLowerCase();
+        if (name.isNotEmpty && edited != original) {
+          conf['action'] = 'modified';
+          conf['confirmed_name'] = name;
+
+          // If the user scanned a barcode during this scan session,
+          // attach it to the correction so the backend can learn pantry vocabulary.
+          if (_barcode != null && _barcode!.trim().isNotEmpty) {
+            conf['barcode'] = _barcode!.trim();
+          }
+          if (_barcodeNameHint != null && _barcodeNameHint!.trim().isNotEmpty) {
+            conf['barcode_name_hint'] = _barcodeNameHint!.trim();
+          }
+          if (_barcodeQuantityHint != null && _barcodeQuantityHint! > 0) {
+            conf['barcode_quantity_hint'] = _barcodeQuantityHint;
+          }
+          if (_barcodeUnitHint != null && _barcodeUnitHint!.trim().isNotEmpty) {
+            conf['barcode_unit_hint'] = _barcodeUnitHint!.trim();
+          }
+        }
+
+        // Only include quantity if it isn't flagged as needing confirmation,
+        // unless the user explicitly confirmed/edited it.
+        final wantsQty = (parsed.qty != null);
+        final qtyOk = !_quantityNeedsConfirmation(c) || c.quantityConfirmed;
+        if (wantsQty && qtyOk) {
+          conf['quantity'] = parsed.qty;
+          if (parsed.unit != null && parsed.unit!.trim().isNotEmpty) {
+            conf['unit'] = parsed.unit!.trim();
+          }
+        }
+
+        confirmations.add(conf);
+      }
+
+      if (confirmations.isEmpty) {
+        setState(() => _loading = false);
+        _showError('No detections to save.');
+        return;
+      }
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final res = await apiClient.post('/api/scanning/confirm-ingredients', {
+        'scan_id': _scanId,
+        'confirmations': confirmations,
+      });
+
+      if (!mounted) return;
+
+      final msg = res['message']?.toString();
+
+      setState(() {
+        for (final c in _candidates) {
+          c.processed = true;
+        }
+        _savedCount = confirmations.length;
+        _skippedCount = 0;
+        _loading = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            (msg != null && msg.trim().isNotEmpty) ? msg.trim() : 'Saved ${confirmations.length} items to inventory',
+          ),
+        ),
+      );
+
+      Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
@@ -635,8 +783,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           fontSize: 13,
         ),
       ),
-      backgroundColor: color.withOpacity(0.1),
-      side: BorderSide(color: color.withOpacity(0.3)),
+      backgroundColor: color.withAlpha(26),
+      side: BorderSide(color: color.withAlpha(77)),
       padding: const EdgeInsets.symmetric(horizontal: 4),
       visualDensity: VisualDensity.compact,
     );
@@ -878,6 +1026,16 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           ),
           if (hasResults)
             TextButton(
+              onPressed: _loading ? null : _clearAllPending,
+              child: const Text('Clear'),
+            ),
+          if (hasResults)
+            TextButton(
+              onPressed: _loading ? null : _saveAllDetections,
+              child: const Text('Save all'),
+            ),
+          if (hasResults)
+            TextButton(
               onPressed: _loading ? null : _finish,
               child: const Text('Done'),
             ),
@@ -907,7 +1065,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                   OutlinedButton.icon(
                     onPressed: canScan ? _videoScan : null,
                     icon: const Icon(Icons.videocam),
-                    label: const Text('Video Scan (20s)'),
+                    label: const Text('Video Scan (30s)'),
                   ),
                 OutlinedButton.icon(
                   onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,

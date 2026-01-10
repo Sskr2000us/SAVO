@@ -29,6 +29,58 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
   static const _checkedPrefsKey = 'savo.shopping_list.checked';
   static const _supabaseTable = 'household_shopping_items';
 
+  Future<void> _clearAll() async {
+    if (_items.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Clear shopping list?'),
+        content: const Text('This removes all items from your shopping list.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _items = const [];
+      _checked = const {};
+    });
+
+    await _persistItems(const []);
+    await _persistChecked(const {});
+
+    String message = 'Shopping list cleared';
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      final householdId = _householdId();
+      if (session != null && householdId != null) {
+        await Supabase.instance.client
+            .from(_supabaseTable)
+            .delete()
+            .eq('household_id', householdId);
+        message = 'Shopping list cleared + synced';
+      }
+    } catch (_) {
+      message = 'Shopping list cleared (sync unavailable)';
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -455,6 +507,11 @@ class _ShoppingListScreenState extends State<ShoppingListScreen> {
                   SnackBar(content: Text(message)),
                 );
               },
+            ),
+            IconButton(
+              tooltip: 'Clear cart',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _clearAll,
             ),
             IconButton(
               tooltip: 'Share',
