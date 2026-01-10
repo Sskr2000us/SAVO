@@ -305,20 +305,23 @@ async def analyze_video(
         representative_frame = frames[0] if frames else None
         representative_image_url = None
         
+        # NOTE: ingredient_scans schema defines image_metadata (not metadata).
+        # Also, scan_type has a CHECK constraint and must be one of: pantry|fridge|counter|shopping|other.
         db.table("ingredient_scans").insert({
             "id": scan_id,
             "user_id": user_id,
-            "scan_type": "video_" + scan_type,
+            "scan_type": scan_type,
             "location_hint": location_hint,
             "status": "processing",
             "image_url": None,
             "created_at": datetime.utcnow().isoformat(),
-            "metadata": {
+            "image_metadata": {
+                "source": "video_scan",
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
                 "frames_extracted": len(frames),
                 "representative_frame_image_url": None,
-            }
+            },
         }).execute()
         
         # Analyze each frame
@@ -383,6 +386,7 @@ async def analyze_video(
             except Exception:
                 thumbnail_url = None
             
+            # detected_ingredients doesn't have a generic metadata column in the base schema.
             db.table("detected_ingredients").insert({
                 "id": detected_id,
                 "scan_id": scan_id,
@@ -398,10 +402,6 @@ async def analyze_video(
                 "confirmation_status": "pending",
                 "thumbnail_url": thumbnail_url,
                 "full_image_url": None,
-                "metadata": {
-                    "detection_count": detection.get("detection_count", 1),
-                    "frames_detected_in": detection.get("detection_count", 1)
-                }
             }).execute()
         
         # Update scan status
