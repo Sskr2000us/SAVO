@@ -518,6 +518,262 @@ async def analyze_image(
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
+@router.post("/analyze-frames")
+async def analyze_frames(
+    images: List[UploadFile] = File(..., description="Multiple image frames (JPEG/PNG)"),
+    scan_type: str = Form(default="pantry"),
+    location_hint: Optional[str] = Form(default=None),
+    user_id: str = Depends(get_current_user),
+):
+    """Analyze multiple frames (sampled during a guided scan) and deduplicate detections.
+
+    This endpoint is designed for mobile guided scanning where the client captures
+    several still frames over ~10–20 seconds. It avoids video processing dependencies
+    (ffmpeg) while improving loose-item and shelf coverage.
+
+    Returns the same shape as /analyze-image for compatibility.
+    """
+    try:
+        # Basic validation
+        if not isinstance(images, list) or not images:
+            raise HTTPException(status_code=400, detail="No images provided")
+
+        # Cap to keep latency bounded.
+        if len(images) > 20:
+            images = images[:20]
+
+        from collections import defaultdict
+
+        def _dedupe(all_detections: List[Dict]) -> List[Dict]:
+            grouped: Dict[str, List[Dict]] = defaultdict(list)
+            for det in all_detections:
+                if not isinstance(det, dict):
+                    continue
+                key = (det.get("canonical_name") or det.get("detected_name") or "").strip().lower()
+                if not key:
+                    continue
+                grouped[key].append(det)
+
+            out: List[Dict] = []
+            for _k, dets in grouped.items():
+                best = max(dets, key=lambda d: float(d.get("confidence") or 0))
+                quantities = []
+                for d in dets:
+                    q = d.get("quantity")
+                    if isinstance(q, (int, float)):
+                        quantities.append(float(q))
+                if quantities:
+                    best = {**best, "quantity": sum(quantities) / len(quantities)}
+
+                # Merge close alternatives (unique by name)
+                alts: List[Dict] = []
+                seen = set()
+                for d in dets:
+                    for a in d.get("close_alternatives", []) or []:
+                        if not isinstance(a, dict):
+                            continue
+                        nm = (a.get("name") or "").strip()
+                        if not nm:
+                            continue
+                        nk = nm.lower()
+                        if nk in seen:
+                            continue
+                        seen.add(nk)
+                        alts.append(a)
+                if alts:
+                    best = {**best, "close_alternatives": alts[:5]}
+
+                best = {**best, "detection_count": len(dets)}
+                out.append(best)
+            return out
+
+        # Get user profile for context
+        profile = await get_full_profile(user_id)
+        vision_client = get_vision_client()
+        db = get_db_client()
+        scan_id = str(uuid4())
+
+        representative_image_url = None
+        all_detections: List[Dict] = []
+        any_ok_frame = False
+        aggregated_issues: set[str] = set()
+        last_metrics: Dict[str, Any] = {}
+
+        for idx, image in enumerate(images):
+            if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
+                aggregated_issues.add("invalid_format")
+                continue
+
+            image_data = await image.read()
+            if not image_data:
+                aggregated_issues.add("empty")
+                continue
+            if len(image_data) > 10 * 1024 * 1024:
+                aggregated_issues.add("too_large")
+                continue
+
+            quality = _assess_image_quality(image_data)
+            if not quality.get("ok"):
+                for it in (quality.get("issues") or []):
+                    if isinstance(it, str) and it:
+                        aggregated_issues.add(it)
+                metrics = quality.get("metrics")
+                if isinstance(metrics, dict):
+                    last_metrics = metrics
+                continue
+
+            any_ok_frame = True
+
+            if representative_image_url is None:
+                try:
+                    representative_image_url = upload_inventory_image(
+                        user_id=user_id,
+                        content=image_data,
+                        content_type=image.content_type,
+                    )
+                except Exception:
+                    representative_image_url = None
+
+            try:
+                analysis_result = await vision_client.analyze_image(
+                    image_data=image_data,
+                    scan_type=scan_type,
+                    location_hint=location_hint,
+                    user_preferences=profile,
+                )
+                if isinstance(analysis_result, dict) and analysis_result.get("success") and analysis_result.get("ingredients"):
+                    for det in analysis_result.get("ingredients") or []:
+                        if isinstance(det, dict):
+                            all_detections.append(det)
+            except Exception as e:
+                logger.warning("Frame %s analysis failed: %s", idx, e)
+                continue
+
+        if not any_ok_frame:
+            # Mirror /analyze-image quality error structure so clients can show guidance.
+            issues = sorted(list(aggregated_issues))
+            if "too_dark" in issues:
+                msg = "Too dark — turn on lights and retake."
+            elif "too_blurry" in issues:
+                msg = "Too blurry — hold steady and retake."
+            elif "too_bright" in issues:
+                msg = "Too bright/glare — adjust angle and retake."
+            else:
+                msg = "Image quality too low — please retake."
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "image_quality",
+                    "message": msg,
+                    "issues": issues,
+                    "metrics": last_metrics,
+                },
+            )
+
+        if not all_detections:
+            raise HTTPException(status_code=400, detail="No ingredients detected. Try scanning again with better coverage.")
+
+        unique_detections = _dedupe(all_detections)
+
+        # Insert scan record
+        db.table("ingredient_scans").insert({
+            "id": scan_id,
+            "user_id": user_id,
+            "image_url": representative_image_url,
+            "image_hash": None,
+            "image_metadata": {
+                "frames_received": len(images),
+                "frames_usable": True,
+            },
+            "scan_type": f"frames_{scan_type}",
+            "location_hint": location_hint,
+            "status": "processing",
+            "vision_provider": "openai",
+            "api_cost_cents": 0,
+        }).execute()
+
+        detected_ingredients = []
+        requires_confirmation = False
+        for det in unique_detections:
+            detected_id = str(uuid4())
+            confidence = det.get("confidence")
+            try:
+                conf_val = float(confidence) if confidence is not None else 0.0
+            except Exception:
+                conf_val = 0.0
+
+            if conf_val < 0.80:
+                requires_confirmation = True
+
+            db.table("detected_ingredients").insert({
+                "id": detected_id,
+                "scan_id": scan_id,
+                "user_id": user_id,
+                "detected_name": det.get("detected_name"),
+                "canonical_name": det.get("canonical_name"),
+                "confidence": conf_val,
+                "detected_quantity": det.get("quantity"),
+                "detected_unit": det.get("unit"),
+                "quantity_confidence": det.get("quantity_confidence"),
+                "bbox": det.get("bbox"),
+                "close_alternatives": det.get("close_alternatives", []),
+                "visual_similarity_group": det.get("visual_similarity_group"),
+                "allergen_warnings": det.get("allergen_warnings", []),
+                "thumbnail_url": None,
+                "full_image_url": representative_image_url,
+                "confirmation_status": "pending",
+                "metadata": {
+                    "detection_count": det.get("detection_count", 1),
+                },
+            }).execute()
+
+            detected_ingredients.append(DetectedIngredient(
+                id=detected_id,
+                detected_name=det.get("detected_name"),
+                canonical_name=det.get("canonical_name"),
+                confidence=Decimal(str(conf_val)),
+                confidence_category=vision_client.get_confidence_category(Decimal(str(conf_val))),
+                category=det.get("category", "other"),
+                quantity=det.get("quantity"),
+                unit=det.get("unit"),
+                quantity_confidence=det.get("quantity_confidence"),
+                quantity_source=det.get("quantity_source"),
+                close_alternatives=det.get("close_alternatives", []),
+                visual_similarity_group=det.get("visual_similarity_group"),
+                allergen_warnings=det.get("allergen_warnings", []),
+                bbox=det.get("bbox"),
+                confirmation_status="pending",
+                thumbnail_url=None,
+                full_image_url=representative_image_url,
+            ))
+
+        db.table("ingredient_scans").update({
+            "status": "completed",
+            "total_detections": len(detected_ingredients),
+            "processing_time_ms": None,
+        }).eq("id", scan_id).execute()
+
+        message = "Some ingredients detected with lower confidence. Please review and confirm." if requires_confirmation else "All ingredients detected with high confidence!"
+        return AnalyzeImageResponse(
+            success=True,
+            scan_id=scan_id,
+            ingredients=detected_ingredients,
+            metadata={
+                "frames_received": len(images),
+                "total_raw_detections": len(all_detections),
+                "unique_ingredients": len(detected_ingredients),
+            },
+            requires_confirmation=requires_confirmation,
+            message=message,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Frame analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Frame analysis failed: {str(e)}")
+
+
 @router.post("/confirm-ingredients", response_model=ConfirmIngredientsResponse)
 async def confirm_ingredients(
     request: ConfirmIngredientsRequest,

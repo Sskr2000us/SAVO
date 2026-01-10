@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../services/metrics_service.dart';
+import 'scanning/guided_scan_screen.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
   const ScanIngredientsScreen({super.key});
@@ -99,6 +100,82 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           fireAndForget(MetricsService.instance.recordEvent('pantry_scan_retake'));
         }
 
+        _showError(msg);
+        setState(() => _loading = false);
+        return;
+      }
+
+      final scanId = response['scan_id']?.toString();
+      final items = response['ingredients'];
+      final parsed = <_Candidate>[];
+      if (items is List) {
+        for (final item in items) {
+          if (item is Map<String, dynamic>) {
+            parsed.add(_Candidate.fromDetectedJson(item));
+          } else if (item is Map) {
+            parsed.add(_Candidate.fromDetectedJson(item.cast<String, dynamic>()));
+          }
+        }
+      }
+
+      final message = response['message']?.toString();
+      if (message != null && message.trim().isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message.trim())),
+        );
+      }
+
+      setState(() {
+        _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
+        _candidates = parsed;
+        _loading = false;
+
+        _currentIndex = 0;
+        _savedCount = 0;
+        _skippedCount = 0;
+      });
+
+      _jumpToNextPending();
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e.toString());
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _guidedScan() async {
+    setState(() {
+      _loading = true;
+      _candidates = [];
+      _image = null;
+      _scanId = null;
+
+      _currentIndex = 0;
+      _savedCount = 0;
+      _skippedCount = 0;
+    });
+
+    try {
+      final res = await Navigator.of(context).push<GuidedScanResult>(
+        MaterialPageRoute(
+          builder: (_) => const GuidedScanScreen(scanType: 'pantry'),
+        ),
+      );
+
+      if (!mounted) return;
+      if (res == null) {
+        setState(() => _loading = false);
+        return;
+      }
+
+      final response = res.response;
+
+      final success = response['success'] == true;
+      if (!success) {
+        final detail = response['detail'];
+        final msg = (detail is Map)
+            ? (detail['message']?.toString() ?? detail.toString())
+            : (response['detail']?.toString() ?? response['error']?.toString() ?? 'Scan failed');
         _showError(msg);
         setState(() => _loading = false);
         return;
@@ -456,12 +533,10 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
               children: [
                 FilledButton.icon(
                   onPressed: canScan
-                      ? () => _pickAndScan(
-                            source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
-                          )
+                      ? () => (kIsWeb ? _pickAndScan(source: ImageSource.gallery) : _guidedScan())
                       : null,
                   icon: Icon(kIsWeb ? Icons.upload_file : Icons.photo_camera),
-                  label: Text(kIsWeb ? 'Upload Photo' : 'Take Photo'),
+                  label: Text(kIsWeb ? 'Upload Photo' : 'Guided Scan'),
                 ),
                 OutlinedButton.icon(
                   onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,

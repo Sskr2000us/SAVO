@@ -200,6 +200,58 @@ class ApiClient {
     throw Exception('Failed to post multipart: ${response.statusCode} ${response.body}');
   }
 
+  Future<Map<String, dynamic>> postMultipartMany(
+    String endpoint, {
+    required List<XFile> files,
+    String fieldName = 'images',
+    Map<String, String> fields = const {},
+    int timeoutSeconds = 30,
+  }) async {
+    final uri = Uri.parse('$baseUrl$endpoint');
+    final request = http.MultipartRequest('POST', uri);
+
+    request.headers.addAll(await _getAuthHeaders());
+    request.fields.addAll(fields);
+
+    // Cap is enforced server-side too, but avoid huge uploads.
+    final capped = files.length > 20 ? files.sublist(0, 20) : files;
+    for (final file in capped) {
+      String? mimeType = file.mimeType;
+      if (mimeType == null) {
+        final extension = file.name.toLowerCase().split('.').last;
+        if (extension == 'jpg' || extension == 'jpeg') {
+          mimeType = 'image/jpeg';
+        } else if (extension == 'png') {
+          mimeType = 'image/png';
+        } else {
+          mimeType = 'image/jpeg';
+        }
+      }
+
+      final bytes = await file.readAsBytes();
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          fieldName,
+          bytes,
+          filename: file.name,
+          contentType: MediaType.parse(mimeType),
+        ),
+      );
+    }
+
+    final streamed = await request.send().timeout(
+      Duration(seconds: timeoutSeconds),
+      onTimeout: () => throw Exception('Request timed out. Please try again.'),
+    );
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception('Failed to post multipart: ${response.statusCode} ${response.body}');
+  }
+
   Future<Map<String, dynamic>> put(String endpoint, Map<String, dynamic> body, {Map<String, String>? headers}) async {
     final allHeaders = {'Content-Type': 'application/json'};
     allHeaders.addAll(await _mergeHeaders(headers));
