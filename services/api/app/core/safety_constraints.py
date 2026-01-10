@@ -419,10 +419,21 @@ def validate_recipe_safety(recipe: Dict[str, Any], profile: Dict[str, Any]) -> T
 
     ingredients_text = " ".join(p.lower() for p in parts if isinstance(p, str))
     
+    def _as_str_list(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v) for v in value if v is not None and str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
     # Check allergens
     all_allergens = set()
     for member in profile.get("members", []):
-        all_allergens.update(member.get("allergens", []))
+        if not isinstance(member, dict):
+            continue
+        all_allergens.update(_as_str_list(member.get("allergens")))
     
     for allergen in all_allergens:
         allergen_lower = allergen.lower()
@@ -432,11 +443,25 @@ def validate_recipe_safety(recipe: Dict[str, Any], profile: Dict[str, Any]) -> T
     # Check dietary restrictions
     restrictions = set()
     for member in profile.get("members", []):
-        restrictions.update(member.get("dietary_restrictions", []))
+        if not isinstance(member, dict):
+            continue
+        restrictions.update(_as_str_list(member.get("dietary_restrictions")))
     
     # Check vegetarian/vegan
     if "vegetarian" in restrictions or "vegan" in restrictions:
-        meat_keywords = ["chicken", "beef", "pork", "fish", "shrimp", "meat", "lamb", "bacon", "sausage"]
+        meat_keywords = [
+            "chicken",
+            "beef",
+            "pork",
+            "fish",
+            "shrimp",
+            "meat",
+            "lamb",
+            "bacon",
+            "sausage",
+            "mutton",
+            "prawn",
+        ]
         for meat in meat_keywords:
             if meat in ingredients_text:
                 violations.append(f"⚠️ Contains meat ({meat}) for vegetarian household")

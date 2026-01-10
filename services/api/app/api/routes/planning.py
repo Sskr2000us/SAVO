@@ -4505,6 +4505,9 @@ async def post_daily(
         # Ensure allergens key exists and is not None (Golden Rule requires explicit declaration)
         if "allergens" not in m or m.get("allergens") is None:
             m = {**m, "allergens": []}
+        # Ensure dietary_restrictions exists and is not None (safety validator assumes iterable)
+        if "dietary_restrictions" not in m or m.get("dietary_restrictions") is None:
+            m = {**m, "dietary_restrictions": []}
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}
 
@@ -4612,6 +4615,31 @@ async def post_daily(
                             # Best-effort: keep ingredient lists compact even for cached plans.
                             try:
                                 existing_payload = _tighten_ingredients_used_in_payload(existing_payload)
+                            except Exception:
+                                pass
+
+                            # Re-apply hard constraints against the CURRENT profile (e.g., vegetarian toggles)
+                            # so cached plans can't leak disallowed recipes.
+                            try:
+                                existing_payload = _enforce_allowed_cuisines_in_payload(existing_payload, allowed_cuisines)
+                            except Exception:
+                                pass
+                            try:
+                                existing_payload = _exclude_recent_recipes_from_payload(existing_payload, db_history, cooldown_last_n=12)
+                            except Exception:
+                                pass
+                            try:
+                                pantry_set = {
+                                    _canonicalize_inventory_name_for_planning(str(getattr(i, "canonical_name", "") or ""))
+                                    for i in inventory_models
+                                    if getattr(i, "canonical_name", None)
+                                }
+                                existing_payload = _vet_and_filter_menu_payload(
+                                    existing_payload,
+                                    profile_dict=profile_dict,
+                                    pantry_canonical_names=pantry_set,
+                                    min_options_per_course=2,
+                                )
                             except Exception:
                                 pass
 
@@ -5157,6 +5185,8 @@ async def get_latest_plan(
                     continue
                 if "allergens" not in m or m.get("allergens") is None:
                     m = {**m, "allergens": []}
+                if "dietary_restrictions" not in m or m.get("dietary_restrictions") is None:
+                    m = {**m, "dietary_restrictions": []}
                 normalized_members.append(m)
         profile_dict = {"household": household if isinstance(household, dict) else {}, "members": normalized_members}
         pantry_set = {
@@ -5284,6 +5314,8 @@ async def post_party(
         # Ensure allergens key exists and is not None (Golden Rule requires explicit declaration)
         if "allergens" not in m or m.get("allergens") is None:
             m = {**m, "allergens": []}
+        if "dietary_restrictions" not in m or m.get("dietary_restrictions") is None:
+            m = {**m, "dietary_restrictions": []}
         normalized_members.append(m)
     profile_dict = {"household": household, "members": normalized_members}
 
@@ -5841,6 +5873,8 @@ async def post_weekly(
                     continue
                 if "allergens" not in m or m.get("allergens") is None:
                     m = {**m, "allergens": []}
+                if "dietary_restrictions" not in m or m.get("dietary_restrictions") is None:
+                    m = {**m, "dietary_restrictions": []}
                 normalized_members.append(m)
             profile_dict = {"household": household if isinstance(household, dict) else {}, "members": normalized_members}
             pantry_set = {

@@ -194,6 +194,46 @@ def test_hindu_household_chicken_allowed():
     assert len(violations) == 0
 
 
+def test_vegetarian_blocks_chicken():
+    """Vegetarian dietary restriction should block meat recipes."""
+    profile = {
+        "members": [
+            {
+                "dietary_restrictions": ["vegetarian"],
+                "allergens": [],
+            }
+        ]
+    }
+
+    recipe_with_chicken = {
+        "ingredients": ["chicken", "rice", "spices"],
+    }
+
+    is_safe, violations = validate_recipe_safety(recipe_with_chicken, profile)
+    assert not is_safe
+    assert any("meat" in v.lower() or "chicken" in v.lower() for v in violations)
+
+
+def test_validator_handles_none_dietary_restrictions():
+    """Safety validator should treat None restriction lists as empty, not crash."""
+    profile = {
+        "members": [
+            {
+                "dietary_restrictions": None,
+                "allergens": None,
+            }
+        ]
+    }
+
+    recipe = {
+        "ingredients": ["tomato", "rice"],
+    }
+
+    is_safe, violations = validate_recipe_safety(recipe, profile)
+    assert is_safe
+    assert violations == []
+
+
 # ============================================================================
 # Test Case 4: Jewish Household (Kosher-Aware)
 # ============================================================================
