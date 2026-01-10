@@ -28,6 +28,7 @@ class CookNowRecipeDetailScreen extends StatefulWidget {
 
 class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   static const String _prefsAssumeStaplesKey = 'savo.assume_pantry_staples';
+  static const String _prefsSpiceLevelKey = 'savo.recipe.spice_level';
 
   static const Set<String> _pantryStaples = {
     'salt',
@@ -69,6 +70,8 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
   Map<String, dynamic>? _sufficiency;
   bool _assumeStaples = true;
 
+  String _spiceLevel = 'medium';
+
   bool _checkingSaved = true;
   bool _savingToggle = false;
   bool _isSaved = false;
@@ -100,7 +103,7 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
         'seed_recipe': recipe.toJson(),
       };
 
-      final res = await apiClient.post('/plan/daily?force_regenerate=true', body);
+      final res = await apiClient.post('/plan/daily', body);
       final plan = MenuPlanResponse.fromJson(res);
 
       if (!mounted) return;
@@ -373,8 +376,37 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     } else {
       _loadAssumeStaplesPref();
     }
+
+    fireAndForget(_loadSpicePref());
     _loadSavedStatus();
     _check();
+  }
+
+  Future<void> _loadSpicePref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = (prefs.getString(_prefsSpiceLevelKey) ?? '').trim().toLowerCase();
+      if (!mounted) return;
+      setState(() {
+        _spiceLevel = v.isNotEmpty ? v : 'medium';
+      });
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  Future<void> _setSpicePref(String value) async {
+    final next = value.trim().toLowerCase();
+    if (next.isEmpty) return;
+    setState(() {
+      _spiceLevel = next;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsSpiceLevelKey, next);
+    } catch (_) {
+      // Best-effort.
+    }
   }
 
   Future<void> _loadSavedStatus() async {
@@ -803,6 +835,36 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
           _MetaRow(label: 'Difficulty', value: recipe.difficulty),
           _MetaRow(label: 'Time', value: '${recipe.estimatedTimes.totalMinutes} min'),
           _MetaRow(label: 'Method', value: recipe.cookingMethod),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Spice level',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  DropdownButton<String>(
+                    value: _spiceLevel,
+                    onChanged: (v) {
+                      if (v == null) return;
+                      fireAndForget(_setSpicePref(v));
+                    },
+                    items: const [
+                      DropdownMenuItem(value: 'none', child: Text('No spice')),
+                      DropdownMenuItem(value: 'low', child: Text('Mild')),
+                      DropdownMenuItem(value: 'medium', child: Text('Medium')),
+                      DropdownMenuItem(value: 'high', child: Text('Spicy')),
+                      DropdownMenuItem(value: 'very_high', child: Text('Very spicy')),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
 
           if (recipe.nutritionPerServing.isNotEmpty) ...[
             const SizedBox(height: 16),

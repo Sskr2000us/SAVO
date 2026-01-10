@@ -147,6 +147,7 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
           settings: const RouteSettings(name: '/recipe_options'),
           builder: (_) => RecipeOptionsScreen(
             recipes: options,
+            showIngredientMatch: true,
             skipSuggestionSessionGate: true,
           ),
         ),

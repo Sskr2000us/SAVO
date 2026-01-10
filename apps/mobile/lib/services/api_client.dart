@@ -154,6 +154,7 @@ class ApiClient {
     required XFile file,
     String fieldName = 'image',
     Map<String, String> fields = const {},
+    int timeoutSeconds = 30,
   }) async {
     final uri = Uri.parse('$baseUrl$endpoint');
     final request = http.MultipartRequest('POST', uri);
@@ -175,6 +176,12 @@ class ApiClient {
         mimeType = 'image/gif';
       } else if (extension == 'webp') {
         mimeType = 'image/webp';
+      } else if (extension == 'mp4') {
+        mimeType = 'video/mp4';
+      } else if (extension == 'mov') {
+        mimeType = 'video/quicktime';
+      } else if (extension == 'avi') {
+        mimeType = 'video/x-msvideo';
       } else {
         mimeType = 'image/jpeg'; // Default fallback
       }
@@ -190,7 +197,10 @@ class ApiClient {
       ),
     );
 
-    final streamed = await request.send();
+    final streamed = await request.send().timeout(
+      Duration(seconds: timeoutSeconds),
+      onTimeout: () => throw Exception('Request timed out. Please try again.'),
+    );
     final response = await http.Response.fromStream(streamed);
 
     if (response.statusCode == 200 || response.statusCode == 201) {

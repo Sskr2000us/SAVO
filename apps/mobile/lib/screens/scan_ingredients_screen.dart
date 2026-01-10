@@ -119,6 +119,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     });
 
     try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
       final image = await _picker.pickImage(
         source: source,
         imageQuality: 85,
@@ -130,8 +132,6 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       setState(() => _image = image);
-
-      final apiClient = Provider.of<ApiClient>(context, listen: false);
       final fields = <String, String>{
         'scan_type': 'pantry',
         if (_barcode != null && _barcode!.trim().isNotEmpty) 'barcode': _barcode!.trim(),
@@ -206,6 +206,93 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
         _candidates = parsed;
         _deltaSummary = delta;
+        _loading = false;
+
+        _currentIndex = 0;
+        _savedCount = 0;
+        _skippedCount = 0;
+      });
+
+      _jumpToNextPending();
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e.toString());
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _videoScan() async {
+    if (_loading) return;
+
+    setState(() {
+      _loading = true;
+      _candidates = [];
+      _image = null;
+      _scanId = null;
+      _deltaSummary = null;
+
+      _currentIndex = 0;
+      _savedCount = 0;
+      _skippedCount = 0;
+    });
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      final video = await _picker.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(seconds: 20),
+      );
+      if (video == null) {
+        setState(() => _loading = false);
+        return;
+      }
+
+      final response = await apiClient.postMultipart(
+        '/api/scanning/video/analyze',
+        file: video,
+        fieldName: 'video',
+        fields: const <String, String>{
+          'scan_type': 'pantry',
+          'max_frames': '10',
+        },
+        timeoutSeconds: 180,
+      );
+
+      if (!mounted) return;
+
+      final success = response['success'] == true;
+      if (!success) {
+        final msg = response['detail']?.toString() ?? response['error']?.toString() ?? 'Video scan failed';
+        _showError(msg);
+        setState(() => _loading = false);
+        return;
+      }
+
+      final scanId = response['scan_id']?.toString();
+      final items = response['detections'];
+      final parsed = <_Candidate>[];
+      if (items is List) {
+        for (final item in items) {
+          if (item is Map<String, dynamic>) {
+            parsed.add(_Candidate.fromDetectedJson(item));
+          } else if (item is Map) {
+            parsed.add(_Candidate.fromDetectedJson(item.cast<String, dynamic>()));
+          }
+        }
+      }
+
+      final message = response['message']?.toString();
+      if (message != null && message.trim().isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message.trim())),
+        );
+      }
+
+      setState(() {
+        _scanId = (scanId != null && scanId.trim().isNotEmpty) ? scanId.trim() : null;
+        _candidates = parsed;
+        _deltaSummary = null;
         _loading = false;
 
         _currentIndex = 0;
@@ -816,6 +903,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                   icon: Icon(kIsWeb ? Icons.upload_file : Icons.photo_camera),
                   label: Text(kIsWeb ? 'Upload Photo' : 'Guided Scan'),
                 ),
+                if (!kIsWeb)
+                  OutlinedButton.icon(
+                    onPressed: canScan ? _videoScan : null,
+                    icon: const Icon(Icons.videocam),
+                    label: const Text('Video Scan (20s)'),
+                  ),
                 OutlinedButton.icon(
                   onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,
                   icon: const Icon(Icons.photo_library),

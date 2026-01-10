@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
+import '../models/inventory.dart';
 import '../config/app_config.dart';
 import '../services/metrics_service.dart';
 import '../services/api_client.dart';
@@ -45,6 +46,12 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   static const String _prefsAssumeStaplesKey = 'savo.assume_pantry_staples';
   bool _assumeStaplesGlobal = true;
   final Map<String, bool> _assumeStaplesOverrideByRecipeId = {};
+
+  static const String _prefsSpiceLevelKey = 'savo.recipe.spice_level';
+  String _spiceLevel = 'medium';
+
+  bool _loadingInventoryForExpiry = false;
+  Set<String> _expiringIngredientKeys = const {};
 
   static const Set<String> _pantryStaples = {
     'salt',
@@ -99,6 +106,85 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
     }
   }
 
+  Future<void> _loadSpicePref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = (prefs.getString(_prefsSpiceLevelKey) ?? '').trim().toLowerCase();
+      if (!mounted) return;
+      setState(() {
+        _spiceLevel = v.isNotEmpty ? v : 'medium';
+      });
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  String _spiceLabel(String raw) {
+    final s = raw.trim().toLowerCase();
+    if (s == 'none') return 'No spice';
+    if (s == 'low') return 'Mild';
+    if (s == 'medium') return 'Medium';
+    if (s == 'high') return 'Spicy';
+    if (s == 'very_high') return 'Very spicy';
+    if (s.isEmpty) return 'Medium';
+    return s;
+  }
+
+  Future<void> _loadExpiringIngredientsBestEffort() async {
+    if (_loadingInventoryForExpiry) return;
+    if (_expiringIngredientKeys.isNotEmpty) return;
+    setState(() => _loadingInventoryForExpiry = true);
+
+    try {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final res = await apiClient.get('/inventory-db/items?include_inactive=true');
+
+      final items = <InventoryItem>[];
+      if (res is Map && res['items'] is List) {
+        for (final row in (res['items'] as List)) {
+          if (row is Map) {
+            items.add(InventoryItem.fromJson(row.cast<String, dynamic>()));
+          }
+        }
+      } else if (res is List) {
+        for (final row in res) {
+          if (row is Map) {
+            items.add(InventoryItem.fromJson(row.cast<String, dynamic>()));
+          }
+        }
+      }
+
+      final keys = <String>{};
+      for (final it in items) {
+        if (!it.isCurrent) continue;
+        if (!it.isExpiringSoon) continue;
+        final k1 = it.canonicalName.replaceAll('_', ' ').trim().toLowerCase();
+        if (k1.isNotEmpty) keys.add(k1);
+        final k2 = it.displayLabel.replaceAll('_', ' ').trim().toLowerCase();
+        if (k2.isNotEmpty) keys.add(k2);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _expiringIngredientKeys = keys;
+      });
+    } catch (_) {
+      // Best-effort only.
+    } finally {
+      if (mounted) setState(() => _loadingInventoryForExpiry = false);
+    }
+  }
+
+  bool _usesExpiringItems(Recipe recipe) {
+    if (_expiringIngredientKeys.isEmpty) return false;
+    for (final ing in recipe.ingredientsUsed) {
+      final k = ing.canonicalName.replaceAll('_', ' ').trim().toLowerCase();
+      if (k.isEmpty) continue;
+      if (_expiringIngredientKeys.contains(k)) return true;
+    }
+    return false;
+  }
+
   Future<void> _setAssumeStaplesPref(bool value) async {
     setState(() {
       _assumeStaplesGlobal = value;
@@ -120,6 +206,10 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Best-effort signals for trust-first UI.
+    fireAndForget(_loadSpicePref());
+    fireAndForget(_loadExpiringIngredientsBestEffort());
+
     if (widget.showIngredientMatch) {
       final options = _sortedRecipesForDisplay(widget.recipes).take(5).toList();
       fireAndForget(_loadMatchCounts(options));
@@ -608,6 +698,9 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                 children: [
                                   _Badge(icon: Icons.signal_cellular_alt, label: recipe.difficulty),
                                   _Badge(icon: Icons.timer, label: '${recipe.estimatedTimes.totalMinutes} min'),
+                                  _Badge(icon: Icons.local_fire_department_outlined, label: _spiceLabel(_spiceLevel)),
+                                  if (_usesExpiringItems(recipe))
+                                    const _Badge(icon: Icons.schedule, label: 'Use soon'),
                                 ],
                               ),
                               if (widget.showIngredientMatch) ...[
@@ -664,6 +757,16 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                     final matchText = 'You have $have/$total ingredients';
                                     final assumedSuffix = assumed > 0 ? ' • Assumes $assumed staples' : '';
 
+                                    final ratioOk = total > 0 && (have / total) >= 0.7;
+
+                                    // Prefer backend trust signals if present (from /recipes/generate).
+                                    final backendCoverage = recipe.pantryCoverage;
+                                    final backendMissing = recipe.missingIngredientNames;
+                                    final backendTrust = recipe.trustSignals;
+                                    final trust = backendTrust;
+                                    final backendUsesWhatYouHave = trust != null && trust['uses_what_you_have'] == true;
+                                    final backendHasData = backendCoverage != null || backendMissing.isNotEmpty || backendTrust != null;
+
                                     final headline = missing > 0
                                         ? '$matchText$assumedSuffix • Missing $missing'
                                         : '$matchText$assumedSuffix';
@@ -688,6 +791,26 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                     return Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
+                                        if (backendHasData ? backendUsesWhatYouHave : ratioOk) ...[
+                                          Text(
+                                            'Uses what you have',
+                                            style: theme.textTheme.labelMedium?.copyWith(
+                                              color: cs.tertiary,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                        ],
+                                        if (backendHasData && backendCoverage != null) ...[
+                                          Text(
+                                            'Pantry coverage: ${(backendCoverage * 100).round()}%',
+                                            style: theme.textTheme.labelMedium?.copyWith(
+                                              color: cs.onSurfaceVariant,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                        ],
                                         if (label.isNotEmpty) ...[
                                           Text(
                                             label,
@@ -699,6 +822,16 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                           const SizedBox(height: 2),
                                         ],
                                         Text(headline, style: headlineStyle),
+                                        if (backendHasData && backendMissing.isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Missing: ${(backendMissing.toSet().toList()..sort()).take(3).join(', ')}'
+                                            '${backendMissing.length > 3 ? '…' : ''}',
+                                            style: theme.textTheme.bodySmall?.copyWith(
+                                              color: cs.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
                                         if (missingLabel != null) ...[
                                           const SizedBox(height: 4),
                                           Text(

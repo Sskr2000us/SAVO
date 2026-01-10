@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
 import '../services/scanning_service.dart';
 import '../services/metrics_service.dart';
@@ -51,10 +52,14 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   bool _markingCooked = false;
   final WeeklyCookStreakService _weeklyCookStreakService = WeeklyCookStreakService();
 
+  static const String _prefsSpiceLevelKey = 'savo.recipe.spice_level';
+  String _spiceLevel = 'medium';
+
   @override
   void initState() {
     super.initState();
     _loadYouTubeVideos();
+    fireAndForget(_loadSpicePref());
     _baseServings = (widget.baseServings != null && widget.baseServings! > 0)
         ? widget.baseServings!
         : 4;
@@ -84,6 +89,77 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       }());
     } catch (_) {
       // ignore
+    }
+  }
+
+  Future<void> _loadSpicePref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = (prefs.getString(_prefsSpiceLevelKey) ?? '').trim().toLowerCase();
+      if (!mounted) return;
+      setState(() {
+        _spiceLevel = v.isNotEmpty ? v : 'medium';
+      });
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  String _spiceLabel(String raw) {
+    final s = raw.trim().toLowerCase();
+    if (s == 'none') return 'No spice';
+    if (s == 'low') return 'Mild';
+    if (s == 'medium') return 'Medium';
+    if (s == 'high') return 'Spicy';
+    if (s == 'very_high') return 'Very spicy';
+    if (s.isEmpty) return 'Medium';
+    return s;
+  }
+
+  Future<void> _pickSpiceLevel() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('No spice'),
+              onTap: () => Navigator.pop(ctx, 'none'),
+            ),
+            ListTile(
+              title: const Text('Mild'),
+              onTap: () => Navigator.pop(ctx, 'low'),
+            ),
+            ListTile(
+              title: const Text('Medium'),
+              onTap: () => Navigator.pop(ctx, 'medium'),
+            ),
+            ListTile(
+              title: const Text('Spicy'),
+              onTap: () => Navigator.pop(ctx, 'high'),
+            ),
+            ListTile(
+              title: const Text('Very spicy'),
+              onTap: () => Navigator.pop(ctx, 'very_high'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final next = (selected ?? '').trim().toLowerCase();
+    if (next.isEmpty) return;
+
+    setState(() {
+      _spiceLevel = next;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsSpiceLevelKey, next);
+    } catch (_) {
+      // Best-effort.
     }
   }
 
@@ -906,6 +982,11 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
               Chip(
                 avatar: const Icon(Icons.whatshot, size: 16),
                 label: Text(widget.recipe.cookingMethod),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.local_fire_department_outlined, size: 16),
+                label: Text(_spiceLabel(_spiceLevel)),
+                onPressed: _pickSpiceLevel,
               ),
             ],
           ),

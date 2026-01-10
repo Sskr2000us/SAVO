@@ -1,0 +1,622 @@
+{
+  "contract_version": "1.0.0",
+  "entities": [
+    {
+      "entity": "public.inventory_items",
+      "entity_mutability": "mutable",
+      "fields": [
+        {
+          "mutability": "mutable",
+          "name": "app_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "barcode",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "brand",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "category",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "created_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "cuisine",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "display_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "expiry_date",
+          "type": "DATE"
+        },
+        {
+          "mutability": "mutable",
+          "name": "freshness_days_remaining",
+          "type": "INTEGER"
+        },
+        {
+          "mutability": "mutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "mutable",
+          "name": "image_url",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "ingredient_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "mutable",
+          "name": "is_current",
+          "type": "BOOLEAN"
+        },
+        {
+          "mutability": "mutable",
+          "name": "is_low_stock",
+          "type": "BOOLEAN"
+        },
+        {
+          "mutability": "mutable",
+          "name": "item_state",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_confirmed_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_seen_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_seen_receipt_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_seen_scan_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_status_changed_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "last_used_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "low_stock_threshold",
+          "type": "DECIMAL(10,2)"
+        },
+        {
+          "mutability": "mutable",
+          "name": "model_provider",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "model_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "package_size_text",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "pantry_status",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "product_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "reference_detected_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "mutable",
+          "name": "release_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "scan_confidence",
+          "type": "DECIMAL(3,2)"
+        },
+        {
+          "mutability": "mutable",
+          "name": "subcategory",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "unit",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "mutable",
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "mutable",
+          "name": "user_id",
+          "type": "UUID"
+        }
+      ]
+    },
+    {
+      "entity": "public.event_log",
+      "entity_mutability": "append-only",
+      "fields": [
+        {
+          "mutability": "immutable",
+          "name": "app_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "entity_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "entity_type",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "event_ts",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "event_type",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "household_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "model_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "payload",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "release_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "schema_version",
+          "type": "INTEGER"
+        },
+        {
+          "mutability": "immutable",
+          "name": "session_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "taxonomy_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "user_id",
+          "type": "UUID"
+        }
+      ]
+    },
+    {
+      "entity": "observations.scan_observations",
+      "entity_mutability": "append-only",
+      "fields": [
+        {
+          "mutability": "immutable",
+          "name": "app_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "bbox",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "canonical_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confidence",
+          "type": "DECIMAL(3,2)"
+        },
+        {
+          "mutability": "immutable",
+          "name": "correlation_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "crop_url",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "detected_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "metadata",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "model_provider",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "model_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_entity_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_entity_type",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "quantity",
+          "type": "DECIMAL(10,2)"
+        },
+        {
+          "mutability": "immutable",
+          "name": "raw",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "release_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "scan_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "session_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "source",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "storage_location",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "taxonomy_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "unit",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "user_id",
+          "type": "UUID"
+        }
+      ]
+    },
+    {
+      "entity": "public.media_assets",
+      "entity_mutability": "append-only",
+      "fields": [
+        {
+          "mutability": "immutable",
+          "name": "detected_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "expires_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "inventory_item_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observation_id",
+          "type": "UUID"
+        }
+      ]
+    },
+    {
+      "entity": "public.confirmation_deltas",
+      "entity_mutability": "append-only",
+      "fields": [
+        {
+          "mutability": "immutable",
+          "name": "action",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "app_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confirmed_ingredient_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confirmed_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confirmed_quantity",
+          "type": "NUMERIC(10,2)"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confirmed_unit",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "created_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "detected_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "identity_was_correct",
+          "type": "BOOLEAN"
+        },
+        {
+          "mutability": "immutable",
+          "name": "item_signature",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "metadata",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_canonical_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_confidence",
+          "type": "NUMERIC(3,2)"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_ingredient_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_quantity",
+          "type": "NUMERIC(10,2)"
+        },
+        {
+          "mutability": "immutable",
+          "name": "observed_unit",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "quantity_was_correct",
+          "type": "BOOLEAN"
+        },
+        {
+          "mutability": "immutable",
+          "name": "release_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "scan_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "taxonomy_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "user_id",
+          "type": "UUID"
+        }
+      ]
+    },
+    {
+      "entity": "public.scan_training_labels",
+      "entity_mutability": "append-only",
+      "fields": [
+        {
+          "mutability": "immutable",
+          "name": "anon_user_signature",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "app_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "bbox",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "confirmed_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "created_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "detected_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "expires_at",
+          "type": "TIMESTAMPTZ"
+        },
+        {
+          "mutability": "immutable",
+          "name": "id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "image_url",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "item_signature",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "metadata",
+          "type": "JSONB"
+        },
+        {
+          "mutability": "immutable",
+          "name": "model_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "original_detected_name",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "release_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "scan_id",
+          "type": "UUID"
+        },
+        {
+          "mutability": "immutable",
+          "name": "taxonomy_version",
+          "type": "TEXT"
+        },
+        {
+          "mutability": "immutable",
+          "name": "user_id",
+          "type": "UUID"
+        }
+      ]
+    }
+  ],
+  "notes": "Generated from SQL migrations. Treat as canonical V1 field registry."
+}

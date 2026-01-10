@@ -133,6 +133,11 @@ class Recipe {
   final Map<String, dynamic>? dietaryInformation;
   final List<RankedVideo> youtubeReferences;
 
+  // Backend trust metadata (optional; present for /recipes/generate)
+  final double? pantryCoverage;
+  final List<String> missingIngredientNames;
+  final Map<String, dynamic>? trustSignals;
+
   Recipe({
     required this.recipeId,
     required this.recipeName,
@@ -151,6 +156,9 @@ class Recipe {
     this.culturalContext,
     this.dietaryInformation,
     this.youtubeReferences = const [],
+    this.pantryCoverage,
+    this.missingIngredientNames = const [],
+    this.trustSignals,
   });
 
   factory Recipe.fromJson(Map<String, dynamic> json) {
@@ -197,6 +205,25 @@ class Recipe {
       dietary = Map<String, dynamic>.from(rawDietary);
     }
 
+    double? pantryCoverage;
+    final rawCoverage = json['pantry_coverage'];
+    if (rawCoverage is num) pantryCoverage = rawCoverage.toDouble();
+
+    final missingNames = <String>[];
+    final rawMissingNames = json['missing_ingredient_names'];
+    if (rawMissingNames is List) {
+      for (final x in rawMissingNames) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty) missingNames.add(s);
+      }
+    }
+
+    Map<String, dynamic>? trustSignals;
+    final rawTrust = json['trust_signals'];
+    if (rawTrust is Map) {
+      trustSignals = Map<String, dynamic>.from(rawTrust);
+    }
+
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
       recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
@@ -229,6 +256,103 @@ class Recipe {
       culturalContext: cultural,
       dietaryInformation: dietary,
       youtubeReferences: refs,
+      pantryCoverage: pantryCoverage,
+      missingIngredientNames: missingNames,
+      trustSignals: trustSignals,
+    );
+  }
+
+  /// Adapter for the new backend endpoint: POST /recipes/generate
+  /// Maps the canonical response into the existing `Recipe` UI model.
+  factory Recipe.fromRecipeGenerateResponse(Map<String, dynamic> json) {
+    final rawRecipe = json['recipe'];
+    final recipe = (rawRecipe is Map) ? Map<String, dynamic>.from(rawRecipe) : <String, dynamic>{};
+
+    final name = (recipe['recipe_name'] ?? 'Recipe').toString().trim();
+    final cuisine = (recipe['cuisine'] ?? '').toString();
+    final difficulty = (recipe['difficulty'] ?? 'easy').toString();
+    final prep = (recipe['prep_time_minutes'] is num) ? (recipe['prep_time_minutes'] as num).toInt() : 0;
+    final techniques = (recipe['techniques'] is List)
+        ? (recipe['techniques'] as List).map((x) => x.toString()).where((s) => s.trim().isNotEmpty).toList()
+        : const <String>[];
+
+    final ingredientsUsed = <RecipeIngredient>[];
+    final rawIngredients = recipe['ingredients'];
+    if (rawIngredients is List) {
+      for (final it in rawIngredients) {
+        if (it is Map) {
+          final m = Map<String, dynamic>.from(it);
+          final canonicalName = (m['canonical_name'] ?? '').toString();
+          final inventoryId = (m['ingredient_id'] ?? '').toString();
+          final qty = (m['quantity'] is num) ? (m['quantity'] as num).toDouble() : 1.0;
+          final unit = (m['unit'] ?? 'pieces').toString();
+          ingredientsUsed.add(
+            RecipeIngredient(
+              inventoryId: inventoryId,
+              canonicalName: canonicalName,
+              amount: qty,
+              unit: unit,
+            ),
+          );
+        }
+      }
+    }
+
+    final steps = <RecipeStep>[];
+    final rawSteps = recipe['steps'];
+    if (rawSteps is List) {
+      var i = 0;
+      for (final s in rawSteps) {
+        final line = s.toString().trim();
+        if (line.isEmpty) continue;
+        i += 1;
+        steps.add(RecipeStep(step: i, instruction: {'en': line}, timeMinutes: 0));
+      }
+    }
+    if (steps.isEmpty) {
+      steps.add(RecipeStep(step: 1, instruction: {'en': 'Follow the recipe steps.'}, timeMinutes: 0));
+    }
+
+    double? pantryCoverage;
+    final rawCoverage = json['pantry_coverage'];
+    if (rawCoverage is num) pantryCoverage = rawCoverage.toDouble();
+
+    final missingNames = <String>[];
+    final rawMissing = json['missing_ingredients'];
+    if (rawMissing is List) {
+      for (final row in rawMissing) {
+        if (row is Map) {
+          final m = Map<String, dynamic>.from(row);
+          final n = (m['canonical_name'] ?? '').toString().trim();
+          if (n.isNotEmpty) missingNames.add(n);
+        } else {
+          final n = row.toString().trim();
+          if (n.isNotEmpty) missingNames.add(n);
+        }
+      }
+    }
+
+    Map<String, dynamic>? trustSignals;
+    final rawTrust = json['trust_signals'];
+    if (rawTrust is Map) {
+      trustSignals = Map<String, dynamic>.from(rawTrust);
+    }
+
+    final rid = (recipe['recipe_id'] ?? '').toString().trim();
+    return Recipe(
+      recipeId: rid,
+      recipeName: {'en': name},
+      cuisine: cuisine,
+      difficulty: difficulty,
+      estimatedTimes: EstimatedTimes(prepMinutes: prep, cookMinutes: 0, totalMinutes: prep),
+      cookingMethod: techniques.isNotEmpty ? techniques.join(', ') : '',
+      ingredientsUsed: ingredientsUsed,
+      steps: steps,
+      nutritionPerServing: const {},
+      leftoverForecast: const {},
+      pantryCoverage: pantryCoverage,
+      missingIngredientNames: missingNames,
+      trustSignals: trustSignals,
     );
   }
 
@@ -266,6 +390,9 @@ class Recipe {
       if (culturalContext != null) 'cultural_context': culturalContext,
       if (dietaryInformation != null) 'dietary_information': dietaryInformation,
       'youtube_references': youtubeReferences.map((r) => r.toJson()).toList(),
+      if (pantryCoverage != null) 'pantry_coverage': pantryCoverage,
+      if (missingIngredientNames.isNotEmpty) 'missing_ingredient_names': missingIngredientNames,
+      if (trustSignals != null) 'trust_signals': trustSignals,
     };
   }
 }

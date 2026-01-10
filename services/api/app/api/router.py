@@ -9,6 +9,7 @@ from app.api.routes.youtube import router as youtube_router
 from app.api.routes.youtube_search import router as youtube_search_router
 from app.api.routes.training import router as training_router
 from app.api.routes.recipes import router as recipes_router, public_router as recipes_public_router
+from app.api.routes.recipe_generation import router as recipe_generation_router
 from app.api.routes.nutrition import router as nutrition_router
 from app.api.routes.profile import router as profile_router
 from app.api.routes.inventory_db import router as inventory_db_router
@@ -28,6 +29,7 @@ from app.api.routes.pantry import router as pantry_router
 from app.api.routes.learning import router as learning_router
 from app.api.routes.events import router as events_router
 from app.api.routes.observations import router as observations_router
+from app.api.routes.migration_reports import router as migration_reports_router
 
 # Ingredient Intelligence routers
 from app.routers.intelligence import router as intelligence_router
@@ -48,6 +50,7 @@ api_router.include_router(youtube_router, prefix="/youtube", tags=["youtube"])
 api_router.include_router(youtube_search_router, prefix="/youtube", tags=["youtube"])
 api_router.include_router(training_router, prefix="/training", tags=["training"])
 api_router.include_router(recipes_router, prefix="/recipes", tags=["recipes"])
+api_router.include_router(recipe_generation_router, prefix="/recipes", tags=["recipes"])
 api_router.include_router(recipes_public_router, tags=["recipes"])
 api_router.include_router(nutrition_router, tags=["nutrition"])
 api_router.include_router(profile_router, tags=["profile"])
@@ -69,6 +72,7 @@ api_router.include_router(vision_router, tags=["vision"])
 api_router.include_router(quantity_router, tags=["quantity"])
 api_router.include_router(pantry_router, tags=["pantry"])
 api_router.include_router(learning_router, tags=["learning"])
+api_router.include_router(migration_reports_router, tags=["migration"])
 
 # Ingredient Intelligence routers
 api_router.include_router(intelligence_router, tags=["intelligence"])

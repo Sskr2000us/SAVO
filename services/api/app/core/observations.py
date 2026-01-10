@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
 from app.core.database import get_db_client
+from app.core.schema_migration import dual_write_enabled, v1_writes_allowed, v2_write_enabled
+from app.core.migration_telemetry import emit_migration_incident
 
 
 def _now_iso() -> str:
@@ -49,6 +51,9 @@ def log_scan_observations(
     storage_location: Optional[str] = None,
     model_provider: Optional[str] = None,
     model_version: Optional[str] = None,
+    vision_model_version: Optional[str] = None,
+    quantity_model_version: Optional[str] = None,
+    embedding_version: Optional[str] = None,
     taxonomy_version: Optional[str] = None,
     release_version: Optional[str] = None,
     app_version: Optional[str] = None,
@@ -66,6 +71,20 @@ def log_scan_observations(
     """
     try:
         tv = (taxonomy_version or os.getenv("SAVO_TAXONOMY_VERSION") or "").strip() or None
+
+        vv = (
+            (vision_model_version or model_version or os.getenv("SAVO_VISION_MODEL_VERSION") or "").strip()
+            or None
+        )
+        qv = (
+            (quantity_model_version or os.getenv("SAVO_QUANTITY_MODEL_VERSION") or "").strip()
+            or None
+        )
+        ev = (
+            (embedding_version or os.getenv("SAVO_EMBEDDING_VERSION") or "none").strip()
+            or "none"
+        )
+
         rows = []
         ts = observed_at or _now_iso()
         for ob in observations or []:
@@ -115,6 +134,70 @@ def log_scan_observations(
             return
 
         db = get_db_client()
-        db.table("scan_observations").insert(rows).execute()
+
+        # V1 rows (legacy schema) and V2 rows (required version stamps).
+        rows_v1 = rows
+        rows_v2 = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            rr = dict(r)
+            rr["vision_model_version"] = vv
+            rr["quantity_model_version"] = qv
+            rr["embedding_version"] = ev
+            rows_v2.append(rr)
+
+        # Primary write routing.
+        wrote_primary = False
+        if v1_writes_allowed():
+            db.table("scan_observations").insert(rows_v1).execute()
+            wrote_primary = True
+        elif v2_write_enabled():
+            # In v2_only / v1-writes-disabled mode, observations should still be recorded.
+            db.table("scan_observations_v2").insert(rows_v2).execute()
+            wrote_primary = True
+
+        if not wrote_primary:
+            return
+
+        # Side-by-side: optional V2 shadow write.
+        if dual_write_enabled():
+            try:
+                db.table("scan_observations_v2").insert(rows_v2).execute()
+            except Exception as e:
+                # If the DB rejects due to missing required versions, quarantine best-effort.
+                try:
+                    db.table("inference_quarantine").insert(
+                        {
+                            "user_id": user_id,
+                            "source_table": "observations.scan_observations_v2",
+                            "reason": "v2_insert_failed",
+                            "row_data": {"rows": rows_v2[:50]},
+                            "metadata": {
+                                "error": str(e),
+                                "source": source,
+                                "row_count": len(rows_v2),
+                                "correlation_id": correlation_id,
+                                "session_id": session_id,
+                            },
+                        }
+                    ).execute()
+                except Exception:
+                    pass
+
+                try:
+                    emit_migration_incident(
+                        user_id=user_id,
+                        correlation_id=correlation_id,
+                        session_id=session_id,
+                        incident_type="v2_write_failed",
+                        operation="insert",
+                        v2_target="observations.scan_observations_v2",
+                        error=str(e),
+                        payload={"source": source, "row_count": len(rows_v2)},
+                    )
+                except Exception:
+                    pass
+                return
     except Exception:
         return

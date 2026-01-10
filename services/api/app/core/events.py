@@ -53,6 +53,21 @@ def emit_event(
             "payload": payload or {},
         }
         db.table("event_log").insert(row).execute()
+
+        # Vector sync is event-driven only: enqueue derived work from the event stream.
+        try:
+            from app.core.vector.sync import maybe_enqueue_from_event
+
+            maybe_enqueue_from_event(
+                user_id=user_id,
+                event_type=event_type,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                payload=payload or {},
+                event_ts=row.get("event_ts"),
+            )
+        except Exception:
+            pass
     except Exception:
         return
 

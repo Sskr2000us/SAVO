@@ -47,8 +47,8 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
   bool _scanning = false;
   bool _uploading = false;
 
-  final int _secondsTotal = 12; // within 10–20s
-  int _secondsLeft = 12;
+  final int _secondsTotal = 20; // within 10–20s (target ~20s)
+  int _secondsLeft = 20;
 
   int _captureCount = 0;
   final List<XFile> _captures = [];

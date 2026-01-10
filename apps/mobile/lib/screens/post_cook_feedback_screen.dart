@@ -52,6 +52,12 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
       final completion = 'Completed in ${widget.completionMinutes.toStringAsFixed(1)} minutes';
       final notes = userNotes.isEmpty ? completion : '$userNotes\n\n$completion';
 
+      String feedbackEvent() {
+        if (rating >= 4) return 'recipe.accepted';
+        if (rating <= 1) return 'recipe.rejected';
+        return 'recipe.modified';
+      }
+
       await apiClient.post('/history/recipes', {
         'recipe_id': widget.recipe.recipeId,
         'recipe_name': widget.recipe.recipeName['en'] ?? widget.recipe.getLocalizedName('en'),
@@ -61,6 +67,24 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
         'user_rating': rating,
         'notes': notes,
       });
+
+      // Trust-first learning loop (best-effort; never block UX on failure).
+      fireAndForget(() async {
+        try {
+          await apiClient.post('/recipes/feedback', {
+            'recipe_id': widget.recipe.recipeId,
+            'event': feedbackEvent(),
+            'signals': {
+              'rating': rating,
+              'servings_made': widget.servingsMade,
+              'completion_minutes': widget.completionMinutes,
+              'has_notes': userNotes.isNotEmpty,
+            },
+          });
+        } catch (_) {
+          // ignore
+        }
+      }());
 
       fireAndForget(MetricsService.instance.recordWorkflowStep('CookNow', 'Learn'));
       fireAndForget(MetricsService.instance.recordEvent('recipe_cooked'));

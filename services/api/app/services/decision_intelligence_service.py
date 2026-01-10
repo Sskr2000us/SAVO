@@ -512,6 +512,8 @@ class DecisionIntelligenceService:
         decision: DecisionResult
     ) -> UUID:
         """Log decision to ingredient_actions table"""
+
+        import os
         
         action_data = {
             "user_id": str(user_id),
@@ -522,7 +524,11 @@ class DecisionIntelligenceService:
             "reason": decision.reason,
             "decision_context": decision.decision_context,
             "was_auto_applied": decision.auto_apply,
-            "recommended_at": datetime.utcnow().isoformat()
+            "recommended_at": datetime.utcnow().isoformat(),
+            "taxonomy_version": (os.getenv("SAVO_TAXONOMY_VERSION") or "").strip() or None,
+            "vision_model_version": (os.getenv("SAVO_VISION_MODEL_VERSION") or os.getenv("SAVO_MODEL_VERSION") or "").strip() or None,
+            "quantity_model_version": (os.getenv("SAVO_QUANTITY_MODEL_VERSION") or os.getenv("SAVO_MODEL_VERSION") or "").strip() or None,
+            "embedding_version": (os.getenv("SAVO_EMBEDDING_VERSION") or "v0").strip() or "v0",
         }
         
         response = await self.db.table("ingredient_actions").insert(action_data).execute()

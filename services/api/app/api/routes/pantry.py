@@ -4,13 +4,15 @@ from typing import Any, Dict, List, Optional
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from app.middleware.auth import get_current_user
 from app.api.routes.scanning import ConfirmIngredientsRequest, confirm_ingredients, get_user_pantry
 from app.core.database import get_db_client
 from app.core.events import emit_event
+from app.core.schema_migration import dual_write_enabled
+from app.core.migration_telemetry import emit_migration_incident
 
 router = APIRouter(prefix="/pantry", tags=["pantry"])
 
@@ -91,7 +93,7 @@ async def pantry_confirm(
     confirm_req = ConfirmIngredientsRequest(scan_id=payload.scan_id, confirmations=confirmations)
     result = await confirm_ingredients(confirm_req, user_id=user_id)
 
-    pantry_state = await get_user_pantry(user_id=user_id)
+    pantry_state = await get_user_pantry(background_tasks=BackgroundTasks(), user_id=user_id)
 
     return {
         "success": True,
@@ -171,6 +173,25 @@ async def pantry_update_item(
 
     res = db.table("inventory_items").update(update).eq("id", item_id).eq("user_id", user_id).execute()
     updated_item = (res.data[0] if res.data else None)
+
+    if dual_write_enabled():
+        try:
+            db.table("inventory_items_v2").update(update).eq("id", item_id).eq("user_id", user_id).execute()
+        except Exception:
+            try:
+                emit_migration_incident(
+                    user_id=user_id,
+                    correlation_id=item_id,
+                    incident_type="v2_write_failed",
+                    operation="update",
+                    v2_target="public.inventory_items_v2",
+                    error="inventory_items_v2 update failed",
+                    entity_id=item_id,
+                    payload={"endpoint": "PATCH /pantry/items/{item_id}"},
+                )
+            except Exception:
+                pass
+            pass
 
     try:
         emit_event(

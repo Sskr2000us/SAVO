@@ -5,12 +5,16 @@ Handles all database operations with connection pooling and error handling
 
 from typing import Optional, Dict, Any, List
 import os
+import uuid
 from datetime import datetime, date
 import re
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 import asyncpg
 import logging
+
+from app.core.schema_migration import dual_write_enabled, inventory_truth_read_table_for_user, inventory_truth_write_table, v1_writes_allowed
+from app.core.migration_telemetry import emit_migration_incident
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +356,8 @@ async def get_inventory(
     try:
         from app.core.media_storage import to_signed_url
 
-        query = db.client.table("inventory_items").select("*").eq("user_id", user_id)
+        read_table = inventory_truth_read_table_for_user(user_id)
+        query = db.client.table(read_table).select("*").eq("user_id", user_id)
 
         if not include_inactive:
             query = query.eq("is_current", True)
@@ -380,8 +385,10 @@ async def get_inventory_by_category(
     try:
         from app.core.media_storage import to_signed_url
 
+        read_table = inventory_truth_read_table_for_user(user_id)
+
         query = (
-            db.client.table("inventory_items")
+            db.client.table(read_table)
             .select("*")
             .eq("user_id", user_id)
             .eq("category", category)
@@ -410,6 +417,23 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
         item_data = dict(item_data or {})
         item_data["user_id"] = user_id
 
+        # Required version stamps (defense-in-depth for v2 tables).
+        # Keep additive: only fill if missing.
+        if not (isinstance(item_data.get("vision_model_version"), str) and item_data.get("vision_model_version").strip()):
+            item_data["vision_model_version"] = (os.getenv("SAVO_VISION_MODEL_VERSION") or os.getenv("SAVO_MODEL_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("quantity_model_version"), str) and item_data.get("quantity_model_version").strip()):
+            item_data["quantity_model_version"] = (os.getenv("SAVO_QUANTITY_MODEL_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("taxonomy_version"), str) and item_data.get("taxonomy_version").strip()):
+            item_data["taxonomy_version"] = (os.getenv("SAVO_TAXONOMY_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("embedding_version"), str) and item_data.get("embedding_version").strip()):
+            item_data["embedding_version"] = (os.getenv("SAVO_EMBEDDING_VERSION") or "v0").strip() or "v0"
+
+        write_table = inventory_truth_write_table()
+
+        # Ensure a stable id across V1+V2 dual writes.
+        if (dual_write_enabled() or write_table == "inventory_items_v2") and not item_data.get("id"):
+            item_data["id"] = str(uuid.uuid4())
+
         # Best-effort cuisine auto-fill (especially for scan/normalize flows).
         raw_cuisine = item_data.get("cuisine")
         if not (isinstance(raw_cuisine, str) and raw_cuisine.strip()):
@@ -425,13 +449,14 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
         
         # PostgREST can fail if DB migrations haven't been applied yet or schema cache is stale.
         # Retry by removing the missing column and re-attempting the insert.
+        # Primary write.
         for _ in range(5):
             try:
-                result = db.client.table("inventory_items").insert(item_data).execute()
+                result = db.client.table(write_table).insert(item_data).execute()
                 break
             except APIError as e:
                 missing = _extract_missing_column_name(e)
-                if missing == "expiry_date":
+                if missing == "expiry_date" and write_table == "inventory_items":
                     logger.error(
                         "Database schema is missing inventory_items.expiry_date. "
                         "Apply migrations before using expiry date features."
@@ -442,6 +467,53 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
                     continue
                 raise
         created = result.data[0]
+
+        # Append-only event stream for replayability (best-effort).
+        try:
+            from app.core.events import emit_event
+
+            emit_event(
+                event_type="inventory.item_upserted",
+                user_id=user_id,
+                entity_type="inventory_item",
+                entity_id=str(created.get("id") or item_data.get("id") or "") or None,
+                taxonomy_version=created.get("taxonomy_version") if isinstance(created, dict) else None,
+                model_version=created.get("model_version") if isinstance(created, dict) else None,
+                payload={"op": "insert", "table": write_table, "item": created},
+            )
+        except Exception:
+            pass
+
+        # Side-by-side: optional V2 shadow write (only in dual_write).
+        if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+            try:
+                v2_payload = dict(item_data)
+                for _ in range(5):
+                    try:
+                        db.client.table("inventory_items_v2").insert(v2_payload).execute()
+                        break
+                    except APIError as e:
+                        missing = _extract_missing_column_name(e)
+                        if missing and missing in v2_payload:
+                            v2_payload.pop(missing, None)
+                            continue
+                        raise
+            except Exception:
+                try:
+                    emit_migration_incident(
+                        user_id=user_id,
+                        correlation_id=str(uuid.uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="insert",
+                        v2_target="public.inventory_items_v2",
+                        error="inventory_items_v2 insert failed",
+                        entity_id=str(item_data.get("id") or "") or None,
+                        payload={"endpoint": "core.database.add_inventory_item"},
+                    )
+                except Exception:
+                    pass
+                pass
+
         if isinstance(created, dict) and created.get("image_url"):
             created["image_url"] = to_signed_url(created.get("image_url"))
         return created
@@ -457,6 +529,16 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
         from app.core.inventory_cuisine import lookup_cuisine
 
         item_data = dict(item_data or {})
+
+        # Required version stamps (defense-in-depth for v2 tables).
+        if not (isinstance(item_data.get("vision_model_version"), str) and item_data.get("vision_model_version").strip()):
+            item_data["vision_model_version"] = (os.getenv("SAVO_VISION_MODEL_VERSION") or os.getenv("SAVO_MODEL_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("quantity_model_version"), str) and item_data.get("quantity_model_version").strip()):
+            item_data["quantity_model_version"] = (os.getenv("SAVO_QUANTITY_MODEL_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("taxonomy_version"), str) and item_data.get("taxonomy_version").strip()):
+            item_data["taxonomy_version"] = (os.getenv("SAVO_TAXONOMY_VERSION") or "").strip() or None
+        if not (isinstance(item_data.get("embedding_version"), str) and item_data.get("embedding_version").strip()):
+            item_data["embedding_version"] = (os.getenv("SAVO_EMBEDDING_VERSION") or "v0").strip() or "v0"
 
         raw_cuisine = item_data.get("cuisine")
         if not (isinstance(raw_cuisine, str) and raw_cuisine.strip()):
@@ -482,13 +564,14 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
             },
         )
 
+        write_table = inventory_truth_write_table()
         for _ in range(5):
             try:
-                result = db.client.table("inventory_items").update(item_data).eq("id", item_id).execute()
+                result = db.client.table(write_table).update(item_data).eq("id", item_id).execute()
                 break
             except APIError as e:
                 missing = _extract_missing_column_name(e)
-                if missing == "expiry_date":
+                if missing == "expiry_date" and write_table == "inventory_items":
                     logger.error(
                         "Database schema is missing inventory_items.expiry_date. "
                         "Apply migrations before using expiry date features."
@@ -499,6 +582,53 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
                     continue
                 raise
         updated = result.data[0] if result.data else None
+
+        # Append-only event stream for replayability (best-effort).
+        try:
+            from app.core.events import emit_event
+
+            if isinstance(updated, dict):
+                emit_event(
+                    event_type="inventory.item_upserted",
+                    user_id=updated.get("user_id"),
+                    entity_type="inventory_item",
+                    entity_id=str(updated.get("id") or item_id or "") or None,
+                    taxonomy_version=updated.get("taxonomy_version"),
+                    model_version=updated.get("model_version"),
+                    payload={"op": "update", "table": write_table, "item": updated},
+                )
+        except Exception:
+            pass
+
+        if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+            try:
+                v2_payload = dict(item_data)
+                for _ in range(5):
+                    try:
+                        db.client.table("inventory_items_v2").update(v2_payload).eq("id", item_id).execute()
+                        break
+                    except APIError as e:
+                        missing = _extract_missing_column_name(e)
+                        if missing and missing in v2_payload:
+                            v2_payload.pop(missing, None)
+                            continue
+                        raise
+            except Exception:
+                try:
+                    emit_migration_incident(
+                        user_id=None,
+                        correlation_id=str(uuid.uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="update",
+                        v2_target="public.inventory_items_v2",
+                        error="inventory_items_v2 update failed",
+                        entity_id=str(item_id),
+                        payload={"endpoint": "core.database.update_inventory_item"},
+                    )
+                except Exception:
+                    pass
+                pass
+
         if isinstance(updated, dict) and updated.get("image_url"):
             updated["image_url"] = to_signed_url(updated.get("image_url"))
         return updated
@@ -508,9 +638,73 @@ async def update_inventory_item(item_id: str, item_data: Dict[str, Any]) -> Dict
 
 
 async def delete_inventory_item(item_id: str) -> None:
-    """Delete inventory item"""
+    """Remove an inventory item from active use (soft deactivation).
+
+    Hard deletes lose historical context and learning signals; this performs a
+    best-effort update instead.
+    """
     try:
-        db.client.table("inventory_items").delete().eq("id", item_id).execute()
+        write_table = inventory_truth_write_table()
+        update = {
+            "is_current": False,
+            "pantry_status": "consumed",
+            "last_status_changed_at": datetime.utcnow().isoformat(),
+        }
+
+        # Apply update, tolerating older schemas by dropping missing columns.
+        for _ in range(5):
+            try:
+                db.client.table(write_table).update(update).eq("id", item_id).execute()
+                break
+            except APIError as e:
+                missing = _extract_missing_column_name(e)
+                if missing and missing in update:
+                    update.pop(missing, None)
+                    continue
+                raise
+
+        # Append-only event stream for replayability (best-effort).
+        try:
+            from app.core.events import emit_event
+
+            emit_event(
+                event_type="inventory.item_deactivated",
+                user_id=None,
+                entity_type="inventory_item",
+                entity_id=str(item_id),
+                payload={"op": "deactivate", "table": write_table, "update": update},
+            )
+        except Exception:
+            pass
+
+        if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+            try:
+                v2_update = dict(update)
+                for _ in range(5):
+                    try:
+                        db.client.table("inventory_items_v2").update(v2_update).eq("id", item_id).execute()
+                        break
+                    except APIError as e:
+                        missing = _extract_missing_column_name(e)
+                        if missing and missing in v2_update:
+                            v2_update.pop(missing, None)
+                            continue
+                        raise
+            except Exception:
+                try:
+                    emit_migration_incident(
+                        user_id=None,
+                        correlation_id=str(uuid.uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="update",
+                        v2_target="public.inventory_items_v2",
+                        error="inventory_items_v2 soft-delete update failed",
+                        entity_id=str(item_id),
+                        payload={"endpoint": "core.database.delete_inventory_item"},
+                    )
+                except Exception:
+                    pass
+                pass
     except APIError as e:
         logger.error(f"Error deleting inventory item: {e}")
         raise
@@ -526,13 +720,40 @@ async def activate_inventory_items_for_location(
     given location for planning.
     """
     try:
+        write_table = inventory_truth_write_table()
         result = (
-            db.client.table("inventory_items")
+            db.client.table(write_table)
             .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
             .eq("user_id", user_id)
             .eq("storage_location", storage_location)
             .execute()
         )
+        if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+            try:
+                (
+                    db.client.table("inventory_items_v2")
+                    .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
+                    .eq("user_id", user_id)
+                    .eq("storage_location", storage_location)
+                    .execute()
+                )
+            except Exception:
+                try:
+                    emit_migration_incident(
+                        user_id=user_id,
+                        correlation_id=str(uuid.uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="update",
+                        v2_target="public.inventory_items_v2",
+                        error="inventory_items_v2 activate_for_location failed",
+                        payload={
+                            "endpoint": "core.database.activate_inventory_items_for_location",
+                            "storage_location": storage_location,
+                        },
+                    )
+                except Exception:
+                    pass
+                pass
         return {"updated_count": len(result.data or []), "storage_location": storage_location}
     except APIError as e:
         logger.error(f"Error bulk-activating inventory for location: {e}")
@@ -555,9 +776,10 @@ async def activate_inventory_items_for_scan_set(
         raise ValueError("mode must be 'replace' or 'merge'")
 
     try:
+        write_table = inventory_truth_write_table()
         # Find which storage locations this scan set touches.
         scan_items_result = (
-            db.client.table("inventory_items")
+            db.client.table(write_table)
             .select("storage_location")
             .eq("user_id", user_id)
             .eq("last_seen_scan_id", scan_id)
@@ -578,7 +800,7 @@ async def activate_inventory_items_for_scan_set(
         if mode == "replace":
             # Deactivate other scan-sourced items in the same location(s).
             (
-                db.client.table("inventory_items")
+                db.client.table(write_table)
                 .update({"is_current": False})
                 .eq("user_id", user_id)
                 .eq("source", "scan")
@@ -587,14 +809,40 @@ async def activate_inventory_items_for_scan_set(
                 .execute()
             )
 
+            if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+                try:
+                    (
+                        db.client.table("inventory_items_v2")
+                        .update({"is_current": False})
+                        .eq("user_id", user_id)
+                        .eq("source", "scan")
+                        .in_("storage_location", storage_locations)
+                        .neq("last_seen_scan_id", scan_id)
+                        .execute()
+                    )
+                except Exception:
+                    pass
+
         # Activate items from this scan set.
         activated = (
-            db.client.table("inventory_items")
+            db.client.table(write_table)
             .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
             .eq("user_id", user_id)
             .eq("last_seen_scan_id", scan_id)
             .execute()
         )
+
+        if dual_write_enabled() and write_table == "inventory_items" and v1_writes_allowed():
+            try:
+                (
+                    db.client.table("inventory_items_v2")
+                    .update({"is_current": True, "last_seen_at": datetime.utcnow().isoformat()})
+                    .eq("user_id", user_id)
+                    .eq("last_seen_scan_id", scan_id)
+                    .execute()
+                )
+            except Exception:
+                pass
 
         return {
             "updated_count": len(activated.data or []),

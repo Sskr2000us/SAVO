@@ -3,7 +3,7 @@ Scanning API Routes
 Endpoints for pantry/fridge scanning with Vision AI
 """
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from typing import Any, List, Dict, Optional
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta, timezone
@@ -27,7 +27,16 @@ from app.api.routes.profile import get_full_profile
 from app.core.media_storage import upload_inventory_image, to_signed_url
 from app.core.events import emit_event, emit_events
 from app.core.observations import log_scan_observations
-import os
+from app.core.schema_migration import (
+    current_rollout_phase,
+    dual_write_enabled,
+    inventory_truth_read_table_for_user,
+    inventory_truth_write_table,
+    should_read_v2_for_user,
+    v2_shadow_read_enabled,
+)
+from app.core.migration_telemetry import emit_migration_incident
+from app.core.shadow_validation import run_pantry_shadow_validation
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +195,114 @@ def _retry_without_missing_column(db, table: str, op: str, payload: Dict[str, An
                     q = q.eq(k, v)
             return q.execute()
         raise
+
+
+def _dual_write_inventory(
+    db,
+    op: str,
+    payload: Dict[str, Any],
+    where: Optional[Dict[str, Any]] = None,
+    *,
+    user_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+):
+    """Write pantry truth to the authoritative table and (optionally) mirror.
+
+    - v1_only: writes V1
+    - dual_write: writes V1 + best-effort mirror into V2 (window-gated)
+    - v2_only (or v1 writes disabled): writes V2 only
+
+    Returns the primary PostgREST response.
+    """
+    p = dict(payload or {})
+    primary_table = inventory_truth_write_table()
+
+    if op == "insert" and (dual_write_enabled() or primary_table == "inventory_items_v2") and not p.get("id"):
+        p["id"] = str(uuid4())
+
+    res = _retry_without_missing_column(db, primary_table, op, p, where=where)
+
+    # Append-only event for replayability (best-effort; must not break flow).
+    try:
+        from app.core.events import emit_event
+
+        item_after = None
+        try:
+            item_after = (res.data[0] if getattr(res, "data", None) else None)
+        except Exception:
+            item_after = None
+
+        if op in {"insert", "update"}:
+            emit_event(
+                event_type="inventory.item_upserted",
+                event_ts=datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
+                user_id=user_id,
+                entity_type="inventory_item",
+                entity_id=str((item_after or {}).get("id") or p.get("id") or "") or None,
+                session_id=session_id,
+                taxonomy_version=(p.get("taxonomy_version") if isinstance(p, dict) else None),
+                model_version=(p.get("model_version") if isinstance(p, dict) else None),
+                payload={
+                    "op": op,
+                    "table": primary_table,
+                    "endpoint": endpoint,
+                    "where": where or {},
+                    **({"correlation_id": correlation_id} if correlation_id else {}),
+                    "item": item_after or p,
+                },
+            )
+    except Exception:
+        pass
+
+    if dual_write_enabled() and primary_table == "inventory_items":
+        try:
+            _retry_without_missing_column(db, "inventory_items_v2", op, p, where=where)
+        except Exception as e:
+            try:
+                emit_migration_incident(
+                    user_id=user_id,
+                    correlation_id=correlation_id,
+                    session_id=session_id,
+                    incident_type="v2_write_failed",
+                    operation=op,
+                    v2_target="public.inventory_items_v2",
+                    error=str(e),
+                    entity_id=(p.get("id") if isinstance(p, dict) else None),
+                    payload={
+                        "endpoint": endpoint,
+                        "where": where,
+                        "keys": sorted([k for k in (p or {}).keys()])[:50],
+                    },
+                )
+            except Exception:
+                pass
+
+    return res
+
+
+def _shadow_compare_pantry_v2(
+    *,
+    user_id: str,
+    include_inactive: bool,
+    maybe_days: int,
+    stale_days: int,
+    v1_visible_count: int,
+    v1_total_count: int,
+    v1_qty_sum: float,
+    correlation_id: Optional[str] = None,
+) -> None:
+    return run_pantry_shadow_validation(
+        user_id=user_id,
+        include_inactive=include_inactive,
+        maybe_days=maybe_days,
+        stale_days=stale_days,
+        v1_visible_count=v1_visible_count,
+        v1_total_count=v1_total_count,
+        v1_qty_sum=v1_qty_sum,
+        correlation_id=correlation_id,
+    )
 
 
 def _normalize_unit(unit: Optional[str]) -> str:
@@ -2770,10 +2887,12 @@ async def confirm_ingredients(
 
                 incoming_unit = _normalize_unit(unit or detected_item.get("detected_unit") or "pieces")
 
+                truth_write_table = inventory_truth_write_table()
+
                 existing = None
                 if resolved_ingredient_id:
                     existing = (
-                        db.table("inventory_items")
+                        db.table(truth_write_table)
                         .select("*")
                         .eq("user_id", user_id)
                         .eq("ingredient_id", resolved_ingredient_id)
@@ -2787,7 +2906,7 @@ async def confirm_ingredients(
                 # Fallback to canonical_name matching for backward compatibility
                 if not existing or not getattr(existing, "data", None):
                     existing = (
-                        db.table("inventory_items")
+                        db.table(truth_write_table)
                         .select("*")
                         .eq("user_id", user_id)
                         .eq("canonical_name", canonical_name)
@@ -2852,7 +2971,16 @@ async def confirm_ingredients(
                             update_payload["image_url"] = reference_image_url
                             update_payload["image_source"] = "scan"
                             update_payload["reference_detected_id"] = detected_id
-                        _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": existing_item["id"]})
+                        _dual_write_inventory(
+                            db,
+                            "update",
+                            update_payload,
+                            where={"id": existing_item["id"]},
+                            user_id=user_id,
+                            correlation_id=scan_correlation_id,
+                            session_id=scan_session_id,
+                            endpoint="POST /api/scanning/confirm-ingredients",
+                        )
                     elif UnitConverter.can_convert(incoming_unit, existing_unit):
                         converted = UnitConverter.convert(incoming_qty, incoming_unit, existing_unit)
                         merged_qty = existing_qty + float(converted)
@@ -2881,7 +3009,16 @@ async def confirm_ingredients(
                             update_payload["image_url"] = reference_image_url
                             update_payload["image_source"] = "scan"
                             update_payload["reference_detected_id"] = detected_id
-                        _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": existing_item["id"]})
+                        _dual_write_inventory(
+                            db,
+                            "update",
+                            update_payload,
+                            where={"id": existing_item["id"]},
+                            user_id=user_id,
+                            correlation_id=scan_correlation_id,
+                            session_id=scan_session_id,
+                            endpoint="POST /api/scanning/confirm-ingredients",
+                        )
                     else:
                         insert_payload = {
                             "user_id": user_id,
@@ -2909,7 +3046,15 @@ async def confirm_ingredients(
                             "last_seen_scan_id": request.scan_id,
                             "last_confirmed_at": now_iso,
                         }
-                        created = _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
+                        created = _dual_write_inventory(
+                            db,
+                            "insert",
+                            insert_payload,
+                            user_id=user_id,
+                            correlation_id=scan_correlation_id,
+                            session_id=scan_session_id,
+                            endpoint="POST /api/scanning/confirm-ingredients",
+                        )
                         existing_item = created.data[0] if getattr(created, "data", None) else None
                 else:
                     insert_payload = {
@@ -2934,7 +3079,15 @@ async def confirm_ingredients(
                         "last_seen_scan_id": request.scan_id,
                         "last_confirmed_at": now_iso,
                     }
-                    created = _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
+                    created = _dual_write_inventory(
+                        db,
+                        "insert",
+                        insert_payload,
+                        user_id=user_id,
+                        correlation_id=scan_correlation_id,
+                        session_id=scan_session_id,
+                        endpoint="POST /api/scanning/confirm-ingredients",
+                    )
                     existing_item = created.data[0] if getattr(created, "data", None) else None
 
                 # Telemetry: pantry.item_confirmed (confirmed or modified)
@@ -3093,8 +3246,9 @@ async def confirm_ingredients(
         # mark older scan-sourced raw items in the same storage location inactive.
         # This avoids a window where everything is deactivated before the new items are written.
         try:
+            primary_table = inventory_truth_write_table()
             (
-                db.table("inventory_items")
+                db.table(primary_table)
                 .update({"is_current": False})
                 .eq("user_id", user_id)
                 .eq("source", "scan")
@@ -3104,6 +3258,21 @@ async def confirm_ingredients(
                 .neq("last_seen_scan_id", request.scan_id)
                 .execute()
             )
+            if dual_write_enabled() and primary_table == "inventory_items":
+                try:
+                    (
+                        db.table("inventory_items_v2")
+                        .update({"is_current": False})
+                        .eq("user_id", user_id)
+                        .eq("source", "scan")
+                        .eq("storage_location", storage_location)
+                        .eq("item_state", item_state)
+                        .eq("is_current", True)
+                        .neq("last_seen_scan_id", request.scan_id)
+                        .execute()
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Failed to deactivate previous scan inventory set: {e}")
         
@@ -3270,8 +3439,9 @@ async def scan_single_item(
                 _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
                 
                 # Upsert to inventory
+                truth_write_table = inventory_truth_write_table()
                 existing = (
-                    db.table("inventory_items")
+                    db.table(truth_write_table)
                     .select("*")
                     .eq("user_id", user_id)
                     .eq("canonical_name", canonical_name)
@@ -3299,7 +3469,14 @@ async def scan_single_item(
                         "model_provider": model_provider,
                         **({"release_version": release_version} if release_version else {}),
                     }
-                    _retry_without_missing_column(db, "inventory_items", "update", update_payload, where={"id": item["id"]})
+                    _dual_write_inventory(
+                        db,
+                        "update",
+                        update_payload,
+                        where={"id": item["id"]},
+                        user_id=user_id,
+                        endpoint="POST /api/scanning/<bulk-sync>",
+                    )
                 else:
                     # Insert new
                     insert_payload = {
@@ -3319,7 +3496,13 @@ async def scan_single_item(
                         "model_provider": model_provider,
                         **({"release_version": release_version} if release_version else {}),
                     }
-                    _retry_without_missing_column(db, "inventory_items", "insert", insert_payload)
+                    _dual_write_inventory(
+                        db,
+                        "insert",
+                        insert_payload,
+                        user_id=user_id,
+                        endpoint="POST /api/scanning/<bulk-sync>",
+                    )
                 
                 auto_saved = True
             except Exception as e:
@@ -3370,7 +3553,7 @@ async def confirm_single_ingredient(
         
         # Upsert to inventory
         existing = (
-            db.table("inventory_items")
+            db.table(inventory_truth_write_table())
             .select("*")
             .eq("user_id", user_id)
             .eq("canonical_name", canonical_name)
@@ -3398,26 +3581,39 @@ async def confirm_single_ingredient(
             else:
                 new_qty = quantity
             
-            db.table("inventory_items").update({
-                "quantity": new_qty,
-                "unit": normalized_unit,
-                "last_seen_at": now_iso
-            }).eq("id", item["id"]).execute()
+            _dual_write_inventory(
+                db,
+                "update",
+                {
+                    "quantity": new_qty,
+                    "unit": normalized_unit,
+                    "last_seen_at": now_iso,
+                },
+                where={"id": item["id"]},
+                user_id=user_id,
+                endpoint="POST /api/scanning/<quick-add>",
+            )
         else:
             # Insert new
-            db.table("inventory_items").insert({
-                "user_id": user_id,
-                "canonical_name": canonical_name,
-                "display_name": _titleize(ingredient_name),
-                "quantity": quantity,
-                "unit": normalized_unit,
-                "storage_location": storage_location,
-                "item_state": "raw",
-                "source": "scan",
-                "scan_confidence": 1.0,  # User confirmed
-                "is_current": True,
-                "last_seen_at": now_iso
-            }).execute()
+            _dual_write_inventory(
+                db,
+                "insert",
+                {
+                    "user_id": user_id,
+                    "canonical_name": canonical_name,
+                    "display_name": _titleize(ingredient_name),
+                    "quantity": quantity,
+                    "unit": normalized_unit,
+                    "storage_location": storage_location,
+                    "item_state": "raw",
+                    "source": "scan",
+                    "scan_confidence": 1.0,  # User confirmed
+                    "is_current": True,
+                    "last_seen_at": now_iso,
+                },
+                user_id=user_id,
+                endpoint="POST /api/scanning/<quick-add>",
+            )
         
         return {
             "success": True,
@@ -3517,6 +3713,8 @@ async def scan_receipt(
 
         from app.core.unit_converter import UnitConverter
 
+        truth_write_table = inventory_truth_write_table()
+
         def _is_source_check_violation(err: Exception) -> bool:
             payload = None
             if getattr(err, "args", None) and isinstance(err.args[0], dict):
@@ -3525,30 +3723,100 @@ async def scan_receipt(
                 if payload.get("code") != "23514":
                     return False
                 text = f"{payload.get('message', '')} {payload.get('details', '')}"
-                return "inventory_items_source_check" in text
+                return "source_check" in text
             # Fallback string match (covers wrapped exceptions)
             text = str(err)
-            return "inventory_items_source_check" in text and "23514" in text
+            return "source_check" in text and "23514" in text
 
         def _safe_update_inventory(item_id: str, payload: Dict) -> None:
             try:
-                db.table("inventory_items").update(payload).eq("id", item_id).execute()
+                db.table(truth_write_table).update(payload).eq("id", item_id).execute()
+                if dual_write_enabled() and truth_write_table == "inventory_items":
+                    try:
+                        db.table("inventory_items_v2").update(payload).eq("id", item_id).execute()
+                    except Exception as e:
+                        try:
+                            emit_migration_incident(
+                                user_id=user_id,
+                                correlation_id=receipt_id,
+                                incident_type="v2_write_failed",
+                                operation="update",
+                                v2_target="public.inventory_items_v2",
+                                error=str(e),
+                                entity_id=str(item_id),
+                                payload={"endpoint": "POST /api/scanning/scan-receipt"},
+                            )
+                        except Exception:
+                            pass
             except Exception as e:
                 if _is_source_check_violation(e) and "source" in payload:
                     payload2 = dict(payload)
                     payload2.pop("source", None)
-                    db.table("inventory_items").update(payload2).eq("id", item_id).execute()
+                    db.table(truth_write_table).update(payload2).eq("id", item_id).execute()
+                    if dual_write_enabled() and truth_write_table == "inventory_items":
+                        try:
+                            db.table("inventory_items_v2").update(payload2).eq("id", item_id).execute()
+                        except Exception as e2:
+                            try:
+                                emit_migration_incident(
+                                    user_id=user_id,
+                                    correlation_id=receipt_id,
+                                    incident_type="v2_write_failed",
+                                    operation="update",
+                                    v2_target="public.inventory_items_v2",
+                                    error=str(e2),
+                                    entity_id=str(item_id),
+                                    payload={"endpoint": "POST /api/scanning/scan-receipt", "source_downgrade": True},
+                                )
+                            except Exception:
+                                pass
                     return
                 raise
 
         def _safe_insert_inventory(payload: Dict) -> None:
             try:
-                db.table("inventory_items").insert(payload).execute()
+                if dual_write_enabled() and truth_write_table == "inventory_items" and not payload.get("id"):
+                    payload["id"] = str(uuid4())
+                db.table(truth_write_table).insert(payload).execute()
+                if dual_write_enabled() and truth_write_table == "inventory_items":
+                    try:
+                        db.table("inventory_items_v2").insert(dict(payload)).execute()
+                    except Exception as e:
+                        try:
+                            emit_migration_incident(
+                                user_id=user_id,
+                                correlation_id=receipt_id,
+                                incident_type="v2_write_failed",
+                                operation="insert",
+                                v2_target="public.inventory_items_v2",
+                                error=str(e),
+                                entity_id=str(payload.get("id") or "") or None,
+                                payload={"endpoint": "POST /api/scanning/scan-receipt"},
+                            )
+                        except Exception:
+                            pass
             except Exception as e:
                 if _is_source_check_violation(e) and payload.get("source") == "receipt":
                     payload2 = dict(payload)
                     payload2["source"] = "import"
-                    db.table("inventory_items").insert(payload2).execute()
+                    db.table(truth_write_table).insert(payload2).execute()
+                    if dual_write_enabled() and truth_write_table == "inventory_items":
+                        try:
+                            db.table("inventory_items_v2").insert(dict(payload2)).execute()
+                        except Exception as e2:
+                            try:
+                                emit_migration_incident(
+                                    user_id=user_id,
+                                    correlation_id=receipt_id,
+                                    incident_type="v2_write_failed",
+                                    operation="insert",
+                                    v2_target="public.inventory_items_v2",
+                                    error=str(e2),
+                                    entity_id=str(payload2.get("id") or "") or None,
+                                    payload={"endpoint": "POST /api/scanning/scan-receipt", "source_downgrade": True},
+                                )
+                            except Exception:
+                                pass
                     return
                 raise
 
@@ -3569,7 +3837,7 @@ async def scan_receipt(
             incoming_unit = _normalize_unit(item.get("unit"))
 
             existing = (
-                db.table("inventory_items")
+                db.table(truth_write_table)
                 .select("*")
                 .eq("user_id", user_id)
                 .eq("canonical_name", canonical)
@@ -3817,6 +4085,8 @@ async def confirm_receipt_scan(
         updated_count = 0
         pantry_items: List[Dict] = []
 
+        truth_write_table = inventory_truth_write_table()
+
         for item_in in request.items:
             raw_name = (item_in.raw_name or "").strip()
             canonical = (item_in.canonical_name or "").strip()
@@ -3836,7 +4106,7 @@ async def confirm_receipt_scan(
             incoming_unit = _normalize_unit(item_in.unit)
 
             existing = (
-                db.table("inventory_items")
+                db.table(truth_write_table)
                 .select("*")
                 .eq("user_id", user_id)
                 .eq("canonical_name", canonical)
@@ -3875,7 +4145,15 @@ async def confirm_receipt_scan(
                     update_payload.update({"quantity": merged_qty, "unit": merged_unit})
                     if confidence_f is not None:
                         update_payload["scan_confidence"] = confidence_f
-                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    _dual_write_inventory(
+                        db,
+                        "update",
+                        update_payload,
+                        where={"id": existing_item["id"]},
+                        user_id=user_id,
+                        correlation_id=request.receipt_id,
+                        endpoint="POST /api/scanning/scan-receipt/finalize",
+                    )
                     updated_count += 1
                 elif UnitConverter.can_convert(incoming_unit, existing_unit):
                     converted = UnitConverter.convert(incoming_qty_f, incoming_unit, existing_unit)
@@ -3884,10 +4162,20 @@ async def confirm_receipt_scan(
                     update_payload.update({"quantity": merged_qty, "unit": merged_unit})
                     if confidence_f is not None:
                         update_payload["scan_confidence"] = confidence_f
-                    db.table("inventory_items").update(update_payload).eq("id", existing_item["id"]).execute()
+                    _dual_write_inventory(
+                        db,
+                        "update",
+                        update_payload,
+                        where={"id": existing_item["id"]},
+                        user_id=user_id,
+                        correlation_id=request.receipt_id,
+                        endpoint="POST /api/scanning/scan-receipt/finalize",
+                    )
                     updated_count += 1
                 else:
-                    db.table("inventory_items").insert(
+                    _dual_write_inventory(
+                        db,
+                        "insert",
                         {
                             "user_id": user_id,
                             "canonical_name": canonical,
@@ -3901,11 +4189,16 @@ async def confirm_receipt_scan(
                             "is_current": True,
                             "last_seen_at": now_iso,
                             "last_seen_receipt_id": request.receipt_id,
-                        }
-                    ).execute()
+                        },
+                        user_id=user_id,
+                        correlation_id=request.receipt_id,
+                        endpoint="POST /api/scanning/scan-receipt/finalize",
+                    )
                     added_count += 1
             else:
-                db.table("inventory_items").insert(
+                _dual_write_inventory(
+                    db,
+                    "insert",
                     {
                         "user_id": user_id,
                         "canonical_name": canonical,
@@ -3919,8 +4212,11 @@ async def confirm_receipt_scan(
                         "is_current": True,
                         "last_seen_at": now_iso,
                         "last_seen_receipt_id": request.receipt_id,
-                    }
-                ).execute()
+                    },
+                    user_id=user_id,
+                    correlation_id=request.receipt_id,
+                    endpoint="POST /api/scanning/scan-receipt/finalize",
+                )
                 added_count += 1
 
             pantry_items.append(
@@ -4015,6 +4311,7 @@ async def get_scan_history(
 
 @router.get("/pantry")
 async def get_user_pantry(
+    background_tasks: BackgroundTasks,
     include_inactive: bool = False,
     maybe_days: int = 7,
     stale_days: int = 30,
@@ -4025,19 +4322,24 @@ async def get_user_pantry(
     
     Returns list of confirmed ingredients with expiry tracking
     """
+    t0 = time.perf_counter()
     try:
         db = get_db_client()
 
         now = datetime.now(timezone.utc)
 
-        # Canonical inventory is inventory_items; expose a backward-compatible pantry shape.
+        # Single-read contract with explicit phased flip-read gates.
+        read_table = inventory_truth_read_table_for_user(user_id)
+
         items = (
-            db.table("inventory_items")
+            db.table(read_table)
             .select("*")
             .eq("user_id", user_id)
             .order("updated_at", desc=True)
             .execute()
         )
+        v1_total_count = len(items.data or [])
+        v1_qty_sum = 0.0
         pantry = []
         for item in items.data or []:
             if not isinstance(item, dict):
@@ -4063,11 +4365,50 @@ async def get_user_pantry(
                 }
             )
 
-        return {"success": True, "pantry": pantry, "total_items": len(pantry)}
+            try:
+                v1_qty_sum += float(item.get("quantity") or 0.0)
+            except Exception:
+                pass
+
+        v1_visible_count = len(pantry)
+
+        if v2_shadow_read_enabled() and background_tasks is not None:
+            corr = None
+            try:
+                # Prefer scan/session correlation if available later; fall back to a generated id.
+                corr = str(uuid4())
+            except Exception:
+                corr = None
+            background_tasks.add_task(
+                _shadow_compare_pantry_v2,
+                user_id=user_id,
+                include_inactive=include_inactive,
+                maybe_days=maybe_days,
+                stale_days=stale_days,
+                v1_visible_count=v1_visible_count,
+                v1_total_count=v1_total_count,
+                v1_qty_sum=v1_qty_sum,
+                correlation_id=corr,
+            )
+
+        return {"success": True, "pantry": pantry, "total_items": v1_visible_count}
         
     except Exception as e:
         logger.error(f"Failed to get pantry: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get pantry: {str(e)}")
+
+    finally:
+        # Best-effort latency telemetry (for regression dashboards/alerts).
+        try:
+            ms = int((time.perf_counter() - t0) * 1000)
+            emit_event(
+                event_type="api.latency",
+                event_ts=datetime.now(timezone.utc).isoformat(),
+                user_id=user_id,
+                payload={"endpoint": "GET /api/scanning/pantry", "ms": ms},
+            )
+        except Exception:
+            pass
 
 
 @router.post("/pantry/weekly-cleanup", response_model=PantryCleanupResponse)
@@ -4089,11 +4430,13 @@ async def pantry_weekly_cleanup(
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(days=stale_days)).isoformat()
 
+        primary_table = inventory_truth_write_table()
+
         # Best-effort bulk update. Some rows may lack last_seen_at; handle those via a second pass.
         marked = 0
         try:
             res1 = (
-                db.table("inventory_items")
+                db.table(primary_table)
                 .update({"is_current": False})
                 .eq("user_id", user_id)
                 .eq("item_state", "raw")
@@ -4106,9 +4449,35 @@ async def pantry_weekly_cleanup(
         except Exception as e:
             logger.warning(f"Pantry cleanup bulk pass (last_seen_at) failed: {e}")
 
+        if dual_write_enabled() and primary_table == "inventory_items":
+            try:
+                (
+                    db.table("inventory_items_v2")
+                    .update({"is_current": False})
+                    .eq("user_id", user_id)
+                    .eq("item_state", "raw")
+                    .in_("source", ["scan", "receipt"])
+                    .eq("is_current", True)
+                    .lt("last_seen_at", cutoff)
+                    .execute()
+                )
+            except Exception as e:
+                try:
+                    emit_migration_incident(
+                        user_id=user_id,
+                        correlation_id=str(uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="update",
+                        v2_target="public.inventory_items_v2",
+                        error=str(e),
+                        payload={"endpoint": "POST /api/scanning/pantry/weekly-cleanup", "phase": "last_seen_at"},
+                    )
+                except Exception:
+                    pass
+
         try:
             res2 = (
-                db.table("inventory_items")
+                db.table(primary_table)
                 .update({"is_current": False})
                 .eq("user_id", user_id)
                 .eq("item_state", "raw")
@@ -4121,6 +4490,33 @@ async def pantry_weekly_cleanup(
             marked += len(res2.data or [])
         except Exception as e:
             logger.warning(f"Pantry cleanup bulk pass (updated_at) failed: {e}")
+
+        if dual_write_enabled() and primary_table == "inventory_items":
+            try:
+                (
+                    db.table("inventory_items_v2")
+                    .update({"is_current": False})
+                    .eq("user_id", user_id)
+                    .eq("item_state", "raw")
+                    .in_("source", ["scan", "receipt"])
+                    .eq("is_current", True)
+                    .is_("last_seen_at", "null")
+                    .lt("updated_at", cutoff)
+                    .execute()
+                )
+            except Exception as e:
+                try:
+                    emit_migration_incident(
+                        user_id=user_id,
+                        correlation_id=str(uuid4()),
+                        incident_type="v2_write_failed",
+                        operation="update",
+                        v2_target="public.inventory_items_v2",
+                        error=str(e),
+                        payload={"endpoint": "POST /api/scanning/pantry/weekly-cleanup", "phase": "updated_at"},
+                    )
+                except Exception:
+                    pass
 
         return PantryCleanupResponse(
             success=True,
@@ -4152,8 +4548,10 @@ async def pantry_summary(
         db = get_db_client()
         now = datetime.now(timezone.utc)
 
+        read_table = inventory_truth_read_table_for_user(user_id)
+
         items = (
-            db.table("inventory_items")
+            db.table(read_table)
             .select("id, canonical_name, display_name, quantity, unit, storage_location, item_state, source, is_current, last_seen_at, updated_at")
             .eq("user_id", user_id)
             .eq("item_state", "raw")
@@ -4288,14 +4686,32 @@ async def remove_from_pantry(
         normalizer = get_normalizer()
         canonical_name = normalizer.normalize_name(ingredient_name)
         
-        # Canonical inventory is inventory_items; delete matching items.
+        # Soft-deactivate matching items (do not hard delete).
+        primary_table = inventory_truth_write_table()
+        update = {
+            "is_current": False,
+            "pantry_status": "consumed",
+            "last_status_changed_at": datetime.utcnow().isoformat(),
+        }
         result = (
-            db.table("inventory_items")
-            .delete()
+            db.table(primary_table)
+            .update(update)
             .eq("user_id", user_id)
             .eq("canonical_name", canonical_name)
             .execute()
         )
+
+        if dual_write_enabled() and primary_table == "inventory_items":
+            try:
+                (
+                    db.table("inventory_items_v2")
+                    .update(update)
+                    .eq("user_id", user_id)
+                    .eq("canonical_name", canonical_name)
+                    .execute()
+                )
+            except Exception:
+                pass
         
         if not result.data:
             raise HTTPException(status_code=404, detail="Ingredient not found in pantry")
@@ -4359,8 +4775,9 @@ async def add_manual_ingredient(
                 )
         
         # Check if ingredient already exists in canonical inventory
+        truth_write_table = inventory_truth_write_table()
         existing = (
-            db.table("inventory_items")
+            db.table(truth_write_table)
             .select("*")
             .eq("user_id", user_id)
             .eq("canonical_name", canonical_name)
@@ -4387,7 +4804,9 @@ async def add_manual_ingredient(
                 logger.warning(f"Cannot convert {incoming_unit} to {old_unit} for {canonical_name}")
                 new_qty = old_qty
 
-            db.table("inventory_items").update(
+            _dual_write_inventory(
+                db,
+                "update",
                 {
                     "quantity": new_qty,
                     "unit": old_unit,
@@ -4395,8 +4814,11 @@ async def add_manual_ingredient(
                     "source": "manual",
                     "scan_confidence": 1.0,
                     "notes": request.notes,
-                }
-            ).eq("id", old_item["id"]).execute()
+                },
+                where={"id": old_item["id"]},
+                user_id=user_id,
+                endpoint="POST /api/scanning/manual-add",
+            )
             
             return {
                 "success": True,
@@ -4409,7 +4831,9 @@ async def add_manual_ingredient(
                 "message": f"Updated {canonical_name} quantity to {new_qty} {old_unit}"
             }
         else:
-            result = db.table("inventory_items").insert(
+            result = _dual_write_inventory(
+                db,
+                "insert",
                 {
                     "user_id": user_id,
                     "canonical_name": canonical_name,
@@ -4421,8 +4845,10 @@ async def add_manual_ingredient(
                     "source": "manual",
                     "scan_confidence": 1.0,
                     "notes": request.notes,
-                }
-            ).execute()
+                },
+                user_id=user_id,
+                endpoint="POST /api/scanning/manual-add",
+            )
             
             return {
                 "success": True,
@@ -4555,9 +4981,10 @@ async def check_recipe_sufficiency(
 
         # Get user's canonical inventory (inventory_items)
         # Prefer current items when the schema supports it.
+        read_table = inventory_truth_read_table_for_user(user_id)
         try:
             pantry = (
-                db.table("inventory_items")
+                db.table(read_table)
                 .select("canonical_name, quantity, unit")
                 .eq("user_id", user_id)
                 .eq("item_state", "raw")
@@ -4567,7 +4994,7 @@ async def check_recipe_sufficiency(
             )
         except Exception:
             pantry = (
-                db.table("inventory_items")
+                db.table(read_table)
                 .select("canonical_name, quantity, unit")
                 .eq("user_id", user_id)
                 .eq("item_state", "raw")
