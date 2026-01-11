@@ -1240,7 +1240,14 @@ async def create_meal_plan(
         raise HTTPException(status_code=400, detail="No valid attempts found")
 
     shopping_list = _combine_missing_ingredients(missing_lists)
-    selected = req.selected_attempt_id or str(recipes_blob[0].get("attempt_id"))
+    selected_attempt_id = req.selected_attempt_id or str(recipes_blob[0].get("attempt_id"))
+    selected_recipe_id = None
+    for rb in recipes_blob:
+        if str(rb.get("attempt_id")) == str(selected_attempt_id):
+            selected_recipe_id = str(rb.get("recipe_id"))
+            break
+    if not selected_recipe_id:
+        selected_recipe_id = str(recipes_blob[0].get("recipe_id"))
 
     try:
         insert_row = {
@@ -1251,7 +1258,7 @@ async def create_meal_plan(
             "selected_cuisine": req.selected_cuisine,
             "servings": int(req.servings),
             "recipes": recipes_blob,
-            "selected_recipe_id": str(selected),
+            "selected_recipe_id": str(selected_recipe_id),
             "status": "planned",
             "shopping_list": [m.model_dump() for m in shopping_list],
         }
