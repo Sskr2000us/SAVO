@@ -2784,6 +2784,7 @@ async def confirm_ingredients(
                 # Resolve taxonomy for consistent inventory classification.
                 inv_category: Optional[str] = None
                 inv_subcategory: Optional[str] = None
+                inv_cuisine: Optional[str] = None
                 try:
                     inv_category, inv_subcategory = _resolve_inventory_taxonomy(
                         db,
@@ -2792,6 +2793,33 @@ async def confirm_ingredients(
                     )
                 except Exception:
                     inv_category, inv_subcategory = None, None
+
+                # Fallback: some scan paths attach taxonomy hints to detected_ingredients.metadata.
+                # Normalize to our inventory taxonomy keys (lower snake-ish strings).
+                try:
+                    if (not inv_category) or (not inv_subcategory) or (not inv_cuisine):
+                        md = detected_item.get("metadata")
+                        if isinstance(md, dict):
+                            def _norm(s: Any) -> Optional[str]:
+                                if s is None:
+                                    return None
+                                txt = str(s).strip().lower()
+                                if not txt:
+                                    return None
+                                txt = txt.replace(" ", "_")
+                                txt = txt.replace("-", "_")
+                                while "__" in txt:
+                                    txt = txt.replace("__", "_")
+                                return txt
+
+                            if not inv_category:
+                                inv_category = _norm(md.get("category"))
+                            if not inv_subcategory:
+                                inv_subcategory = _norm(md.get("subcategory"))
+                            if not inv_cuisine:
+                                inv_cuisine = _norm(md.get("cuisine"))
+                except Exception:
+                    pass
 
                 # Telemetry: pantry.item_corrected (modified items only)
                 if action == "modified":
@@ -3029,6 +3057,7 @@ async def confirm_ingredients(
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
                             **({"category": inv_category} if inv_category else {}),
                             **({"subcategory": inv_subcategory} if inv_subcategory else {}),
+                            **({"cuisine": inv_cuisine} if inv_cuisine else {}),
                             "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
@@ -3069,6 +3098,7 @@ async def confirm_ingredients(
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
                             **({"category": inv_category} if inv_category else {}),
                             **({"subcategory": inv_subcategory} if inv_subcategory else {}),
+                            **({"cuisine": inv_cuisine} if inv_cuisine else {}),
                             "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
@@ -3106,6 +3136,7 @@ async def confirm_ingredients(
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
                             **({"category": inv_category} if inv_category else {}),
                             **({"subcategory": inv_subcategory} if inv_subcategory else {}),
+                            **({"cuisine": inv_cuisine} if inv_cuisine else {}),
                             **({"session_id": scan_session_id} if scan_session_id else {}),
                             **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
                             "image_source": "scan",
@@ -3147,6 +3178,7 @@ async def confirm_ingredients(
                         **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
                         **({"category": inv_category} if inv_category else {}),
                         **({"subcategory": inv_subcategory} if inv_subcategory else {}),
+                        **({"cuisine": inv_cuisine} if inv_cuisine else {}),
                         **({"model_version": model_version} if model_version else {}),
                         **({"model_provider": model_provider} if model_provider else {}),
                         "pantry_status": "active",

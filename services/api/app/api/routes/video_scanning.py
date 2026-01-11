@@ -29,6 +29,37 @@ router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
 _ALLOWED_SCAN_TYPES = {"pantry", "fridge", "counter", "shopping", "other"}
 
 
+def _normalize_confidence(raw: Any) -> float:
+    """Normalize confidence to a float in [0, 1].
+
+    Handles numbers, numeric strings, and percentages.
+    """
+    try:
+        if raw is None:
+            return 0.0
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return 0.0
+            if s.endswith("%"):
+                v = float(s[:-1].strip()) / 100.0
+            else:
+                v = float(s)
+        else:
+            v = float(raw)
+
+        # Some callers may return 0-100 instead of 0-1.
+        if v > 1.0 and v <= 100.0:
+            v = v / 100.0
+        if v < 0.0:
+            v = 0.0
+        if v > 1.0:
+            v = 1.0
+        return v
+    except Exception:
+        return 0.0
+
+
 def _normalize_scan_type(value: Optional[str]) -> str:
     s = (value or "").strip().lower()
     return s if s in _ALLOWED_SCAN_TYPES else "pantry"
@@ -450,6 +481,31 @@ async def _process_video_scan(
             except Exception:
                 thumbnail_url = None
 
+            raw_conf = None
+            if isinstance(detection, dict):
+                raw_conf = (
+                    detection.get("confidence")
+                    if detection.get("confidence") is not None
+                    else (detection.get("confidence_score") if detection.get("confidence_score") is not None else detection.get("score"))
+                )
+            confidence = _normalize_confidence(raw_conf)
+
+            # Carry forward best-effort taxonomy hints into metadata so confirm-save can
+            # populate inventory fields even when master taxonomy is missing.
+            md: Dict[str, Any] = {}
+            if isinstance(detection, dict):
+                for k in ("category", "subcategory", "cuisine", "item_form"):
+                    v = detection.get(k)
+                    if isinstance(v, str) and v.strip():
+                        md[k] = v.strip()
+
+            # Model audit (best-effort).
+            try:
+                md["model_provider"] = "openai"
+                md["model_version"] = getattr(vision_client, "model", None)
+            except Exception:
+                pass
+
             db.table("detected_ingredients").insert(
                 {
                     "id": detected_id,
@@ -457,7 +513,7 @@ async def _process_video_scan(
                     "user_id": user_id,
                     "detected_name": detection.get("detected_name"),
                     "canonical_name": detection.get("canonical_name"),
-                    "confidence": float(detection.get("confidence", 0) or 0),
+                    "confidence": confidence,
                     "detected_quantity": detection.get("quantity"),
                     "detected_unit": detection.get("unit"),
                     "quantity_confidence": detection.get("quantity_confidence"),
@@ -465,7 +521,9 @@ async def _process_video_scan(
                     "visual_similarity_group": detection.get("visual_similarity_group"),
                     "confirmation_status": "pending",
                     "thumbnail_url": thumbnail_url,
-                    "full_image_url": None,
+                    # Fallback for inventory reference images when bbox crops aren't available.
+                    "full_image_url": representative_image_ref,
+                    **({"metadata": md} if md else {}),
                 }
             ).execute()
 
