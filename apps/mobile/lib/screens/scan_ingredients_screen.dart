@@ -45,6 +45,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
   String? _videoProcessingText;
   double? _videoProgressValue;
+  bool _loadingIsVideo = false;
 
   Future<Map<String, dynamic>> _pollVideoScanStatus(String scanId) async {
     final apiClient = Provider.of<ApiClient>(context, listen: false);
@@ -330,6 +331,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
     setState(() {
       _loading = true;
+      _loadingIsVideo = true;
       _candidates = [];
       _image = null;
       _scanId = null;
@@ -352,7 +354,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         ),
       );
       if (res == null) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _loadingIsVideo = false;
+          _videoProcessingText = null;
+          _videoProgressValue = null;
+        });
         return;
       }
 
@@ -384,7 +391,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       if (!success) {
         final msg = response['detail']?.toString() ?? response['error']?.toString() ?? 'Video scan failed';
         _showError(msg);
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _loadingIsVideo = false;
+          _videoProcessingText = null;
+          _videoProgressValue = null;
+        });
         return;
       }
 
@@ -434,6 +446,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         _deltaSummary = null;
         _loading = false;
 
+        _loadingIsVideo = false;
+
         _videoProcessingText = null;
         _videoProgressValue = null;
 
@@ -448,6 +462,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       _showError(e.toString());
       setState(() {
         _loading = false;
+        _loadingIsVideo = false;
         _videoProcessingText = null;
         _videoProgressValue = null;
       });
@@ -462,13 +477,46 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     }
     if (_candidates.isEmpty) return;
 
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _loadingIsVideo = false;
+      _videoProcessingText = 'Preparing to save…';
+      _videoProgressValue = null;
+    });
 
     try {
-      final confirmations = <Map<String, dynamic>>[];
-      for (final c in _candidates) {
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+
+      final pending = _candidates.where((c) => !c.processed && c.selected).toList();
+      if (pending.isEmpty) {
+        setState(() {
+          _loading = false;
+          _videoProcessingText = null;
+          _videoProgressValue = null;
+        });
+        _showError('No pending items to save.');
+        return;
+      }
+
+      final total = pending.length;
+      var savedSoFar = 0;
+
+      for (final c in pending) {
         final detectedId = c.detectedId.trim();
-        if (detectedId.isEmpty) continue;
+        if (detectedId.isEmpty) {
+          setState(() {
+            c.processed = true;
+            _skippedCount += 1;
+          });
+          continue;
+        }
+
+        if (mounted) {
+          setState(() {
+            _videoProcessingText = 'Saving ${savedSoFar + 1}/$total…';
+            _videoProgressValue = total <= 0 ? null : (savedSoFar / total).clamp(0.0, 1.0);
+          });
+        }
 
         final name = c.ingredientController.text.trim();
         final parsed = _parseQtyUnit(c.quantityController.text);
@@ -511,47 +559,40 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           }
         }
 
-        confirmations.add(conf);
+        await apiClient.post('/api/scanning/confirm-ingredients', {
+          'scan_id': _scanId,
+          'confirmations': [conf],
+        });
+
+        if (!mounted) return;
+
+        setState(() {
+          c.processed = true;
+          _savedCount += 1;
+        });
+
+        savedSoFar += 1;
       }
-
-      if (confirmations.isEmpty) {
-        setState(() => _loading = false);
-        _showError('No detections to save.');
-        return;
-      }
-
-      final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final res = await apiClient.post('/api/scanning/confirm-ingredients', {
-        'scan_id': _scanId,
-        'confirmations': confirmations,
-      });
-
-      if (!mounted) return;
-
-      final msg = res['message']?.toString();
 
       setState(() {
-        for (final c in _candidates) {
-          c.processed = true;
-        }
-        _savedCount = confirmations.length;
-        _skippedCount = 0;
         _loading = false;
+        _videoProcessingText = null;
+        _videoProgressValue = null;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            (msg != null && msg.trim().isNotEmpty) ? msg.trim() : 'Saved ${confirmations.length} items to inventory',
-          ),
-        ),
+        SnackBar(content: Text('Saved $savedSoFar/$total items to inventory')),
       );
 
-      Navigator.pop(context, true);
+      Navigator.pop(context, savedSoFar > 0);
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _videoProcessingText = null;
+        _videoProgressValue = null;
+      });
     }
   }
 
@@ -722,6 +763,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     setState(() {
       _loading = true;
       _currentIndex = pendingIndex;
+
+      _loadingIsVideo = false;
+      final total = _candidates.length;
+      final done = (_savedCount + _skippedCount).clamp(0, total);
+      _videoProcessingText = save ? 'Saving ${done + 1}/$total…' : 'Skipping ${done + 1}/$total…';
+      _videoProgressValue = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
     });
 
     try {
@@ -794,21 +841,18 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         } else {
           _skippedCount += 1;
         }
-      });
 
-      // If the user chose Save, jump back to Inventory immediately.
-      // InventoryScreen already reloads when this screen returns `true`.
-      if (save && name.isNotEmpty) {
-        Navigator.pop(context, true);
-        return;
-      }
+        _loading = false;
+        _videoProcessingText = null;
+        _videoProgressValue = null;
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             (msg != null && msg.trim().isNotEmpty)
                 ? msg.trim()
-                : (save ? 'Saved to inventory' : 'Skipped item'),
+                : (save ? 'Saved' : 'Rejected'),
           ),
         ),
       );
@@ -820,13 +864,16 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       setState(() {
-        _loading = false;
         _currentIndex = next;
       });
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _videoProcessingText = null;
+        _videoProgressValue = null;
+      });
     }
   }
 
@@ -1080,7 +1127,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _loading ? null : () => _confirmCurrentAndAdvance(save: false),
-                      child: const Text('Skip'),
+                      child: const Text('Reject'),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1089,7 +1136,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                       onPressed: (_loading || (_quantityNeedsConfirmation(current) && !current.quantityConfirmed))
                           ? null
                           : () => _confirmCurrentAndAdvance(save: true),
-                      child: const Text('Save to inventory'),
+                      child: const Text('Save & next'),
                     ),
                   ),
                 ],
@@ -1175,19 +1222,21 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
             ),
             const SizedBox(height: 16),
             if (_loading) LinearProgressIndicator(value: _videoProgressValue),
-            if (_loading && !hasResults) ...[
+            if (_loading) ...[
               const SizedBox(height: 12),
               Text(
-                (_videoProcessingText ?? 'AI is analyzing…'),
+                (_videoProcessingText ?? 'Working…'),
                 style: Theme.of(context).textTheme.titleSmall,
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 6),
-              Text(
-                'Keep this screen open while processing. This can take a minute. For the best speed and clarity, photos (Guided Scan) are usually faster than video.',
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
+              if (_loadingIsVideo) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Keep this screen open while processing. This can take a minute. For the best speed and clarity, photos (Guided Scan) are usually faster than video.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ],
             const SizedBox(height: 16),
             Expanded(
