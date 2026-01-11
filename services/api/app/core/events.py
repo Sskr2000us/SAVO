@@ -4,8 +4,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import os
 
-from app.core.database import get_db_client
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -33,6 +31,10 @@ def emit_event(
     Never raises (telemetry must not break core flows).
     """
     try:
+        # Lazy import to avoid circular imports at app startup:
+        # database -> migration_telemetry -> events -> database
+        from app.core.database import get_db_client
+
         db = get_db_client()
         tax_ver = taxonomy_version
         if tax_ver is None:
@@ -81,6 +83,7 @@ def emit_events(events: list[dict[str, Any]]) -> None:
     try:
         if not events:
             return
+        from app.core.database import get_db_client
         db = get_db_client()
         db.table("event_log").insert(events).execute()
     except Exception:
