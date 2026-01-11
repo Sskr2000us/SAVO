@@ -13,7 +13,8 @@ Notes:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4, uuid5
 
@@ -294,10 +295,43 @@ def _compact_family_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
 def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> List[Dict[str, Any]]:
     """Provide richer pantry context to the LLM (quantities/expiry) without huge tokens."""
 
-    normalizer = get_normalizer()
-    out: List[Dict[str, Any]] = []
+    def _parse_iso_date(value: Any) -> Optional[date]:
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        try:
+            # Common Supabase/Postgres formats: YYYY-MM-DD or ISO datetime.
+            return date.fromisoformat(s[:10])
+        except Exception:
+            return None
+
+    def _parse_quantity_num(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        s = str(value).strip()
+        if not s:
+            return None
+        m = re.search(r"[-+]?\d*\.?\d+", s)
+        if not m:
+            return None
+        try:
+            return float(m.group(0))
+        except Exception:
+            return None
+
     if not isinstance(pantry, list):
-        return out
+        return []
+
+    normalizer = get_normalizer()
+    today = date.today()
+    rows_with_keys: List[Tuple[Tuple[int, float, str], Dict[str, Any]]] = []
 
     for it in pantry:
         if not isinstance(it, dict):
@@ -315,6 +349,10 @@ def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> Li
         exp = it.get("expiry_date") or it.get("expiry")
         loc = it.get("location") or it.get("location_hint")
 
+        exp_d = _parse_iso_date(exp)
+        exp_days = (exp_d - today).days if exp_d else 10**9
+        qty_num = _parse_quantity_num(qty) or 0.0
+
         row: Dict[str, Any] = {
             "canonical_name": canon,
             "ingredient_id": _stable_ingredient_uuid(canon),
@@ -328,11 +366,11 @@ def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> Li
         if loc is not None and str(loc).strip() != "":
             row["location"] = str(loc).strip()
 
-        out.append(row)
-        if len(out) >= int(limit):
-            break
+        # Ranking: soonest expiry first; higher quantity first; stable by name.
+        rows_with_keys.append(((exp_days, -qty_num, canon), row))
 
-    return out
+    rows_with_keys.sort(key=lambda t: t[0])
+    return [row for _, row in rows_with_keys[: int(limit)]]
 
 
 def _pantry_coverage(*, pantry_names: List[str], ingredient_names: List[str]) -> Tuple[float, List[str]]:
