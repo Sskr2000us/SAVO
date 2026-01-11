@@ -292,7 +292,13 @@ def _compact_family_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> List[Dict[str, Any]]:
+def _extract_pantry_context(
+    pantry: List[Dict[str, Any]],
+    limit: int = 80,
+    *,
+    prefer_expiring_items: bool = False,
+    expiring_names: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """Provide richer pantry context to the LLM (quantities/expiry) without huge tokens."""
 
     def _parse_iso_date(value: Any) -> Optional[date]:
@@ -331,6 +337,7 @@ def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> Li
 
     normalizer = get_normalizer()
     today = date.today()
+    expiring_set = set(expiring_names or [])
     rows_with_keys: List[Tuple[Tuple[int, float, str], Dict[str, Any]]] = []
 
     for it in pantry:
@@ -367,7 +374,8 @@ def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> Li
             row["location"] = str(loc).strip()
 
         # Ranking: soonest expiry first; higher quantity first; stable by name.
-        rows_with_keys.append(((exp_days, -qty_num, canon), row))
+        expiring_bucket = 0 if (prefer_expiring_items and canon in expiring_set) else 1
+        rows_with_keys.append(((expiring_bucket, exp_days, -qty_num, canon), row))
 
     rows_with_keys.sort(key=lambda t: t[0])
     return [row for _, row in rows_with_keys[: int(limit)]]
@@ -801,7 +809,11 @@ async def generate_recipe(
         missing_id_to_name = _ingredient_id_map(missing_candidates)
 
         family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
-        pantry_context = _extract_pantry_context(pantry if isinstance(pantry, list) else [])
+        pantry_context = _extract_pantry_context(
+            pantry if isinstance(pantry, list) else [],
+            prefer_expiring_items=bool(constraints.use_expiring_items),
+            expiring_names=expiring,
+        )
         safety_constraints_text = {
             "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
             "religious": build_religious_constraints(profile if isinstance(profile, dict) else {}),
