@@ -204,7 +204,7 @@ class ApiClient {
     try {
       streamed = await request.send().timeout(
         Duration(seconds: timeoutSeconds),
-        onTimeout: () => throw const TimeoutException('multipart timeout'),
+        onTimeout: () => throw TimeoutException('multipart timeout'),
       );
     } on TimeoutException {
       throw Exception('Upload is taking too long. Please try again on a faster connection.');
