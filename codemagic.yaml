@@ -23,6 +23,10 @@ workflows:
           cd apps/mobile
           flutter --version
           flutter pub get
+      - name: Dart analyze (scan screen only)
+        script: |
+          cd apps/mobile
+          dart analyze lib/screens/scan_ingredients_screen.dart
       - name: Sanity check source snapshot
         script: |
           cd apps/mobile
@@ -88,6 +92,11 @@ workflows:
           cd apps/mobile
           flutter --version
           flutter pub get
+
+      - name: Dart analyze (scan screen only)
+        script: |
+          cd apps/mobile
+          dart analyze lib/screens/scan_ingredients_screen.dart
 
       - name: Sanity check source snapshot
         script: |
