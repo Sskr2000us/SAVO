@@ -40,8 +40,34 @@ class IngredientNormalizer:
             "description": "Liquid cooking oils"
         },
         "beans_legumes": {
-            "ingredients": ["black_beans", "pinto_beans", "kidney_beans", "chickpeas", "lentils"],
+            "ingredients": [
+                "black_beans",
+                "pinto_beans",
+                "kidney_beans",
+                "chickpeas",
+                "lentils",
+                "black_eyed_peas",
+                "mung_beans",
+                "split_peas",
+            ],
             "description": "Dried or canned legumes"
+        },
+        "indian_dals_pulses": {
+            "ingredients": [
+                "toor_dal",
+                "moong_dal",
+                "masoor_dal",
+                "urad_dal",
+                "chana_dal",
+                "kabuli_chana",
+                "kala_chana",
+                "rajma",
+                "black_eyed_peas",
+                "mung_beans",
+                "lentils",
+                "chickpeas",
+            ],
+            "description": "Indian dals/legumes that are commonly confused visually"
         },
         "cheese_blocks": {
             "ingredients": ["cheddar", "mozzarella", "monterey_jack", "swiss", "provolone"],
@@ -82,6 +108,27 @@ class IngredientNormalizer:
         "cilantro": "coriander_leaves",
         "coriander": "coriander_leaves",
         "fresh cilantro": "coriander_leaves",
+
+        # Indian dals / pulses (common spellings)
+        "toor dal": "toor_dal",
+        "tur dal": "toor_dal",
+        "tuvar dal": "toor_dal",
+        "arhar dal": "toor_dal",
+        "moong dal": "moong_dal",
+        "mung dal": "moong_dal",
+        "green gram": "mung_beans",
+        "masoor dal": "masoor_dal",
+        "red lentils": "masoor_dal",
+        "urad dal": "urad_dal",
+        "black gram": "urad_dal",
+        "chana dal": "chana_dal",
+        "split chickpeas": "chana_dal",
+        "kabuli chana": "kabuli_chana",
+        "garbanzo": "chickpeas",
+        "kala chana": "kala_chana",
+        "desi chickpeas": "kala_chana",
+        "rajma": "rajma",
+        "kidney beans": "kidney_beans",
         
         # Tomato variations
         "roma tomato": "tomato",

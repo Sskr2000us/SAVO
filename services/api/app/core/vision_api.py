@@ -10,6 +10,7 @@ from decimal import Decimal
 import json
 import logging
 from io import BytesIO
+import asyncio
 
 from openai import AsyncOpenAI
 from PIL import Image
@@ -26,6 +27,14 @@ class VisionAPIClient:
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         # Allow overriding to support auditability and controlled rollouts.
         self.model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+
+        # Optional second-pass disambiguation for high-confusion ingredients.
+        # Defaults are intentionally conservative to avoid large latency/cost regressions.
+        self.doublecheck_enabled = os.getenv("OPENAI_DOUBLECHECK_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        self.doublecheck_model = os.getenv("OPENAI_DOUBLECHECK_MODEL", "gpt-4o-mini")
+        self.doublecheck_max_items = int(os.getenv("OPENAI_DOUBLECHECK_MAX_ITEMS", "2"))
+        self.doublecheck_conf_threshold = Decimal(os.getenv("OPENAI_DOUBLECHECK_CONFIDENCE_THRESHOLD", "0.65"))
+        self.doublecheck_timeout_ms = int(os.getenv("OPENAI_DOUBLECHECK_TIMEOUT_MS", "2500"))
         
         # Confidence thresholds
         self.HIGH_CONFIDENCE = Decimal("0.80")
@@ -123,8 +132,21 @@ class VisionAPIClient:
             
             # Calculate confidence scores and close alternatives
             ingredients = []
+            doublecheck_attempted = 0
+            doublecheck_changed = 0
+
             for item in detected_data.get("ingredients", []):
                 ingredient = self._enrich_detection(item, user_preferences)
+
+                # Optional disambiguation pass for high-confusion, low-confidence items.
+                if self._should_double_check(ingredient) and doublecheck_attempted < self.doublecheck_max_items:
+                    doublecheck_attempted += 1
+                    updated = await self._double_check_ingredient(image_data, ingredient, user_preferences)
+                    if updated and isinstance(updated, dict):
+                        if updated.get("canonical_name") and updated.get("canonical_name") != ingredient.get("canonical_name"):
+                            doublecheck_changed += 1
+                        ingredient = updated
+
                 ingredients.append(ingredient)
             
             processing_time = int((time.time() - start_time) * 1000)
@@ -139,7 +161,9 @@ class VisionAPIClient:
                     "total_detected": len(ingredients),
                     "high_confidence_count": sum(1 for i in ingredients if i["confidence"] >= self.HIGH_CONFIDENCE),
                     "medium_confidence_count": sum(1 for i in ingredients if self.MEDIUM_CONFIDENCE <= i["confidence"] < self.HIGH_CONFIDENCE),
-                    "low_confidence_count": sum(1 for i in ingredients if i["confidence"] < self.MEDIUM_CONFIDENCE)
+                    "low_confidence_count": sum(1 for i in ingredients if i["confidence"] < self.MEDIUM_CONFIDENCE),
+                    "doublecheck_attempted": doublecheck_attempted,
+                    "doublecheck_changed": doublecheck_changed,
                 }
             }
             
@@ -150,6 +174,200 @@ class VisionAPIClient:
                 "error": str(e),
                 "ingredients": []
             }
+
+    def _should_double_check(self, enriched_item: Dict) -> bool:
+        """Gate the second-pass disambiguation to reduce cost/latency."""
+        if not self.doublecheck_enabled:
+            return False
+        if not isinstance(enriched_item, dict):
+            return False
+
+        confidence = enriched_item.get("confidence")
+        try:
+            confidence_val = Decimal(str(confidence))
+        except Exception:
+            confidence_val = Decimal("0")
+
+        # Only for low-ish confidence.
+        if confidence_val >= self.doublecheck_conf_threshold:
+            return False
+
+        canonical = (enriched_item.get("canonical_name") or "").strip().lower()
+        category = (enriched_item.get("category") or "").strip().lower()
+        similarity_group = (enriched_item.get("visual_similarity_group") or "").strip().lower()
+
+        # Target known high-confusion families where a second look helps.
+        keyword_hits = any(k in canonical for k in ("dal", "lentil", "bean", "chickpea", "rajma", "chana", "urad", "moong", "toor", "masoor"))
+        group_hits = similarity_group in {"beans_legumes", "indian_dals_pulses"}
+        category_hits = category in {"grain", "spice", "protein"}
+
+        return bool(canonical) and (keyword_hits or group_hits or category_hits)
+
+    def _double_check_candidate_set(self, enriched_item: Dict, user_preferences: Optional[Dict]) -> List[str]:
+        """Build a small candidate set for disambiguation."""
+        from .ingredient_normalization import IngredientNormalizer
+
+        normalizer = IngredientNormalizer()
+
+        canonical = (enriched_item.get("canonical_name") or "").strip()
+        detected_name = (enriched_item.get("detected_name") or "").strip()
+        similarity_group = (enriched_item.get("visual_similarity_group") or "").strip().lower()
+
+        candidates: List[str] = []
+        for n in (canonical, detected_name):
+            if n and n not in candidates:
+                candidates.append(n)
+
+        # Include any model-provided alternatives.
+        for alt in (enriched_item.get("close_alternatives") or []):
+            if not isinstance(alt, dict):
+                continue
+            name = (alt.get("name") or "").strip()
+            if name and name not in candidates:
+                candidates.append(name)
+
+        # For low-confidence items, generate additional close ingredients.
+        if canonical:
+            for alt in normalizer.get_close_ingredients(canonical, user_preferences=user_preferences, limit=8):
+                name = (alt.get("name") or "").strip()
+                if name and name not in candidates:
+                    candidates.append(name)
+
+        # Ensure dal/pulse candidates exist even if normalizer doesn't know the name.
+        if similarity_group in {"beans_legumes", "indian_dals_pulses"} or any("dal" in c for c in candidates):
+            dal_family = [
+                "toor_dal",
+                "moong_dal",
+                "masoor_dal",
+                "urad_dal",
+                "chana_dal",
+                "kabuli_chana",
+                "kala_chana",
+                "rajma",
+                "chickpeas",
+                "lentils",
+                "kidney_beans",
+                "black_eyed_peas",
+                "mung_beans",
+            ]
+            for n in dal_family:
+                if n not in candidates:
+                    candidates.append(n)
+
+        # Keep prompt small.
+        return candidates[:12]
+
+    def _build_double_check_prompt(self, enriched_item: Dict, candidates: List[str]) -> str:
+        detected_name = (enriched_item.get("detected_name") or "").strip()
+        category = (enriched_item.get("category") or "other").strip()
+        confidence = enriched_item.get("confidence")
+        reason = (enriched_item.get("reason") or "").strip()
+
+        candidates_text = ", ".join(candidates)
+
+        return f"""You are double-checking a single ingredient classification from a pantry/fridge photo.
+
+We already detected: "{detected_name}" (category={category}, confidence={confidence}).
+Why: {reason}
+
+TASK:
+- Look at the image and pick the BEST match from the candidate list.
+- If none match, pick the closest candidate.
+- Be extra careful with visually-similar pulses/dals/beans/spices.
+
+CANDIDATES: {candidates_text}
+
+Return JSON ONLY:
+{{
+  "best_name": "one_of_candidates",
+  "best_confidence": 0.0,
+  "note": "short reason"
+}}
+"""
+
+    async def _double_check_ingredient(self, image_data: bytes, enriched_item: Dict, user_preferences: Optional[Dict]) -> Optional[Dict]:
+        """Second-pass disambiguation for a single item. Best-effort; never raises."""
+        try:
+            candidates = self._double_check_candidate_set(enriched_item, user_preferences)
+            if not candidates:
+                return None
+
+            prompt = self._build_double_check_prompt(enriched_item, candidates)
+            base64_image = base64.b64encode(image_data).decode("utf-8")
+
+            async def _call() -> Dict:
+                resp = await self.client.chat.completions.create(
+                    model=self.doublecheck_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}",
+                                        "detail": "high",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=220,
+                    temperature=0.0,
+                )
+                content = resp.choices[0].message.content
+                parsed = self._parse_detection_response(content)
+                return parsed if isinstance(parsed, dict) else {}
+
+            parsed = await asyncio.wait_for(_call(), timeout=max(0.5, self.doublecheck_timeout_ms / 1000))
+
+            best_name = (parsed.get("best_name") or "").strip()
+            best_conf = parsed.get("best_confidence")
+
+            if not best_name or best_name not in candidates:
+                return None
+
+            try:
+                best_conf_val = Decimal(str(best_conf))
+            except Exception:
+                best_conf_val = Decimal("0")
+
+            # Only accept changes that are at least as confident as our existing score.
+            try:
+                current_conf = Decimal(str(enriched_item.get("confidence")))
+            except Exception:
+                current_conf = Decimal("0")
+
+            if best_conf_val < current_conf:
+                return None
+
+            # Map back into the normal enrich structure.
+            updated = dict(enriched_item)
+            updated["detected_name"] = best_name.replace("_", " ") if "_" in best_name else best_name
+
+            from .ingredient_normalization import IngredientNormalizer
+
+            normalizer = IngredientNormalizer()
+            updated["canonical_name"] = normalizer.normalize_name(best_name)
+            updated["confidence"] = best_conf_val
+
+            note = (parsed.get("note") or "").strip()
+            if note:
+                updated["reason"] = (updated.get("reason") or "").strip()
+                updated["reason"] = (updated["reason"] + " | " if updated["reason"] else "") + f"double-check: {note}"
+
+            updated["double_check"] = {
+                "attempted": True,
+                "candidates": candidates,
+                "selected": best_name,
+                "model": self.doublecheck_model,
+            }
+
+            return updated
+        except Exception:
+            return None
 
     async def analyze_receipt(
         self,
@@ -735,6 +953,13 @@ Return ONLY the JSON object, no other text."""
             
             # Enrich with additional data
             ingredient = self._enrich_detection(detected, user_preferences)
+
+            # Optional disambiguation for high-confusion items (single-item mode).
+            # Keep this extremely conservative because this endpoint can be called in quick succession.
+            if self._should_double_check(ingredient):
+                updated = await self._double_check_ingredient(image_data, ingredient, user_preferences)
+                if updated and isinstance(updated, dict):
+                    ingredient = updated
             
             processing_time = int((time.time() - start_time) * 1000)
             
@@ -745,7 +970,8 @@ Return ONLY the JSON object, no other text."""
                     "image_hash": image_hash,
                     "image_size": image_size,
                     "processing_time_ms": processing_time,
-                    "model": "gpt-4o-mini"
+                    "model": "gpt-4o-mini",
+                    "doublecheck_attempted": 1 if bool(ingredient and isinstance(ingredient, dict) and ingredient.get("double_check", {}).get("attempted")) else 0,
                 }
             }
             
