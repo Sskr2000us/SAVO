@@ -256,7 +256,7 @@ class _VideoCaptureScreenState extends State<VideoCaptureScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
-                        color: cs.surface.withValues(alpha: 0.85),
+                        color: cs.surface.withOpacity(0.85),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
@@ -270,7 +270,7 @@ class _VideoCaptureScreenState extends State<VideoCaptureScreen> {
                     if (_recording)
                       LinearProgressIndicator(
                         value: progress,
-                        backgroundColor: cs.surface.withValues(alpha: 0.6),
+                        backgroundColor: cs.surface.withOpacity(0.6),
                         valueColor: AlwaysStoppedAnimation<Color>(cs.primary),
                       ),
                     if (_recording)
