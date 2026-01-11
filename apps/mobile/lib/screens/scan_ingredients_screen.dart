@@ -43,6 +43,25 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _skippedCount = 0;
   bool _autoVideoStarted = false;
 
+  Future<Map<String, dynamic>> _pollVideoScanStatus(String scanId) async {
+    final apiClient = Provider.of<ApiClient>(context, listen: false);
+    final deadline = DateTime.now().add(const Duration(minutes: 6));
+
+    while (DateTime.now().isBefore(deadline)) {
+      final res = await apiClient.get('/api/scanning/video/status/$scanId');
+      if (res is Map) {
+        final map = res.cast<String, dynamic>();
+        final status = map['status']?.toString() ?? 'processing';
+        if (status == 'completed' || status == 'failed') {
+          return map;
+        }
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+
+    throw Exception('Video scan is taking too long. Please try again.');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -311,6 +330,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         'scan_type': 'pantry',
         'max_frames': '20',
         'duration_seconds': durationSeconds.toString(),
+        'async_mode': 'true',
         if (_barcode != null && _barcode!.trim().isNotEmpty) 'barcode': _barcode!.trim(),
         if (_barcodeNameHint != null && _barcodeNameHint!.trim().isNotEmpty) 'barcode_name_hint': _barcodeNameHint!.trim(),
         if (_barcodeQuantityHint != null && _barcodeQuantityHint! > 0) 'barcode_quantity_hint': _barcodeQuantityHint!.toString(),
@@ -322,7 +342,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         file: video,
         fieldName: 'video',
         fields: fields,
-        timeoutSeconds: 180,
+        timeoutSeconds: 600,
       );
 
       if (!mounted) return;
@@ -336,7 +356,23 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       final scanId = response['scan_id']?.toString();
-      final items = response['detections'];
+      dynamic items = response['detections'];
+
+      // New async flow: /video/analyze returns quickly with scan_id; poll for detections.
+      if ((items == null || (items is List && items.isEmpty)) && scanId != null && scanId.trim().isNotEmpty) {
+        final status = await _pollVideoScanStatus(scanId.trim());
+        final st = status['status']?.toString();
+        if (st == 'failed') {
+          String msg = 'Video scan failed';
+          final meta = status['metadata'];
+          if (meta is Map) {
+            final err = meta['error']?.toString();
+            if (err != null && err.trim().isNotEmpty) msg = err.trim();
+          }
+          throw Exception(msg);
+        }
+        items = status['detections'];
+      }
       final parsed = <_Candidate>[];
       if (items is List) {
         for (final item in items) {

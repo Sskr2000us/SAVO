@@ -1,10 +1,14 @@
-"""
-Video scanning support for batch ingredient detection
-Processes video files frame-by-frame for comprehensive pantry scanning
+"""Video scanning support for batch ingredient detection.
+
+Note:
+- Video scanning can be slow (multiple frames + model calls) and will exceed
+    typical mobile/proxy HTTP timeouts.
+- This router supports async processing: upload returns quickly with a scan_id,
+    then the client polls `/api/scanning/video/status/{scan_id}`.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 from uuid import uuid4
 from datetime import datetime, timedelta
 import logging
@@ -278,6 +282,220 @@ async def deduplicate_detections(
     return deduplicated
 
 
+async def _process_video_scan(
+    *,
+    scan_id: str,
+    user_id: str,
+    video_data: bytes,
+    scan_type: str,
+    location_hint: Optional[str],
+    max_frames: int,
+    duration_seconds: Optional[int],
+    video_filename: Optional[str],
+    video_size_mb: float,
+    barcode: Optional[str],
+    barcode_name_hint: Optional[str],
+    barcode_quantity_hint: Optional[float],
+    barcode_unit_hint: Optional[str],
+    barcode_ref: Optional[str],
+    barcode_product: Optional[Dict],
+) -> None:
+    """Long-running analysis task.
+
+    Never raises; writes failure to ingredient_scans.status.
+    """
+    try:
+        from app.core.database import get_db_client
+        from app.core.vision_api import get_vision_client
+
+        db = get_db_client()
+
+        fps = 1.0
+        try:
+            if duration_seconds and duration_seconds > 0:
+                fps = max(0.2, min(1.0, float(max_frames) / float(duration_seconds)))
+        except Exception:
+            fps = 1.0
+
+        frames = await extract_frames_from_video(video_data, max_frames=max_frames, fps=fps)
+        if not frames:
+            raise ValueError("No frames could be extracted from video")
+
+        representative_frame = frames[0]
+        representative_image_ref = None
+        try:
+            representative_image_ref = upload_inventory_image(
+                user_id=user_id,
+                content=representative_frame,
+                content_type="image/jpeg",
+                asset_type="video_frame",
+                source="video_scanning",
+                expires_at=(datetime.utcnow() + timedelta(days=7)).isoformat(),
+                links={"scan_id": scan_id},
+                metadata={"kind": "representative_video_frame"},
+            )
+        except Exception:
+            representative_image_ref = None
+
+        # Update scan metadata with frame counts and representative image.
+        try:
+            db.table("ingredient_scans").update(
+                {
+                    "image_url": representative_image_ref,
+                    "image_metadata": {
+                        "source": "video_scan",
+                        "duration_seconds": duration_seconds,
+                        "video_filename": video_filename,
+                        "video_size_mb": video_size_mb,
+                        "frames_extracted": len(frames),
+                        "frames_total": len(frames),
+                        "frames_done": 0,
+                        "fps": fps,
+                        "representative_frame_image_url": representative_image_ref,
+                        "barcode": (barcode or "").strip() or None,
+                        "barcode_name_hint": (barcode_name_hint or "").strip() or None,
+                        "barcode_quantity_hint": barcode_quantity_hint,
+                        "barcode_unit_hint": (barcode_unit_hint or "").strip() or None,
+                        "barcode_product": barcode_product,
+                        "barcode_image_url": barcode_ref,
+                        "started_processing_at": datetime.utcnow().isoformat(),
+                    },
+                }
+            ).eq("id", scan_id).eq("user_id", user_id).execute()
+        except Exception:
+            pass
+
+        vision_client = get_vision_client()
+        all_detections: List[Dict[str, Any]] = []
+
+        profile = None
+        try:
+            profile = await get_full_profile(user_id)
+        except Exception:
+            profile = None
+
+        sem = asyncio.Semaphore(3)
+
+        async def _analyze_one(idx: int, frame_data: bytes) -> List[Dict[str, Any]]:
+            async with sem:
+                try:
+                    result = await vision_client.analyze_image(
+                        image_data=frame_data,
+                        scan_type=scan_type,
+                        location_hint=location_hint,
+                        user_preferences=profile,
+                    )
+                    if result.get("success") and result.get("ingredients"):
+                        return list(result["ingredients"])
+                except Exception as e:
+                    logger.error(f"Frame {idx + 1} analysis failed: {e}")
+                return []
+
+        tasks = [_analyze_one(i, fr) for i, fr in enumerate(frames)]
+        done = 0
+        for coro in asyncio.as_completed(tasks):
+            res = await coro
+            if res:
+                all_detections.extend(res)
+            done += 1
+            try:
+                db.table("ingredient_scans").update(
+                    {
+                        "image_metadata": {
+                            "source": "video_scan",
+                            "duration_seconds": duration_seconds,
+                            "video_filename": video_filename,
+                            "video_size_mb": video_size_mb,
+                            "frames_extracted": len(frames),
+                            "frames_total": len(frames),
+                            "frames_done": done,
+                            "fps": fps,
+                            "representative_frame_image_url": representative_image_ref,
+                            "barcode": (barcode or "").strip() or None,
+                            "barcode_name_hint": (barcode_name_hint or "").strip() or None,
+                            "barcode_quantity_hint": barcode_quantity_hint,
+                            "barcode_unit_hint": (barcode_unit_hint or "").strip() or None,
+                            "barcode_product": barcode_product,
+                            "barcode_image_url": barcode_ref,
+                        }
+                    }
+                ).eq("id", scan_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
+
+        if not all_detections:
+            raise ValueError("No ingredients detected in video")
+
+        unique_detections = await deduplicate_detections(all_detections)
+
+        for detection in unique_detections:
+            detected_id = str(uuid4())
+
+            thumbnail_url = None
+            try:
+                if representative_frame and isinstance(detection, dict) and detection.get("bbox"):
+                    cropped = _safe_crop_by_bbox(representative_frame, detection.get("bbox"))
+                    if cropped:
+                        expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+                        thumbnail_url = upload_inventory_image(
+                            user_id=user_id,
+                            content=cropped,
+                            content_type="image/jpeg",
+                            asset_type="crop",
+                            source="video_scanning",
+                            expires_at=expires_at,
+                            links={"scan_id": scan_id, "detected_id": detected_id},
+                            metadata={"kind": "video_frame_crop"},
+                        )
+            except Exception:
+                thumbnail_url = None
+
+            db.table("detected_ingredients").insert(
+                {
+                    "id": detected_id,
+                    "scan_id": scan_id,
+                    "user_id": user_id,
+                    "detected_name": detection.get("detected_name"),
+                    "canonical_name": detection.get("canonical_name"),
+                    "confidence": float(detection.get("confidence", 0) or 0),
+                    "detected_quantity": detection.get("quantity"),
+                    "detected_unit": detection.get("unit"),
+                    "quantity_confidence": detection.get("quantity_confidence"),
+                    "close_alternatives": detection.get("close_alternatives", []),
+                    "visual_similarity_group": detection.get("visual_similarity_group"),
+                    "confirmation_status": "pending",
+                    "thumbnail_url": thumbnail_url,
+                    "full_image_url": None,
+                }
+            ).execute()
+
+        db.table("ingredient_scans").update(
+            {
+                "status": "completed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "total_detections": len(unique_detections),
+            }
+        ).eq("id", scan_id).eq("user_id", user_id).execute()
+
+    except Exception as e:
+        try:
+            from app.core.database import get_db_client
+
+            db = get_db_client()
+            db.table("ingredient_scans").update(
+                {
+                    "status": "failed",
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "image_metadata": {
+                        "source": "video_scan",
+                        "error": str(e)[:500],
+                    },
+                }
+            ).eq("id", scan_id).eq("user_id", user_id).execute()
+        except Exception:
+            pass
+
+
 # ============================================================================
 # Video Upload Endpoint
 # ============================================================================
@@ -289,6 +507,7 @@ async def analyze_video(
     location_hint: Optional[str] = Form(None),
     max_frames: int = Form(10),
     duration_seconds: Optional[int] = Form(None),
+    async_mode: bool = Form(True),
     barcode: Optional[str] = Form(None),
     barcode_name_hint: Optional[str] = Form(None),
     barcode_quantity_hint: Optional[float] = Form(None),
@@ -318,7 +537,6 @@ async def analyze_video(
     """
     try:
         from app.core.database import get_db_client
-        from app.core.vision_api import get_vision_client
 
         user_id = (user or {}).get("id")
         if not user_id:
@@ -352,38 +570,12 @@ async def analyze_video(
         
         logger.info(f"Processing video: {video.filename}, size: {video_size_mb:.1f}MB")
         
-        # Extract frames
-        frames = await extract_frames_from_video(video_data, max_frames=max_frames)
-        
-        if not frames:
-            raise HTTPException(
-                status_code=400,
-                detail="No frames could be extracted from video"
-            )
-        
         # Create database entry for video scan
         db = get_db_client()
         scan_id = str(uuid4())
 
-        # Privacy: do NOT persist full frames long-term.
-        representative_frame = frames[0] if frames else None
+        # Representative frame is extracted + uploaded by the background worker.
         representative_image_ref = None
-
-        # Save a representative still frame for UX/audit.
-        try:
-            if representative_frame:
-                representative_image_ref = upload_inventory_image(
-                    user_id=user_id,
-                    content=representative_frame,
-                    content_type="image/jpeg",
-                    asset_type="video_frame",
-                    source="video_scanning",
-                    expires_at=(datetime.utcnow() + timedelta(days=7)).isoformat(),
-                    links={"scan_id": scan_id},
-                    metadata={"kind": "representative_video_frame"},
-                )
-        except Exception:
-            representative_image_ref = None
 
         barcode_ref = None
         barcode_product = None
@@ -408,7 +600,9 @@ async def analyze_video(
                 "duration_seconds": duration_seconds,
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
-                "frames_extracted": len(frames),
+                "frames_extracted": 0,
+                "frames_total": None,
+                "frames_done": 0,
                 "representative_frame_image_url": representative_image_ref,
                 "barcode": (barcode or "").strip() or None,
                 "barcode_name_hint": (barcode_name_hint or "").strip() or None,
@@ -418,16 +612,60 @@ async def analyze_video(
                 "barcode_image_url": barcode_ref,
             },
         }).execute()
-        
-        # Analyze each frame
-        vision_client = get_vision_client()
-        all_detections = []
 
-        profile = None
-        try:
-            profile = await get_full_profile(user_id)
-        except Exception:
-            profile = None
+        if async_mode:
+            asyncio.create_task(
+                _process_video_scan(
+                    scan_id=scan_id,
+                    user_id=user_id,
+                    video_data=video_data,
+                    scan_type=scan_type,
+                    location_hint=location_hint,
+                    max_frames=max_frames,
+                    duration_seconds=duration_seconds,
+                    video_filename=video.filename,
+                    video_size_mb=video_size_mb,
+                    barcode=barcode,
+                    barcode_name_hint=barcode_name_hint,
+                    barcode_quantity_hint=barcode_quantity_hint,
+                    barcode_unit_hint=barcode_unit_hint,
+                    barcode_ref=barcode_ref,
+                    barcode_product=barcode_product,
+                )
+            )
+            return {
+                "success": True,
+                "scan_id": scan_id,
+                "status": "processing",
+                "message": "Video uploaded. Processing started.",
+                "next_step": "Poll /api/scanning/video/status/{scan_id} until completed",
+            }
+
+        # Sync fallback: wait for processing and return detections via status.
+        await _process_video_scan(
+            scan_id=scan_id,
+            user_id=user_id,
+            video_data=video_data,
+            scan_type=scan_type,
+            location_hint=location_hint,
+            max_frames=max_frames,
+            duration_seconds=duration_seconds,
+            video_filename=video.filename,
+            video_size_mb=video_size_mb,
+            barcode=barcode,
+            barcode_name_hint=barcode_name_hint,
+            barcode_quantity_hint=barcode_quantity_hint,
+            barcode_unit_hint=barcode_unit_hint,
+            barcode_ref=barcode_ref,
+            barcode_product=barcode_product,
+        )
+
+        # Return completed payload by reusing status endpoint logic.
+        return {
+            "success": True,
+            "scan_id": scan_id,
+            "status": "completed",
+        }
         
         for idx, frame_data in enumerate(frames):
             logger.info(f"Analyzing frame {idx + 1}/{len(frames)}")
@@ -552,7 +790,7 @@ async def get_video_scan_status(
         if not scan.data:
             raise HTTPException(status_code=404, detail="Scan not found")
         
-        return {
+        payload = {
             "scan_id": scan_id,
             "status": scan.data["status"],
             "scan_type": scan.data["scan_type"],
@@ -561,6 +799,43 @@ async def get_video_scan_status(
             "total_detections": scan.data.get("total_detections", 0),
             "metadata": scan.data.get("image_metadata", {})
         }
+
+        if scan.data.get("status") == "completed":
+            det = (
+                db.table("detected_ingredients")
+                .select("*")
+                .eq("scan_id", scan_id)
+                .eq("user_id", user_id)
+                .order("confidence", desc=True)
+                .limit(200)
+                .execute()
+            ).data or []
+
+            # Map DB column names to the client JSON contract used by ScanIngredientsScreen.
+            mapped: List[Dict[str, Any]] = []
+            for r in det:
+                if not isinstance(r, dict):
+                    continue
+                mapped.append(
+                    {
+                        "id": r.get("id"),
+                        "detected_name": r.get("detected_name"),
+                        "canonical_name": r.get("canonical_name"),
+                        "confidence": r.get("confidence"),
+                        "quantity": r.get("detected_quantity"),
+                        "unit": r.get("detected_unit"),
+                        "quantity_confidence": r.get("quantity_confidence"),
+                        "quantity_source": r.get("quantity_source"),
+                        "item_form": r.get("item_form"),
+                        "change_status": r.get("change_status"),
+                        "previous_quantity": r.get("previous_quantity"),
+                        "previous_unit": r.get("previous_unit"),
+                        "thumbnail_url": r.get("thumbnail_url"),
+                    }
+                )
+            payload["detections"] = mapped
+
+        return payload
         
     except HTTPException:
         raise

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -101,7 +102,9 @@ class ApiClient {
       ? 240
       : endpoint.contains('/plan/')
         ? 180
-        : 30;
+        : endpoint.contains('/recipes/generate')
+          ? 120
+          : 30;
     
     try {
       final response = await http.post(
@@ -197,10 +200,22 @@ class ApiClient {
       ),
     );
 
-    final streamed = await request.send().timeout(
-      Duration(seconds: timeoutSeconds),
-      onTimeout: () => throw Exception('Request timed out. Please try again.'),
-    );
+    http.StreamedResponse streamed;
+    try {
+      streamed = await request.send().timeout(
+        Duration(seconds: timeoutSeconds),
+        onTimeout: () => throw const TimeoutException('multipart timeout'),
+      );
+    } on TimeoutException {
+      throw Exception('Upload is taking too long. Please try again on a faster connection.');
+    } on http.ClientException catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('bad file descriptor')) {
+        throw Exception('Upload failed. Please try again.');
+      }
+      rethrow;
+    }
+
     final response = await http.Response.fromStream(streamed);
 
     if (response.statusCode == 200 || response.statusCode == 201) {

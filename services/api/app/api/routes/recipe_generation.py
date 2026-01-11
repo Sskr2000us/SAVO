@@ -14,6 +14,7 @@ Notes:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import asyncio
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4, uuid5
@@ -36,6 +37,11 @@ from app.core.llm_utils import generate_json_with_retries
 
 
 router = APIRouter()
+
+
+# Hard time budget for constrained generation. If exceeded, we fail closed to the
+# deterministic assembled recipe (existing fallback behavior).
+_GENERATION_BUDGET_SECONDS = 25
 
 
 _UUID_NAMESPACE = uuid5(UUID("00000000-0000-0000-0000-000000000000"), "savo-ingredient")
@@ -962,27 +968,30 @@ async def generate_recipe(
         }
 
         try:
-            generated = await generate_json_with_retries(
-                client=client,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are SAVO's constrained recipe generator. "
-                            "You MUST follow the locked constraints exactly. "
-                            "You must not invent constraints. "
-                            "You MUST respect family_profile + safety_constraints. "
-                            "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
-                            "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
-                            "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
-                            "Return JSON only that matches the schema." 
-                        ),
-                    },
-                    {"role": "user", "content": str(prompt)},
-                ],
-                schema=schema,
-                max_attempts=2,
-                repair_hint="constrained recipe json",
+            generated = await asyncio.wait_for(
+                generate_json_with_retries(
+                    client=client,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are SAVO's constrained recipe generator. "
+                                "You MUST follow the locked constraints exactly. "
+                                "You must not invent constraints. "
+                                "You MUST respect family_profile + safety_constraints. "
+                                "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
+                                "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
+                                "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
+                                "Return JSON only that matches the schema." 
+                            ),
+                        },
+                        {"role": "user", "content": str(prompt)},
+                    ],
+                    schema=schema,
+                    max_attempts=2,
+                    repair_hint="constrained recipe json",
+                ),
+                timeout=_GENERATION_BUDGET_SECONDS,
             )
 
             # Normalize fields and validate
