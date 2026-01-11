@@ -4,7 +4,7 @@ Processes video files frame-by-frame for comprehensive pantry scanning
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from uuid import uuid4
 from datetime import datetime, timedelta
 import logging
@@ -20,6 +20,59 @@ from app.api.routes.profile import get_full_profile
 
 
 router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
+
+
+_ALLOWED_SCAN_TYPES = {"pantry", "fridge", "counter", "shopping", "other"}
+
+
+def _normalize_scan_type(value: Optional[str]) -> str:
+    s = (value or "").strip().lower()
+    return s if s in _ALLOWED_SCAN_TYPES else "pantry"
+
+
+async def _try_fetch_barcode_image(user_id: str, barcode: str) -> Tuple[Optional[str], Optional[Dict]]:
+    """Best-effort: look up barcode image on OpenFoodFacts, download, store in Supabase Storage.
+
+    Returns (stored_ref, product_metadata)
+    """
+    code = (barcode or "").strip()
+    if not code:
+        return None, None
+
+    try:
+        from app.integrations.openfoodfacts import get_openfoodfacts_client
+        import httpx
+
+        off = get_openfoodfacts_client()
+        product = await off.lookup_barcode(code)
+        if not product or not product.get("image_url"):
+            return None, product
+
+        image_url = str(product.get("image_url") or "").strip()
+        if not image_url:
+            return None, product
+
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            res = await client.get(image_url)
+        if res.status_code != 200:
+            return None, product
+
+        content_type = (res.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if content_type not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
+            # Still upload; storage helper will default to .jpg, but mark original ct.
+            content_type = content_type or "image/jpeg"
+
+        stored_ref = upload_inventory_image(
+            user_id=user_id,
+            content=res.content,
+            content_type=content_type,
+            asset_type="barcode",
+            source="openfoodfacts",
+            metadata={"barcode": code, "image_url": image_url},
+        )
+        return stored_ref, product
+    except Exception:
+        return None, None
 
 
 def _safe_crop_by_bbox(image_data: bytes, bbox: Optional[Dict]) -> Optional[bytes]:
@@ -235,6 +288,11 @@ async def analyze_video(
     scan_type: str = Form("pantry"),
     location_hint: Optional[str] = Form(None),
     max_frames: int = Form(10),
+    duration_seconds: Optional[int] = Form(None),
+    barcode: Optional[str] = Form(None),
+    barcode_name_hint: Optional[str] = Form(None),
+    barcode_quantity_hint: Optional[float] = Form(None),
+    barcode_unit_hint: Optional[str] = Form(None),
     user: dict = Depends(get_current_user),
 ):
     """
@@ -273,8 +331,14 @@ async def analyze_video(
                 detail=f"Invalid file type: {video.content_type}. Must be a video file."
             )
         
+        scan_type = _normalize_scan_type(scan_type)
+
         # Limit max frames
         max_frames = min(max(1, max_frames), 20)
+
+        if duration_seconds is not None:
+            duration_seconds = int(duration_seconds)
+            duration_seconds = min(max(1, duration_seconds), 60)
         
         # Read video data
         video_data = await video.read()
@@ -303,7 +367,31 @@ async def analyze_video(
 
         # Privacy: do NOT persist full frames long-term.
         representative_frame = frames[0] if frames else None
-        representative_image_url = None
+        representative_image_ref = None
+
+        # Save a representative still frame for UX/audit.
+        try:
+            if representative_frame:
+                representative_image_ref = upload_inventory_image(
+                    user_id=user_id,
+                    content=representative_frame,
+                    content_type="image/jpeg",
+                    asset_type="video_frame",
+                    source="video_scanning",
+                    expires_at=(datetime.utcnow() + timedelta(days=7)).isoformat(),
+                    links={"scan_id": scan_id},
+                    metadata={"kind": "representative_video_frame"},
+                )
+        except Exception:
+            representative_image_ref = None
+
+        barcode_ref = None
+        barcode_product = None
+        try:
+            if barcode and barcode.strip():
+                barcode_ref, barcode_product = await _try_fetch_barcode_image(user_id, barcode)
+        except Exception:
+            barcode_ref, barcode_product = None, None
         
         # NOTE: ingredient_scans schema defines image_metadata (not metadata).
         # Also, scan_type has a CHECK constraint and must be one of: pantry|fridge|counter|shopping|other.
@@ -313,14 +401,21 @@ async def analyze_video(
             "scan_type": scan_type,
             "location_hint": location_hint,
             "status": "processing",
-            "image_url": None,
+            "image_url": representative_image_ref,
             "created_at": datetime.utcnow().isoformat(),
             "image_metadata": {
                 "source": "video_scan",
+                "duration_seconds": duration_seconds,
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
                 "frames_extracted": len(frames),
-                "representative_frame_image_url": None,
+                "representative_frame_image_url": representative_image_ref,
+                "barcode": (barcode or "").strip() or None,
+                "barcode_name_hint": (barcode_name_hint or "").strip() or None,
+                "barcode_quantity_hint": barcode_quantity_hint,
+                "barcode_unit_hint": (barcode_unit_hint or "").strip() or None,
+                "barcode_product": barcode_product,
+                "barcode_image_url": barcode_ref,
             },
         }).execute()
         
@@ -464,7 +559,7 @@ async def get_video_scan_status(
             "created_at": scan.data["created_at"],
             "completed_at": scan.data.get("completed_at"),
             "total_detections": scan.data.get("total_detections", 0),
-            "metadata": scan.data.get("metadata", {})
+            "metadata": scan.data.get("image_metadata", {})
         }
         
     except HTTPException:

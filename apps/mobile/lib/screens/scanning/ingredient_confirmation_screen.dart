@@ -751,14 +751,11 @@ class _IngredientConfirmationScreenState
                         size: 18,
                       ),
                       label: Text(isConfirmed || isModified ? 'Confirmed' : 'Confirm'),
-                      onPressed: () => _handleConfirm(detectedId, canonicalName),
+                      onPressed: (needsQuantityConfirm && !quantityConfirmed)
+                          ? null
+                          : () => _handleConfirm(detectedId, canonicalName),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: isConfirmed || isModified ? Colors.green : Colors.black87,
-                        side: BorderSide(
-                          onPressed: (needsQuantityConfirm && !quantityConfirmed)
-                              ? null
-                              : () => _handleConfirm(detectedId, canonicalName),
-                        ),
                       ),
                     ),
                   ),

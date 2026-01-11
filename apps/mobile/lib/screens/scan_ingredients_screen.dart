@@ -9,6 +9,7 @@ import '../services/barcode_lookup_service.dart';
 import '../services/metrics_service.dart';
 import 'scanning/guided_scan_screen.dart';
 import 'scanning/barcode_scan_screen.dart';
+import 'scanning/video_capture_screen.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
   const ScanIngredientsScreen({super.key, this.autoStartVideoScan = false});
@@ -293,23 +294,34 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
 
-      final video = await _picker.pickVideo(
-        source: ImageSource.camera,
-        maxDuration: const Duration(seconds: 30),
+      final res = await Navigator.of(context).push<VideoCaptureResult>(
+        MaterialPageRoute(
+          builder: (_) => const VideoCaptureScreen(initialDurationSeconds: 30),
+        ),
       );
-      if (video == null) {
+      if (res == null) {
         setState(() => _loading = false);
         return;
       }
+
+      final video = res.video;
+      final durationSeconds = res.durationSeconds;
+
+      final fields = <String, String>{
+        'scan_type': 'pantry',
+        'max_frames': '20',
+        'duration_seconds': durationSeconds.toString(),
+        if (_barcode != null && _barcode!.trim().isNotEmpty) 'barcode': _barcode!.trim(),
+        if (_barcodeNameHint != null && _barcodeNameHint!.trim().isNotEmpty) 'barcode_name_hint': _barcodeNameHint!.trim(),
+        if (_barcodeQuantityHint != null && _barcodeQuantityHint! > 0) 'barcode_quantity_hint': _barcodeQuantityHint!.toString(),
+        if (_barcodeUnitHint != null && _barcodeUnitHint!.trim().isNotEmpty) 'barcode_unit_hint': _barcodeUnitHint!.trim(),
+      };
 
       final response = await apiClient.postMultipart(
         '/api/scanning/video/analyze',
         file: video,
         fieldName: 'video',
-        fields: const <String, String>{
-          'scan_type': 'pantry',
-          'max_frames': '20',
-        },
+        fields: fields,
         timeoutSeconds: 180,
       );
 
