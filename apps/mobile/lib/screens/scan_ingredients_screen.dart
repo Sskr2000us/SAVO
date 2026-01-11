@@ -43,6 +43,9 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _skippedCount = 0;
   bool _autoVideoStarted = false;
 
+  String? _videoProcessingText;
+  double? _videoProgressValue;
+
   Future<Map<String, dynamic>> _pollVideoScanStatus(String scanId) async {
     final apiClient = Provider.of<ApiClient>(context, listen: false);
     final deadline = DateTime.now().add(const Duration(minutes: 6));
@@ -52,6 +55,31 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       if (res is Map) {
         final map = res.cast<String, dynamic>();
         final status = map['status']?.toString() ?? 'processing';
+
+        final meta = map['metadata'];
+        if (meta is Map) {
+          final md = meta.cast<String, dynamic>();
+          final done = md['frames_done'];
+          final total = md['frames_total'];
+
+          int? doneI;
+          int? totalI;
+          if (done is num) doneI = done.toInt();
+          if (total is num) totalI = total.toInt();
+
+          if (mounted) {
+            setState(() {
+              if (doneI != null && totalI != null && totalI > 0) {
+                _videoProcessingText = 'AI is analyzing your video… ($doneI/$totalI frames)';
+                _videoProgressValue = (doneI / totalI).clamp(0.0, 1.0);
+              } else {
+                _videoProcessingText = 'AI is analyzing your video…';
+                _videoProgressValue = null;
+              }
+            });
+          }
+        }
+
         if (status == 'completed' || status == 'failed') {
           return map;
         }
@@ -59,7 +87,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       await Future<void>.delayed(const Duration(seconds: 2));
     }
 
-    throw Exception('Video scan is taking too long. Please try again.');
+    throw Exception('Analysis is taking longer than expected. Please keep this screen open. Tap “Scan Video” to retry.');
   }
 
   @override
@@ -298,12 +326,17 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   Future<void> _videoScan() async {
     if (_loading) return;
 
+    final messenger = ScaffoldMessenger.of(context);
+
     setState(() {
       _loading = true;
       _candidates = [];
       _image = null;
       _scanId = null;
       _deltaSummary = null;
+
+      _videoProcessingText = 'Uploading video…';
+      _videoProgressValue = null;
 
       _currentIndex = 0;
       _savedCount = 0;
@@ -360,6 +393,12 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       // New async flow: /video/analyze returns quickly with scan_id; poll for detections.
       if ((items == null || (items is List && items.isEmpty)) && scanId != null && scanId.trim().isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _videoProcessingText = 'AI is analyzing your video…';
+            _videoProgressValue = null;
+          });
+        }
         final status = await _pollVideoScanStatus(scanId.trim());
         final st = status['status']?.toString();
         if (st == 'failed') {
@@ -385,10 +424,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       }
 
       final message = response['message']?.toString();
-      if (message != null && message.trim().isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message.trim())),
-        );
+      if (mounted && message != null && message.trim().isNotEmpty) {
+        messenger.showSnackBar(SnackBar(content: Text(message.trim())));
       }
 
       setState(() {
@@ -396,6 +433,9 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         _candidates = parsed;
         _deltaSummary = null;
         _loading = false;
+
+        _videoProcessingText = null;
+        _videoProgressValue = null;
 
         _currentIndex = 0;
         _savedCount = 0;
@@ -406,7 +446,11 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _videoProcessingText = null;
+        _videoProgressValue = null;
+      });
     }
   }
 
@@ -1130,7 +1174,21 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            if (_loading) const LinearProgressIndicator(),
+            if (_loading) LinearProgressIndicator(value: _videoProgressValue),
+            if (_loading && !hasResults) ...[
+              const SizedBox(height: 12),
+              Text(
+                (_videoProcessingText ?? 'AI is analyzing…'),
+                style: Theme.of(context).textTheme.titleSmall,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Keep this screen open while processing. This can take a minute. For the best speed and clarity, photos (Guided Scan) are usually faster than video.',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 16),
             Expanded(
               child: scanContent,

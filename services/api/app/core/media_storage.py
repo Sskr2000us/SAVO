@@ -17,6 +17,7 @@ from app.core.database import get_db_client
 
 
 INVENTORY_IMAGES_BUCKET = os.getenv("SUPABASE_INVENTORY_IMAGES_BUCKET", "inventory-images")
+SCAN_VIDEOS_BUCKET = os.getenv("SUPABASE_SCAN_VIDEOS_BUCKET", "scan-videos")
 
 
 def _ext_for_content_type(content_type: Optional[str]) -> str:
@@ -28,6 +29,21 @@ def _ext_for_content_type(content_type: Optional[str]) -> str:
     if ct == "image/webp":
         return ".webp"
     return ".jpg"
+
+
+def _ext_for_video_content_type(content_type: Optional[str]) -> str:
+    ct = (content_type or "").lower().strip()
+    if ct in {"video/mp4"}:
+        return ".mp4"
+    if ct in {"video/quicktime"}:
+        return ".mov"
+    if ct in {"video/x-msvideo"}:
+        return ".avi"
+    if ct in {"video/x-matroska"}:
+        return ".mkv"
+    if ct in {"video/webm"}:
+        return ".webm"
+    return ".mp4"
 
 
 def build_inventory_image_ref(user_id: str, object_path: str) -> str:
@@ -162,6 +178,79 @@ def upload_inventory_image(
                     md["links"] = extra
                     row["metadata"] = md
             db.table("media_assets").insert(row).execute()
+    except Exception:
+        pass
+
+    return stored_ref
+
+
+def upload_scan_video(
+    *,
+    user_id: str,
+    content: bytes,
+    content_type: Optional[str] = None,
+    asset_type: str = "scan_video",
+    source: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    links: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    filename: Optional[str] = None,
+) -> str:
+    """Upload raw video bytes and return a stable storage reference.
+
+    Returned value is "<bucket>/<path>" (NOT a signed URL).
+    """
+
+    ct = (content_type or "application/octet-stream").strip().lower() or "application/octet-stream"
+    ext = _ext_for_video_content_type(ct)
+    base = uuid.uuid4().hex
+    safe_name = None
+    try:
+        safe_name = (filename or "").strip()
+        safe_name = safe_name.split("/")[-1].split("\\")[-1]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", safe_name)
+        safe_name = safe_name[:80] if safe_name else None
+    except Exception:
+        safe_name = None
+
+    object_name = f"{base}{ext}"
+    if safe_name:
+        object_name = f"{base}_{safe_name}"
+        if not object_name.lower().endswith(ext):
+            object_name = f"{object_name}{ext}"
+
+    object_path = f"{user_id}/{object_name}".lstrip("/")
+    stored_ref = upload_file_to_storage(
+        file_content=content,
+        file_path=object_path,
+        content_type=ct,
+        bucket_name=SCAN_VIDEOS_BUCKET,
+        upsert=False,
+    )
+
+    try:
+        db = get_db_client()
+        row: Dict[str, Any] = {
+            "user_id": user_id,
+            "storage_ref": stored_ref,
+            "media_type": "video",
+            "asset_type": asset_type,
+            "source": source,
+            "content_type": ct,
+            "metadata": metadata or {},
+        }
+        if expires_at:
+            row["expires_at"] = expires_at
+        if isinstance(links, dict):
+            for k in ("scan_id", "detected_id", "observation_id", "inventory_item_id"):
+                if links.get(k):
+                    row[k] = links.get(k)
+            extra = {kk: vv for kk, vv in links.items() if kk not in {"scan_id", "detected_id", "observation_id", "inventory_item_id"}}
+            if extra:
+                md = dict(row.get("metadata") or {})
+                md["links"] = extra
+                row["metadata"] = md
+        db.table("media_assets").insert(row).execute()
     except Exception:
         pass
 

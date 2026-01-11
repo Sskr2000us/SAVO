@@ -122,6 +122,62 @@ def _resolve_master_ingredient_id(db, name: str) -> Optional[str]:
     return None
 
 
+def _resolve_inventory_taxonomy(
+    db,
+    *,
+    canonical_name: str,
+    ingredient_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve (category, subcategory) from master_ingredients.
+
+    Best-effort only; returns (None, None) if the taxonomy cannot be resolved.
+    """
+
+    cid = (canonical_name or "").strip()
+    ing_id = (ingredient_id or "").strip() or None
+
+    def _pick(row: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
+        if not row or not isinstance(row, dict):
+            return None, None
+        cat = row.get("category")
+        sub = row.get("subcategory")
+        cat_s = (str(cat).strip() if cat is not None else "")
+        sub_s = (str(sub).strip() if sub is not None else "")
+        return (cat_s or None), (sub_s or None)
+
+    # 1) Direct by ingredient_id
+    if ing_id:
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory")
+                .eq("id", ing_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return _pick(res.data[0])
+        except Exception:
+            pass
+
+    # 2) Fallback by canonical_name
+    if cid:
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory")
+                .eq("canonical_name", cid)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return _pick(res.data[0])
+        except Exception:
+            pass
+
+    return None, None
+
+
 def _anonymized_item_signature(user_id: str, detected_item: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> str:
     """Return a stable, anonymized signature for an item-like entity.
 
@@ -2725,6 +2781,18 @@ async def confirm_ingredients(
                 except Exception:
                     resolved_ingredient_id = None
 
+                # Resolve taxonomy for consistent inventory classification.
+                inv_category: Optional[str] = None
+                inv_subcategory: Optional[str] = None
+                try:
+                    inv_category, inv_subcategory = _resolve_inventory_taxonomy(
+                        db,
+                        canonical_name=canonical_name,
+                        ingredient_id=resolved_ingredient_id,
+                    )
+                except Exception:
+                    inv_category, inv_subcategory = None, None
+
                 # Telemetry: pantry.item_corrected (modified items only)
                 if action == "modified":
                     try:
@@ -2959,6 +3027,8 @@ async def confirm_ingredients(
                             "source": "scan",
                             "scan_confidence": float(detected_item.get("confidence") or 1.0),
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            **({"category": inv_category} if inv_category else {}),
+                            **({"subcategory": inv_subcategory} if inv_subcategory else {}),
                             "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
@@ -2997,6 +3067,8 @@ async def confirm_ingredients(
                             "source": "scan",
                             "scan_confidence": float(detected_item.get("confidence") or 1.0),
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            **({"category": inv_category} if inv_category else {}),
+                            **({"subcategory": inv_subcategory} if inv_subcategory else {}),
                             "pantry_status": "active",
                             "is_current": True,
                             "last_seen_at": now_iso,
@@ -3032,6 +3104,8 @@ async def confirm_ingredients(
                             "scan_confidence": float(detected_item.get("confidence") or 1.0),
                             "image_url": reference_image_url,
                             **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                            **({"category": inv_category} if inv_category else {}),
+                            **({"subcategory": inv_subcategory} if inv_subcategory else {}),
                             **({"session_id": scan_session_id} if scan_session_id else {}),
                             **({"correlation_id": scan_correlation_id} if scan_correlation_id else {}),
                             "image_source": "scan",
@@ -3071,6 +3145,8 @@ async def confirm_ingredients(
                         "image_source": "scan",
                         "reference_detected_id": detected_id,
                         **({"ingredient_id": resolved_ingredient_id} if resolved_ingredient_id else {}),
+                        **({"category": inv_category} if inv_category else {}),
+                        **({"subcategory": inv_subcategory} if inv_subcategory else {}),
                         **({"model_version": model_version} if model_version else {}),
                         **({"model_provider": model_provider} if model_provider else {}),
                         "pantry_status": "active",

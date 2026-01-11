@@ -19,7 +19,7 @@ from io import BytesIO
 logger = logging.getLogger(__name__)
 
 from app.middleware.auth import get_current_user
-from app.core.media_storage import upload_inventory_image
+from app.core.media_storage import upload_inventory_image, upload_scan_video
 from app.api.routes.profile import get_full_profile
 
 
@@ -589,10 +589,33 @@ async def analyze_video(
             )
         
         logger.info(f"Processing video: {video.filename}, size: {video_size_mb:.1f}MB")
-        
+
         # Create database entry for video scan
         db = get_db_client()
         scan_id = str(uuid4())
+
+        # Persist video to storage so processing can be resumed by a worker.
+        video_ref: Optional[str] = None
+        try:
+            expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+            video_ref = upload_scan_video(
+                user_id=user_id,
+                content=video_data,
+                content_type=video.content_type,
+                asset_type="scan_video",
+                source="video_scanning",
+                expires_at=expires_at,
+                links={"scan_id": scan_id},
+                metadata={
+                    "scan_type": scan_type,
+                    "duration_seconds": duration_seconds,
+                    "video_filename": video.filename,
+                    "video_size_mb": round(video_size_mb, 3),
+                },
+                filename=video.filename,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to upload scan video to storage: {e}")
 
         # Representative frame is extracted + uploaded by the background worker.
         representative_image_ref = None
@@ -620,6 +643,8 @@ async def analyze_video(
                 "duration_seconds": duration_seconds,
                 "video_filename": video.filename,
                 "video_size_mb": video_size_mb,
+                "video_ref": video_ref,
+                "max_frames": max_frames,
                 "frames_extracted": 0,
                 "frames_total": None,
                 "frames_done": 0,
@@ -633,9 +658,39 @@ async def analyze_video(
             },
         }).execute()
 
-        if async_mode:
-            asyncio.create_task(
-                _process_video_scan(
+        # Best-effort: enqueue a durable job record so a worker can resume processing.
+        try:
+            db.table("scan_jobs").insert(
+                {
+                    "scan_id": scan_id,
+                    "user_id": user_id,
+                    "job_type": "video_scan",
+                    "status": "pending",
+                    "attempts": 0,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            ).execute()
+        except Exception:
+            pass
+
+        async def _process_with_job_lock() -> None:
+            # Mark job running (best-effort). This prevents duplicate processing if a worker exists.
+            try:
+                db.table("scan_jobs").update(
+                    {
+                        "status": "running",
+                        "locked_at": datetime.utcnow().isoformat(),
+                        "locked_by": "web",
+                        "attempts": 1,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                ).eq("scan_id", scan_id).eq("job_type", "video_scan").execute()
+            except Exception:
+                pass
+
+            try:
+                await _process_video_scan(
                     scan_id=scan_id,
                     user_id=user_id,
                     video_data=video_data,
@@ -652,7 +707,27 @@ async def analyze_video(
                     barcode_ref=barcode_ref,
                     barcode_product=barcode_product,
                 )
-            )
+                try:
+                    db.table("scan_jobs").update(
+                        {"status": "completed", "updated_at": datetime.utcnow().isoformat()}
+                    ).eq("scan_id", scan_id).eq("job_type", "video_scan").execute()
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    db.table("scan_jobs").update(
+                        {
+                            "status": "failed",
+                            "last_error": str(e)[:500],
+                            "updated_at": datetime.utcnow().isoformat(),
+                        }
+                    ).eq("scan_id", scan_id).eq("job_type", "video_scan").execute()
+                except Exception:
+                    pass
+                raise
+
+        if async_mode:
+            asyncio.create_task(_process_with_job_lock())
             return {
                 "success": True,
                 "scan_id": scan_id,
@@ -662,23 +737,7 @@ async def analyze_video(
             }
 
         # Sync fallback: wait for processing and return detections via status.
-        await _process_video_scan(
-            scan_id=scan_id,
-            user_id=user_id,
-            video_data=video_data,
-            scan_type=scan_type,
-            location_hint=location_hint,
-            max_frames=max_frames,
-            duration_seconds=duration_seconds,
-            video_filename=video.filename,
-            video_size_mb=video_size_mb,
-            barcode=barcode,
-            barcode_name_hint=barcode_name_hint,
-            barcode_quantity_hint=barcode_quantity_hint,
-            barcode_unit_hint=barcode_unit_hint,
-            barcode_ref=barcode_ref,
-            barcode_product=barcode_product,
-        )
+        await _process_with_job_lock()
 
         # Return completed payload by reusing status endpoint logic.
         return {
