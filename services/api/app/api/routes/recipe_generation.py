@@ -124,6 +124,42 @@ class RecipeGenerateResponse(BaseModel):
     trust_signals: TrustSignals
 
 
+class RecipeAttemptRecord(BaseModel):
+    id: str
+    recipe_id: str
+    mode: str
+    reason: str
+    pantry_coverage: float
+    missing_ingredients: List[MissingIngredient] = Field(default_factory=list)
+    saved: bool = False
+    created_at: Optional[str] = None
+    recipe: CanonicalRecipe
+
+
+class RecipeAttemptListResponse(BaseModel):
+    attempts: List[RecipeAttemptRecord]
+
+
+class SaveAttemptResponse(BaseModel):
+    success: bool = True
+
+
+class CreateMealPlanRequest(BaseModel):
+    plan_type: str = Field(description="daily|weekly|party")
+    plan_date: date
+    meal_type: Optional[str] = Field(default=None, description="breakfast|lunch|dinner|snack|any")
+    servings: int = Field(default=4, ge=1, le=20)
+    selected_cuisine: Optional[str] = None
+    attempt_ids: List[str] = Field(default_factory=list, description="List of recipe_attempts.id")
+    selected_attempt_id: Optional[str] = None
+
+
+class CreateMealPlanResponse(BaseModel):
+    success: bool = True
+    plan_id: str
+    shopping_list: List[MissingIngredient] = Field(default_factory=list)
+
+
 class RecipeFeedbackRequest(BaseModel):
     recipe_id: str
     event: str = Field(..., description="recipe.accepted|recipe.modified|recipe.rejected")
@@ -243,6 +279,88 @@ def _find_expiring_items(pantry: List[Dict[str, Any]], within_days: int = 3) -> 
         except Exception:
             continue
     return sorted({x for x in out if x})
+
+
+def _build_image_signals(pantry: List[Dict[str, Any]], limit: int = 40) -> List[Dict[str, Any]]:
+    """Compact, no-raw-image signals to improve recipe realism.
+
+    Avoid sending signed URLs; only send booleans + a few product fields.
+    """
+
+    if not isinstance(pantry, list):
+        return []
+
+    normalizer = get_normalizer()
+    out: List[Dict[str, Any]] = []
+
+    # get_inventory() already orders by updated_at desc; we keep that bias.
+    for it in pantry[: int(limit) * 3]:
+        if not isinstance(it, dict):
+            continue
+
+        nm = (it.get("canonical_name") or it.get("name") or "").strip()
+        if not nm:
+            continue
+
+        canon = normalizer.normalize_name(nm)
+        image_present = bool(it.get("image_url"))
+        barcode_present = bool(it.get("barcode"))
+
+        # Keep prompt lean: only include rows with some signal.
+        if not image_present and not barcode_present:
+            continue
+
+        row: Dict[str, Any] = {
+            "canonical_name": canon,
+            "ingredient_id": _stable_ingredient_uuid(canon),
+            "image_present": image_present,
+            "barcode_present": barcode_present,
+        }
+        if barcode_present:
+            if it.get("product_name"):
+                row["product_name"] = it.get("product_name")
+            if it.get("brand"):
+                row["brand"] = it.get("brand")
+            if it.get("package_size_text"):
+                row["package_size_text"] = it.get("package_size_text")
+        if it.get("updated_at"):
+            row["last_seen_at"] = it.get("updated_at")
+
+        out.append(row)
+        if len(out) >= int(limit):
+            break
+
+    return out
+
+
+def _combine_missing_ingredients(missing_lists: List[List[MissingIngredient]]) -> List[MissingIngredient]:
+    """Best-effort consolidation for plan-level shopping list."""
+    acc: Dict[Tuple[str, str], float] = {}
+    for lst in missing_lists or []:
+        for m in lst or []:
+            try:
+                key = (str(m.canonical_name or "missing_ingredient"), str(m.unit or "pieces"))
+                acc[key] = float(acc.get(key, 0.0)) + float(m.quantity or 0.0)
+            except Exception:
+                continue
+    out: List[MissingIngredient] = []
+    for (nm, unit), qty in sorted(acc.items(), key=lambda x: x[0][0]):
+        out.append(MissingIngredient(canonical_name=nm, quantity=float(qty), unit=unit))
+    return out
+
+
+def _best_effort_persist_recipe_attempt(*, user_id: str, attempt_id: str, payload: Dict[str, Any]) -> None:
+    """Persist attempt for later saving/planning. Never fails the request."""
+    try:
+        db = get_db_client()
+        row = dict(payload or {})
+        row["id"] = attempt_id
+        row["user_id"] = user_id
+        # Drop None to reduce schema mismatch risk during rollout.
+        row = {k: v for k, v in row.items() if v is not None}
+        db.table("recipe_attempts").insert(row).execute()
+    except Exception:
+        return
 
 
 def _compact_family_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -814,6 +932,7 @@ async def generate_recipe(
             prefer_expiring_items=bool(constraints.use_expiring_items),
             expiring_names=expiring,
         )
+        pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
         safety_constraints_text = {
             "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
             "religious": build_religious_constraints(profile if isinstance(profile, dict) else {}),
@@ -826,6 +945,7 @@ async def generate_recipe(
             "safety_constraints": safety_constraints_text,
             "allowed_pantry_ingredients": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in pantry_names],
             "pantry_context": pantry_context,
+            "pantry_image_signals": pantry_image_signals,
             "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
             "expiring_items": expiring,
             "preferred_pantry_coverage_threshold": preferred_threshold,
@@ -853,6 +973,7 @@ async def generate_recipe(
                             "You must not invent constraints. "
                             "You MUST respect family_profile + safety_constraints. "
                             "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
+                            "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
                             "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
                             "Return JSON only that matches the schema." 
                         ),
@@ -927,6 +1048,35 @@ async def generate_recipe(
         adjustable_spice_level=True,
     )
 
+    # Persist attempt + context for later saving/planning (best-effort).
+    try:
+        family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
+        pantry_context_all = _extract_pantry_context(
+            pantry if isinstance(pantry, list) else [],
+            prefer_expiring_items=bool(constraints.use_expiring_items),
+            expiring_names=expiring,
+        )
+        image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
+        _best_effort_persist_recipe_attempt(
+            user_id=str(user_id),
+            attempt_id=attempt_id,
+            payload={
+                "recipe_id": str(getattr(recipe_obj, "recipe_id", "")),
+                "request_text": (req.request_text or ""),
+                "mode": mode,
+                "reason": reason,
+                "pantry_coverage": float(pantry_cov or 0.0),
+                "locked_constraints": constraints.model_dump(),
+                "family_profile": family_profile_compact,
+                "pantry_context": pantry_context_all,
+                "missing_ingredients": [m.model_dump() for m in (missing_items or [])],
+                "recipe": recipe_obj.model_dump(),
+                "image_signals": image_signals,
+            },
+        )
+    except Exception:
+        pass
+
     return RecipeGenerateResponse(
         recipe=recipe_obj,
         locked_constraints=constraints,
@@ -936,6 +1086,184 @@ async def generate_recipe(
         reason=reason,
         trust_signals=trust,
     )
+
+
+@router.get("/attempts", response_model=RecipeAttemptListResponse)
+async def list_recipe_attempts(
+    saved_only: bool = False,
+    limit: int = 25,
+    user_id: str = Depends(get_current_user),
+):
+    db = get_db_client()
+    q = db.table("recipe_attempts").select(
+        "id,recipe_id,mode,reason,pantry_coverage,missing_ingredients,saved,created_at,recipe"
+    )
+    q = q.eq("user_id", str(user_id))
+    if saved_only:
+        q = q.eq("saved", True)
+    res = q.order("created_at", desc=True).limit(min(int(limit), 100)).execute()
+    rows = res.data or []
+
+    attempts: List[RecipeAttemptRecord] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        try:
+            missing_raw = r.get("missing_ingredients") or []
+            missing_objs = [MissingIngredient(**m) for m in missing_raw] if isinstance(missing_raw, list) else []
+            attempts.append(
+                RecipeAttemptRecord(
+                    id=str(r.get("id")),
+                    recipe_id=str(r.get("recipe_id")),
+                    mode=str(r.get("mode") or ""),
+                    reason=str(r.get("reason") or ""),
+                    pantry_coverage=float(r.get("pantry_coverage") or 0.0),
+                    missing_ingredients=missing_objs,
+                    saved=bool(r.get("saved") or False),
+                    created_at=str(r.get("created_at")) if r.get("created_at") else None,
+                    recipe=CanonicalRecipe(**(r.get("recipe") or {})),
+                )
+            )
+        except Exception:
+            continue
+
+    return RecipeAttemptListResponse(attempts=attempts)
+
+
+@router.get("/attempts/by_recipe/{recipe_id}", response_model=RecipeAttemptListResponse)
+async def list_attempts_by_recipe(
+    recipe_id: str,
+    limit: int = 5,
+    user_id: str = Depends(get_current_user),
+):
+    db = get_db_client()
+    res = (
+        db.table("recipe_attempts")
+        .select("id,recipe_id,mode,reason,pantry_coverage,missing_ingredients,saved,created_at,recipe")
+        .eq("user_id", str(user_id))
+        .eq("recipe_id", str(recipe_id))
+        .order("created_at", desc=True)
+        .limit(min(int(limit), 20))
+        .execute()
+    )
+    rows = res.data or []
+
+    attempts: List[RecipeAttemptRecord] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        try:
+            missing_raw = r.get("missing_ingredients") or []
+            missing_objs = [MissingIngredient(**m) for m in missing_raw] if isinstance(missing_raw, list) else []
+            attempts.append(
+                RecipeAttemptRecord(
+                    id=str(r.get("id")),
+                    recipe_id=str(r.get("recipe_id")),
+                    mode=str(r.get("mode") or ""),
+                    reason=str(r.get("reason") or ""),
+                    pantry_coverage=float(r.get("pantry_coverage") or 0.0),
+                    missing_ingredients=missing_objs,
+                    saved=bool(r.get("saved") or False),
+                    created_at=str(r.get("created_at")) if r.get("created_at") else None,
+                    recipe=CanonicalRecipe(**(r.get("recipe") or {})),
+                )
+            )
+        except Exception:
+            continue
+
+    return RecipeAttemptListResponse(attempts=attempts)
+
+
+@router.post("/attempts/{attempt_id}/save", response_model=SaveAttemptResponse)
+async def save_recipe_attempt(
+    attempt_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    db = get_db_client()
+    try:
+        db.table("recipe_attempts").update(
+            {"saved": True, "saved_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("user_id", str(user_id)).eq("id", attempt_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save attempt: {e}")
+    return SaveAttemptResponse(success=True)
+
+
+@router.post("/plans", response_model=CreateMealPlanResponse)
+async def create_meal_plan(
+    req: CreateMealPlanRequest,
+    user_id: str = Depends(get_current_user),
+):
+    if req.plan_type not in {"daily", "weekly", "party"}:
+        raise HTTPException(status_code=400, detail="Invalid plan_type")
+    if req.meal_type is not None and req.meal_type not in {"breakfast", "lunch", "dinner", "snack", "any"}:
+        raise HTTPException(status_code=400, detail="Invalid meal_type")
+
+    attempt_ids = [str(x) for x in (req.attempt_ids or []) if str(x).strip()]
+    if not attempt_ids:
+        raise HTTPException(status_code=400, detail="attempt_ids is required")
+
+    db = get_db_client()
+    try:
+        res = (
+            db.table("recipe_attempts")
+            .select("id,recipe_id,mode,reason,pantry_coverage,missing_ingredients,recipe")
+            .eq("user_id", str(user_id))
+            .in_("id", attempt_ids)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load attempts: {e}")
+
+    recipes_blob: List[Dict[str, Any]] = []
+    missing_lists: List[List[MissingIngredient]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        miss_raw = r.get("missing_ingredients") or []
+        miss = [MissingIngredient(**m) for m in miss_raw] if isinstance(miss_raw, list) else []
+        missing_lists.append(miss)
+        recipes_blob.append(
+            {
+                "attempt_id": str(r.get("id")),
+                "recipe_id": str(r.get("recipe_id")),
+                "mode": r.get("mode"),
+                "reason": r.get("reason"),
+                "pantry_coverage": r.get("pantry_coverage"),
+                "missing_ingredients": [m.model_dump() for m in miss],
+                "recipe": r.get("recipe"),
+            }
+        )
+
+    if not recipes_blob:
+        raise HTTPException(status_code=400, detail="No valid attempts found")
+
+    shopping_list = _combine_missing_ingredients(missing_lists)
+    selected = req.selected_attempt_id or str(recipes_blob[0].get("attempt_id"))
+
+    try:
+        insert_row = {
+            "user_id": str(user_id),
+            "plan_type": req.plan_type,
+            "plan_date": req.plan_date.isoformat(),
+            "meal_type": req.meal_type or "any",
+            "selected_cuisine": req.selected_cuisine,
+            "servings": int(req.servings),
+            "recipes": recipes_blob,
+            "selected_recipe_id": str(selected),
+            "status": "planned",
+            "shopping_list": [m.model_dump() for m in shopping_list],
+        }
+        created = db.table("meal_plans").insert({k: v for k, v in insert_row.items() if v is not None}).execute().data
+        row0 = (created or [None])[0] or {}
+        plan_id = str(row0.get("id") or "")
+        if not plan_id:
+            raise RuntimeError("Missing plan id")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create meal plan: {e}")
+
+    return CreateMealPlanResponse(success=True, plan_id=plan_id, shopping_list=shopping_list)
 
 
 @router.post("/feedback", status_code=status.HTTP_204_NO_CONTENT)
