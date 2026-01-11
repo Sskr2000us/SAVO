@@ -25,6 +25,11 @@ from app.core.database import get_db_client, get_full_profile, get_inventory
 from app.core.events import emit_event
 from app.core.ingredient_normalization import get_normalizer
 from app.core.safety_constraints import validate_recipe_safety
+from app.core.safety_constraints import (
+    build_allergen_constraints,
+    build_religious_constraints,
+    build_dietary_constraints,
+)
 from app.core.llm_client import get_reasoning_client
 from app.core.llm_utils import generate_json_with_retries
 
@@ -237,6 +242,97 @@ def _find_expiring_items(pantry: List[Dict[str, Any]], within_days: int = 3) -> 
         except Exception:
             continue
     return sorted({x for x in out if x})
+
+
+def _compact_family_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce profile payload to the fields most relevant for cooking constraints.
+
+    `get_full_profile()` can return a rich object; we keep this small and stable.
+    """
+
+    if not isinstance(profile, dict):
+        return {}
+
+    out: Dict[str, Any] = {}
+
+    members_in = profile.get("members")
+    if isinstance(members_in, list):
+        members_out: List[Dict[str, Any]] = []
+        for m in members_in[:10]:
+            if not isinstance(m, dict):
+                continue
+            members_out.append(
+                {
+                    "name": m.get("name"),
+                    "age": m.get("age"),
+                    "dietary_restrictions": m.get("dietary_restrictions", []),
+                    "allergens": m.get("allergens", []),
+                    "likes": m.get("likes", []),
+                    "dislikes": m.get("dislikes", []),
+                    "preferred_cuisines": m.get("preferred_cuisines") or m.get("cuisine_preferences"),
+                }
+            )
+        if members_out:
+            out["members"] = members_out
+
+    # Capture a few commonly used top-level preference keys if present.
+    for k in (
+        "household_name",
+        "region",
+        "country",
+        "primary_cuisines",
+        "cuisine_preferences",
+        "dietary_tags",
+        "notes",
+    ):
+        if k in profile:
+            out[k] = profile.get(k)
+
+    return out
+
+
+def _extract_pantry_context(pantry: List[Dict[str, Any]], limit: int = 80) -> List[Dict[str, Any]]:
+    """Provide richer pantry context to the LLM (quantities/expiry) without huge tokens."""
+
+    normalizer = get_normalizer()
+    out: List[Dict[str, Any]] = []
+    if not isinstance(pantry, list):
+        return out
+
+    for it in pantry:
+        if not isinstance(it, dict):
+            continue
+
+        nm = (it.get("canonical_name") or it.get("name") or "").strip()
+        if not nm:
+            continue
+
+        canon = normalizer.normalize_name(nm)
+        qty = it.get("quantity")
+        if qty is None:
+            qty = it.get("amount")
+        unit = it.get("unit")
+        exp = it.get("expiry_date") or it.get("expiry")
+        loc = it.get("location") or it.get("location_hint")
+
+        row: Dict[str, Any] = {
+            "canonical_name": canon,
+            "ingredient_id": _stable_ingredient_uuid(canon),
+        }
+        if qty is not None:
+            row["quantity"] = qty
+        if unit is not None and str(unit).strip() != "":
+            row["unit"] = str(unit).strip()
+        if exp is not None and str(exp).strip() != "":
+            row["expiry_date"] = str(exp).strip()
+        if loc is not None and str(loc).strip() != "":
+            row["location"] = str(loc).strip()
+
+        out.append(row)
+        if len(out) >= int(limit):
+            break
+
+    return out
 
 
 def _pantry_coverage(*, pantry_names: List[str], ingredient_names: List[str]) -> Tuple[float, List[str]]:
@@ -666,9 +762,20 @@ async def generate_recipe(
         missing_candidates = _suggest_missing_candidates(pantry_names=pantry_names, cuisine=constraints.cuisine)
         missing_id_to_name = _ingredient_id_map(missing_candidates)
 
+        family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
+        pantry_context = _extract_pantry_context(pantry if isinstance(pantry, list) else [])
+        safety_constraints_text = {
+            "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
+            "religious": build_religious_constraints(profile if isinstance(profile, dict) else {}),
+            "dietary": build_dietary_constraints(profile if isinstance(profile, dict) else {}),
+        }
+
         prompt = {
             "locked_constraints": constraints.model_dump(),
+            "family_profile": family_profile_compact,
+            "safety_constraints": safety_constraints_text,
             "allowed_pantry_ingredients": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in pantry_names],
+            "pantry_context": pantry_context,
             "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
             "expiring_items": expiring,
             "preferred_pantry_coverage_threshold": preferred_threshold,
@@ -679,6 +786,7 @@ async def generate_recipe(
                 "dietary_rules_must_be_enforced",
                 "max_cooking_time_must_be_respected",
                 "llm_never_decides_constraints_only_fills_structure",
+                "ingredient_id_must_come_from_allowed_or_missing_lists_only",
             ],
             "safety_hint": safety_hint,
         }
@@ -693,6 +801,9 @@ async def generate_recipe(
                             "You are SAVO's constrained recipe generator. "
                             "You MUST follow the locked constraints exactly. "
                             "You must not invent constraints. "
+                            "You MUST respect family_profile + safety_constraints. "
+                            "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
+                            "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
                             "Return JSON only that matches the schema." 
                         ),
                     },
