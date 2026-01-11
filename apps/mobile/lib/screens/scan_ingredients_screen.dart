@@ -328,7 +328,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       final fields = <String, String>{
         'scan_type': 'pantry',
-        'max_frames': '20',
+        'max_frames': '12',
         'duration_seconds': durationSeconds.toString(),
         'async_mode': 'true',
         if (_barcode != null && _barcode!.trim().isNotEmpty) 'barcode': _barcode!.trim(),

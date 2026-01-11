@@ -469,13 +469,31 @@ async def _process_video_scan(
                 }
             ).execute()
 
-        db.table("ingredient_scans").update(
-            {
-                "status": "completed",
-                "completed_at": datetime.utcnow().isoformat(),
-                "total_detections": len(unique_detections),
-            }
-        ).eq("id", scan_id).eq("user_id", user_id).execute()
+        # Some deployments use KPI fields like `detected_count` (migration 016).
+        # Older clients/code used `total_detections`; avoid writing unknown columns.
+        completed_update = {
+            "status": "completed",
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+        try:
+            completed_update["detected_count"] = int(len(unique_detections))
+            db.table("ingredient_scans").update(completed_update).eq("id", scan_id).eq("user_id", user_id).execute()
+        except Exception:
+            # Best-effort fallback: store counts in image_metadata.
+            try:
+                db.table("ingredient_scans").update(
+                    {
+                        "status": "completed",
+                        "completed_at": datetime.utcnow().isoformat(),
+                        "image_metadata": {
+                            "source": "video_scan",
+                            "total_detections": int(len(unique_detections)),
+                            "completed_at": datetime.utcnow().isoformat(),
+                        },
+                    }
+                ).eq("id", scan_id).eq("user_id", user_id).execute()
+            except Exception:
+                pass
 
     except Exception as e:
         try:
@@ -551,12 +569,14 @@ async def analyze_video(
         
         scan_type = _normalize_scan_type(scan_type)
 
-        # Limit max frames
-        max_frames = min(max(1, max_frames), 20)
-
         if duration_seconds is not None:
             duration_seconds = int(duration_seconds)
             duration_seconds = min(max(1, duration_seconds), 60)
+
+        # Limit max frames (optimize for 30s scans)
+        max_frames = min(max(1, max_frames), 20)
+        if duration_seconds is not None and duration_seconds >= 25:
+            max_frames = min(max_frames, 12)
         
         # Read video data
         video_data = await video.read()
@@ -667,95 +687,6 @@ async def analyze_video(
             "status": "completed",
         }
         
-        for idx, frame_data in enumerate(frames):
-            logger.info(f"Analyzing frame {idx + 1}/{len(frames)}")
-            
-            try:
-                # Analyze frame
-                result = await vision_client.analyze_image(
-                    image_data=frame_data,
-                    scan_type=scan_type,
-                    location_hint=location_hint,
-                    user_preferences=profile,
-                )
-                
-                if result.get("success") and result.get("ingredients"):
-                    all_detections.extend(result["ingredients"])
-                
-            except Exception as e:
-                logger.error(f"Frame {idx + 1} analysis failed: {e}")
-                continue  # Skip failed frames
-        
-        if not all_detections:
-            raise HTTPException(
-                status_code=400,
-                detail="No ingredients detected in video. Try taking clearer photos instead."
-            )
-        
-        # Deduplicate detections
-        unique_detections = await deduplicate_detections(all_detections)
-        
-        # Store detections in database
-        for detection in unique_detections:
-            detected_id = str(uuid4())
-
-            # Best-effort crop from representative frame when bbox exists.
-            thumbnail_url = None
-            try:
-                if representative_frame and isinstance(detection, dict) and detection.get("bbox"):
-                    cropped = _safe_crop_by_bbox(representative_frame, detection.get("bbox"))
-                    if cropped:
-                        expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
-                        thumbnail_url = upload_inventory_image(
-                            user_id=user_id,
-                            content=cropped,
-                            content_type="image/jpeg",
-                            asset_type="crop",
-                            source="video_scanning",
-                            expires_at=expires_at,
-                            links={"scan_id": scan_id, "detected_id": detected_id},
-                            metadata={"kind": "video_frame_crop"},
-                        )
-            except Exception:
-                thumbnail_url = None
-            
-            # detected_ingredients doesn't have a generic metadata column in the base schema.
-            db.table("detected_ingredients").insert({
-                "id": detected_id,
-                "scan_id": scan_id,
-                "user_id": user_id,
-                "detected_name": detection["detected_name"],
-                "canonical_name": detection.get("canonical_name"),
-                "confidence": float(detection.get("confidence", 0)),
-                "detected_quantity": detection.get("quantity"),
-                "detected_unit": detection.get("unit"),
-                "quantity_confidence": detection.get("quantity_confidence"),
-                "close_alternatives": detection.get("close_alternatives", []),
-                "visual_similarity_group": detection.get("visual_similarity_group"),
-                "confirmation_status": "pending",
-                "thumbnail_url": thumbnail_url,
-                "full_image_url": None,
-            }).execute()
-        
-        # Update scan status
-        db.table("ingredient_scans").update({
-            "status": "completed",
-            "completed_at": datetime.utcnow().isoformat(),
-            "total_detections": len(unique_detections)
-        }).eq("id", scan_id).execute()
-        
-        return {
-            "success": True,
-            "scan_id": scan_id,
-            "scan_type": "video",
-            "frames_processed": len(frames),
-            "total_raw_detections": len(all_detections),
-            "unique_ingredients": len(unique_detections),
-            "detections": unique_detections,
-            "message": f"Processed {len(frames)} frames, found {len(unique_detections)} unique ingredients",
-            "next_step": "Review and confirm detections"
-        }
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -796,7 +727,10 @@ async def get_video_scan_status(
             "scan_type": scan.data["scan_type"],
             "created_at": scan.data["created_at"],
             "completed_at": scan.data.get("completed_at"),
-            "total_detections": scan.data.get("total_detections", 0),
+            "total_detections": scan.data.get("detected_count")
+            or scan.data.get("total_detections")
+            or (scan.data.get("image_metadata") or {}).get("total_detections")
+            or 0,
             "metadata": scan.data.get("image_metadata", {})
         }
 
