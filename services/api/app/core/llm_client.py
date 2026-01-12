@@ -287,11 +287,10 @@ class OpenAIClient(LlmClient):
         if env_timeout and str(env_timeout).strip().isdigit():
             timeout = int(str(env_timeout).strip())
 
-        # Default is intentionally generous; party planning can be slow.
-        if timeout < 120:
-            timeout = 120
-
-        self.timeout = timeout
+        # Keep a sane lower bound (avoid accidental 0/negative), but do NOT force
+        # a large minimum here. Endpoints that need long budgets (e.g., party/weekly)
+        # should set OPENAI_TIMEOUT_SECONDS explicitly.
+        self.timeout = max(15, int(timeout))
         self.base_url = "https://api.openai.com/v1"
         self.json_max_output_tokens = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "8192"))
     

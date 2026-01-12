@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import asyncio
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, Literal
 from uuid import UUID, uuid4, uuid5
@@ -42,7 +43,8 @@ router = APIRouter()
 
 # Hard time budget for constrained generation. If exceeded, we fail closed to the
 # deterministic assembled recipe (existing fallback behavior).
-_GENERATION_BUDGET_SECONDS = 25
+# Keep this relatively tight; long hangs are unacceptable UX.
+_GENERATION_BUDGET_SECONDS = int((os.getenv("SAVO_RECIPE_GENERATION_BUDGET_SECONDS") or "16").strip() or "16")
 
 
 _UUID_NAMESPACE = uuid5(UUID("00000000-0000-0000-0000-000000000000"), "savo-ingredient")
@@ -294,7 +296,6 @@ async def _translate_canonical_recipe_i18n(
                 ],
                 schema=schema,
                 max_attempts=1,
-                timeout_seconds=8,
             ),
             timeout=9,
         )
@@ -394,7 +395,6 @@ async def _translate_canonical_recipes_batch_i18n(
                 ],
                 schema=schema,
                 max_attempts=1,
-                timeout_seconds=10,
             ),
             timeout=11,
         )
@@ -1098,7 +1098,11 @@ def _canonical_recipe_options_json_schema(*, count: int) -> Dict[str, Any]:
         "properties": {
             "recipes": {
                 "type": "array",
-                "minItems": n,
+                # IMPORTANT: do not require an exact count here.
+                # In practice, strict decoding for N full recipes can fail (timeouts/truncation),
+                # which caused us to fall back to deterministic assembly and appear "repetitive".
+                # We allow partial results and will still return whatever valid options we got.
+                "minItems": 1,
                 "maxItems": n,
                 "items": _canonical_recipe_json_schema(),
             }
@@ -1172,7 +1176,6 @@ async def generate_recipe(
 
     attempt_id = str(uuid4())
 
-    # Store locked constraints as append-only event for auditability.
     emit_event(
         event_type="recipe.constraints_locked",
         user_id=str(user_id),
@@ -1238,7 +1241,10 @@ async def generate_recipe(
     ok_safety, safety_violations = validate_recipe_safety(recipe_obj.model_dump(), profile if isinstance(profile, dict) else {})
     safety_hint = " ".join(safety_violations)[:500] if not ok_safety else ""
 
-    needs_generation = force_generation or (pantry_cov < preferred_threshold) or (not ok_safety)
+    # If the user explicitly asked for something (request_text), prefer generating a fresh recipe.
+    # Deterministic retrieval/assembly tends to feel repetitive even with good pantry coverage.
+    has_request_text = bool((req.request_text or "").strip())
+    needs_generation = force_generation or has_request_text or (pantry_cov < preferred_threshold) or (not ok_safety)
 
     if needs_generation:
         # Enforce distribution target best-effort (generated <= 20%).
@@ -1306,7 +1312,13 @@ async def generate_recipe(
         }
 
         try:
-            budget_seconds = 18 if force_generation else _GENERATION_BUDGET_SECONDS
+            budget_seconds = 14 if force_generation else _GENERATION_BUDGET_SECONDS
+            budget_seconds = max(8, int(budget_seconds))
+
+            # Add a per-request nonce so repeated calls don't collapse into the same recipe.
+            prompt["request_id"] = attempt_id
+            prompt["variation_seed"] = str(uuid4())
+
             generated = await asyncio.wait_for(
                 generate_json_with_retries(
                     client=client,
@@ -1332,7 +1344,7 @@ async def generate_recipe(
                     schema=schema,
                     # For creative requests, prioritize speed. If generation fails,
                     # we fail closed to assembled.
-                    max_attempts=1 if force_generation else 2,
+                    max_attempts=2,
                     repair_hint="constrained recipe json",
                     mode_hint="recipe",
                     # Encourage novelty while schema + validators keep structure/safety tight.
@@ -1372,7 +1384,25 @@ async def generate_recipe(
                 id_to_name_hint={**missing_id_to_name},
             )
 
-        except Exception:
+        except Exception as e:
+            # Best-effort diagnostics. This endpoint used to swallow errors and always fall back,
+            # making it look like "LLM never generates".
+            try:
+                emit_event(
+                    event_type="recipe.generation.failed",
+                    user_id=str(user_id),
+                    entity_type="recipe_attempt",
+                    entity_id=attempt_id,
+                    payload={
+                        "error": str(e)[:500],
+                        "creative_intent": bool(force_generation),
+                        "had_request_text": bool((req.request_text or "").strip()),
+                        "budget_seconds": int(budget_seconds),
+                    },
+                )
+            except Exception:
+                pass
+
             # Fail closed: fall back to assembled recipe.
             mode = "assembled"
             reason = "fallback"
@@ -1398,7 +1428,7 @@ async def generate_recipe(
     uses_expiring = bool(constraints.use_expiring_items and expiring)
 
     trust = TrustSignals(
-        uses_what_you_have=uses_what_you_have,
+                                    timeout_seconds=11,
         estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
         uses_expiring_items=uses_expiring,
         adjustable_spice_level=True,
@@ -1532,7 +1562,7 @@ async def generate_recipe_options(
         "cultural_focus_ingredients": focus_ingredients,
         "option_count": int(count),
         "diversity_rules": [
-            "return_exactly_option_count_recipes",
+            "return_up_to_option_count_recipes",
             "each_recipe_name_must_be_distinct",
             "vary_dish_type_and_primary_technique_across_options",
             "avoid_generic_names_like_pantry_bowl",
@@ -1565,7 +1595,16 @@ async def generate_recipe_options(
     )
 
     try:
-        budget_seconds = 22
+        # Tight budget; multi-option payloads can be large, but long waits are worse than
+        # returning fewer options.
+        budget_seconds = 14 if int(count) <= 5 else 18
+        if force_generation:
+            budget_seconds = min(18, int(budget_seconds) + 2)
+
+        # Add a per-request nonce to reduce repeated outputs across calls.
+        prompt["options_request_id"] = request_id
+        prompt["variation_seed"] = str(uuid4())
+
         generated = await asyncio.wait_for(
             generate_json_with_retries(
                 client=client,
@@ -1580,8 +1619,9 @@ async def generate_recipe_options(
                             "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
                             "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
                             "Return a DIVERSE set of options; do not repeat the same dish with minor variations. "
-                            "Keep each option compact: steps <= 7, ingredient list <= 12. "
+                            "Keep each option compact: steps <= 6, ingredient list <= 10. "
                             "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
+                            "Return BETWEEN 3 and option_count recipes if possible; do not fail the whole response if you cannot reach option_count. "
                             f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
                             "Return JSON only that matches the schema."
                         ),
@@ -1589,7 +1629,7 @@ async def generate_recipe_options(
                     {"role": "user", "content": str(prompt)},
                 ],
                 schema=schema,
-                max_attempts=1,
+                max_attempts=2,
                 repair_hint="constrained recipe options json",
                 mode_hint="recipe",
                 presence_penalty=0.5 if force_generation else 0.2,
@@ -1735,7 +1775,23 @@ async def generate_recipe_options(
 
         return RecipeGenerateOptionsResponse(options=options)
 
-    except Exception:
+    except Exception as e:
+        try:
+            emit_event(
+                event_type="recipe.options.generation.failed",
+                user_id=str(user_id),
+                entity_type="recipe_options_request",
+                entity_id=request_id,
+                payload={
+                    "error": str(e)[:500],
+                    "requested": int(count),
+                    "creative_intent": bool(force_generation),
+                    "budget_seconds": int(budget_seconds) if "budget_seconds" in locals() else None,
+                },
+            )
+        except Exception:
+            pass
+
         # Fail closed: return at least one deterministic option.
         attempt_id = str(uuid4())
         trust = TrustSignals(
