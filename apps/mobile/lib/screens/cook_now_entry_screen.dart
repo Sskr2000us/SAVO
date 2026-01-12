@@ -22,6 +22,8 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
   bool _generating = false;
   String? _error;
 
+  String _creativity = 'standard';
+
   bool _checkingSavedPlan = true;
   bool _hasSavedPlan = false;
 
@@ -128,6 +130,7 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
         profileState: profileState,
         maxOptions: 5,
         avoidRecentRecipes: 3,
+        creativity: _creativity,
       );
 
       if (!mounted) return;
@@ -219,6 +222,37 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.center,
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Standard'),
+                        selected: _creativity == 'standard',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _creativity = 'standard');
+                              },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Native/Innovative'),
+                        selected: _creativity == 'high',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _creativity = 'high');
+                              },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(

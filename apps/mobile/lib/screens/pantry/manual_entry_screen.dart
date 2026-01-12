@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/api_client.dart';
+import '../../services/cook_now_service.dart';
+import '../../services/entitlements_service.dart';
+import '../../models/profile_state.dart';
 import '../../widgets/quantity_picker.dart';
+import '../recipe_options_screen.dart';
 
 /// Screen for manually adding ingredients without scanning
 class ManualEntryScreen extends StatefulWidget {
@@ -134,6 +138,41 @@ class _ManualEntryScreenState extends State<ManualEntryScreen> {
           duration: Duration(seconds: 2),
         ),
       );
+
+      // Immediately present recipe options (best-effort) so the user gets value
+      // without needing to press a separate "Generate recipes" button.
+      try {
+        final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+        if (!mounted) return;
+        if (gate.allowed) {
+          final profileState = Provider.of<ProfileState>(context, listen: false);
+          final service = CookNowService();
+          final options = await service.generateRecipeOptions(
+            apiClient: apiClient,
+            profileState: profileState,
+            maxOptions: 5,
+            avoidRecentRecipes: 3,
+          );
+
+          if (!mounted) return;
+          if (options.isNotEmpty) {
+            await Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                settings: const RouteSettings(name: '/recipe_options'),
+                builder: (_) => RecipeOptionsScreen(
+                  recipes: options,
+                  showIngredientMatch: true,
+                  titleOverride: 'Meals you can cook tonight',
+                  skipSuggestionSessionGate: true,
+                ),
+              ),
+            );
+            return;
+          }
+        }
+      } catch (_) {
+        // Best-effort only.
+      }
 
       setState(() {
         _ingredientController.clear();

@@ -84,6 +84,160 @@ curl "$API_BASE_URL/analytics/monetization?days=30" \
 
 ---
 
+## Recipe Generation (Constrained)
+
+These endpoints are authenticated and use pantry + locked constraints to generate recipes.
+
+### POST /recipes/generate
+Generate a single recipe (best-effort). The backend may return a retrieved/assembled recipe unless generation is required or explicitly forced via `creativity`.
+
+**Request (example):**
+```json
+{
+  "request_text": "",
+  "cuisine": "south indian",
+  "dietary_tags": [],
+  "max_time_minutes": 45,
+  "serves": 4,
+  "include_inactive_inventory": false,
+  "use_expiring_items": true,
+  "spice_level": "medium",
+  "creativity": "high"
+}
+```
+
+**Response shape (high level):**
+```json
+{
+  "success": true,
+  "recipe": {
+    "recipe_id": "string",
+    "recipe_name": "string",
+    "cuisine": "string",
+    "dietary_tags": ["string"],
+    "prep_time_minutes": 25,
+    "difficulty": "easy|medium|hard",
+    "ingredients": [
+      {
+        "canonical_name": "string",
+        "ingredient_id": "string",
+        "quantity": 1,
+        "unit": "pieces",
+        "optional": false
+      }
+    ],
+    "techniques": ["string"],
+    "steps": ["string"],
+    "serves": 4,
+    "created_from": "retrieved|assembled|generated",
+    "version": "v1"
+  },
+  "locked_constraints": {
+    "cuisine": "string|null",
+    "ingredients_allowed": ["string"],
+    "max_time_minutes": 45,
+    "dietary": ["string"],
+    "techniques_allowed": ["string"],
+    "use_expiring_items": true,
+    "spice_level": "string|null"
+  },
+  "pantry_coverage": 0.85,
+  "missing_ingredients": [{"canonical_name": "string", "quantity": 1, "unit": "pieces"}],
+  "mode": "retrieved|assembled|generated",
+  "reason": "pantry_match|safety_repair|creative_request|fallback",
+  "trust_signals": {
+    "uses_what_you_have": true,
+    "estimated_time_minutes": 25,
+    "uses_expiring_items": true,
+    "adjustable_spice_level": true
+  }
+}
+```
+
+### POST /recipes/generate-options
+Generate multiple recipe options in a single backend call. This is faster than calling `/recipes/generate` in a loop.
+
+**Request (example):**
+```json
+{
+  "request_text": "native, culturally authentic dinner ideas",
+  "cuisine": "south indian",
+  "dietary_tags": [],
+  "max_time_minutes": 45,
+  "serves": 4,
+  "include_inactive_inventory": false,
+  "use_expiring_items": true,
+  "spice_level": "medium",
+  "creativity": "high",
+  "count": 5
+}
+```
+
+**Response shape:**
+```json
+{
+  "success": true,
+  "options": [
+    {
+      "success": true,
+      "recipe": {"recipe_id": "...", "recipe_name": "..."},
+      "locked_constraints": {},
+      "pantry_coverage": 0.9,
+      "missing_ingredients": [],
+      "mode": "generated",
+      "reason": "creative_request",
+      "trust_signals": {}
+    }
+  ]
+}
+```
+
+**Windows PowerShell (example):**
+```powershell
+$env:API_BASE_URL="http://localhost:8000"
+$env:JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+$body = @{
+  request_text = "native, culturally authentic dinner ideas"
+  cuisine = "south indian"
+  max_time_minutes = 45
+  serves = 4
+  include_inactive_inventory = $false
+  use_expiring_items = $true
+  spice_level = "medium"
+  creativity = "high"
+  count = 5
+} | ConvertTo-Json
+
+curl "$env:API_BASE_URL/recipes/generate-options" `
+  -H "Authorization: Bearer $env:JWT" `
+  -H "Content-Type: application/json" `
+  -d $body
+```
+
+**bash (example):**
+```bash
+API_BASE_URL="http://localhost:8000"
+JWT="YOUR_SUPABASE_JWT_TOKEN"
+
+curl "$API_BASE_URL/recipes/generate-options" \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_text": "native, culturally authentic dinner ideas",
+    "cuisine": "south indian",
+    "max_time_minutes": 45,
+    "serves": 4,
+    "include_inactive_inventory": false,
+    "use_expiring_items": true,
+    "spice_level": "medium",
+    "creativity": "high",
+    "count": 5
+  }'
+```
+
+---
+
 ## Existing Endpoints (Refactored to JWT)
 
 ### GET /profile/household

@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../services/scanning_service.dart';
+import '../../services/api_client.dart';
+import '../../services/cook_now_service.dart';
+import '../../services/entitlements_service.dart';
+import '../../models/profile_state.dart';
 import '../../widgets/quantity_picker.dart';
+import '../recipe_options_screen.dart';
 
 /// Confirmation screen for detected ingredients with chip-based UI
 class IngredientConfirmationScreen extends StatefulWidget {
@@ -242,7 +248,44 @@ class _IngredientConfirmationScreenState
           // Give a moment for the user to see confirmation before navigating away.
           await Future.delayed(const Duration(milliseconds: 900));
 
-          // Navigate back to home (pop twice: confirmation + camera)
+          // Immediately present recipe options (best-effort) so the user doesn't
+          // need to press a separate "Generate recipes" button.
+          try {
+            final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+            if (!mounted) return;
+            if (gate.allowed) {
+              final apiClient = Provider.of<ApiClient>(context, listen: false);
+              final profileState = Provider.of<ProfileState>(context, listen: false);
+              final service = CookNowService();
+              final options = await service.generateRecipeOptions(
+                apiClient: apiClient,
+                profileState: profileState,
+                maxOptions: 5,
+                avoidRecentRecipes: 3,
+              );
+
+              if (!mounted) return;
+              if (options.isNotEmpty) {
+                await Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    settings: const RouteSettings(name: '/recipe_options'),
+                    builder: (_) => RecipeOptionsScreen(
+                      recipes: options,
+                      showIngredientMatch: true,
+                      titleOverride: 'Meals you can cook tonight',
+                      skipSuggestionSessionGate: true,
+                    ),
+                  ),
+                  (route) => route.isFirst,
+                );
+                return;
+              }
+            }
+          } catch (_) {
+            // Best-effort only.
+          }
+
+          // Fallback: Navigate back to home (pop twice: confirmation + camera)
           Navigator.of(context).pop();
           Navigator.of(context).pop();
         } else {

@@ -260,7 +260,16 @@ class RateLimitException(Exception):
 
 
 class LlmClient:
-    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    async def generate_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        mode_hint: str | None = None,
+        temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -286,7 +295,16 @@ class OpenAIClient(LlmClient):
         self.base_url = "https://api.openai.com/v1"
         self.json_max_output_tokens = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "8192"))
     
-    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    async def generate_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        mode_hint: str | None = None,
+        temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ) -> dict[str, Any]:
         """Generate JSON using OpenAI with structured output"""
 
         # Keep instructions compact. Dumping full JSON Schema is huge and increases latency.
@@ -301,10 +319,11 @@ class OpenAIClient(LlmClient):
         }
 
         # Menus can easily exceed token limits if verbose.
-        mode_hint = _infer_menu_mode(messages)
+        inferred_mode = _infer_menu_mode(messages)
+        effective_mode = (mode_hint or inferred_mode or "daily").strip().lower()
         party_concise = None
         weekly_concise = None
-        if mode_hint == "party":
+        if effective_mode == "party":
             party_concise = {
                 "role": "system",
                 "content": (
@@ -313,7 +332,7 @@ class OpenAIClient(LlmClient):
                     "use minimal but sufficient ingredient lists and tips."
                 ),
             }
-        elif mode_hint == "weekly":
+        elif effective_mode == "weekly":
             weekly_concise = {
                 "role": "system",
                 "content": (
@@ -334,12 +353,20 @@ class OpenAIClient(LlmClient):
         # Allow mode-specific overrides for output tokens.
         max_tokens = self.json_max_output_tokens
         party_override = os.getenv("OPENAI_PARTY_JSON_MAX_TOKENS")
-        if mode_hint == "party" and party_override and str(party_override).strip().isdigit():
+        if effective_mode == "party" and party_override and str(party_override).strip().isdigit():
             max_tokens = max(max_tokens, int(str(party_override).strip()))
 
         weekly_override = os.getenv("OPENAI_WEEKLY_JSON_MAX_TOKENS")
-        if mode_hint == "weekly" and weekly_override and str(weekly_override).strip().isdigit():
+        if effective_mode == "weekly" and weekly_override and str(weekly_override).strip().isdigit():
             max_tokens = max(max_tokens, int(str(weekly_override).strip()))
+
+        # Recipes: keep outputs smaller for speed and to reduce invalid/truncated JSON.
+        if effective_mode == "recipe":
+            recipe_max = os.getenv("OPENAI_RECIPE_JSON_MAX_TOKENS")
+            if recipe_max and str(recipe_max).strip().isdigit():
+                max_tokens = min(max_tokens, int(str(recipe_max).strip()))
+            else:
+                max_tokens = min(max_tokens, 3500)
         
         timeout = httpx.Timeout(
             self.timeout,
@@ -371,13 +398,38 @@ class OpenAIClient(LlmClient):
                     else:
                         response_format = {"type": "json_object"}
 
+                    # Defaults tuned per task type. Recipes benefit from higher diversity
+                    # than planning/menu tasks, but strict schema mode keeps structure safe.
+                    if temperature is None:
+                        if effective_mode == "weekly":
+                            effective_temperature = 0.4
+                        elif effective_mode == "recipe":
+                            recipe_temp = os.getenv("OPENAI_RECIPE_TEMPERATURE")
+                            if recipe_temp is not None:
+                                try:
+                                    effective_temperature = float(str(recipe_temp).strip())
+                                except Exception:
+                                    effective_temperature = 0.85
+                            else:
+                                effective_temperature = 0.85
+                        else:
+                            effective_temperature = 0.5
+                    else:
+                        effective_temperature = float(temperature)
+
                     payload = {
                         "model": self.model,
                         "messages": enhanced_messages,
                         "response_format": response_format,
-                        "temperature": 0.4 if mode_hint == "weekly" else 0.5,  # Weekly: slightly more deterministic
+                        "temperature": effective_temperature,
                         "max_tokens": max_tokens,
                     }
+
+                    # Optional diversity controls; safe to omit for tasks that need determinism.
+                    if presence_penalty is not None:
+                        payload["presence_penalty"] = float(presence_penalty)
+                    if frequency_penalty is not None:
+                        payload["frequency_penalty"] = float(frequency_penalty)
 
                     response = await client.post(
                         f"{self.base_url}/chat/completions",
@@ -551,7 +603,16 @@ class AnthropicClient(LlmClient):
         self.timeout = timeout
         self.base_url = "https://api.anthropic.com/v1"
     
-    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    async def generate_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        mode_hint: str | None = None,
+        temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ) -> dict[str, Any]:
         """Generate JSON using Anthropic Claude"""
         
         # Convert messages to Anthropic format (system separate from messages)
@@ -607,7 +668,16 @@ class GoogleClient(LlmClient):
         self.model = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
         self.timeout = timeout
     
-    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    async def generate_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        mode_hint: str | None = None,
+        temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ) -> dict[str, Any]:
         """Generate JSON using Google Gemini with structured output"""
         
         # Inject schema into messages for better adherence
@@ -867,7 +937,16 @@ class GoogleClient(LlmClient):
 
 
 class MockLlmClient(LlmClient):
-    async def generate_json(self, *, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    async def generate_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        mode_hint: str | None = None,
+        temperature: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ) -> dict[str, Any]:
         required = set(schema.get("required", []))
 
         if "normalized_inventory" in required:

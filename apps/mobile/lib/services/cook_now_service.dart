@@ -23,6 +23,7 @@ class CookNowService {
     int maxOptions = 5,
     int avoidRecentRecipes = 3,
     bool preferCachedFirst = false,
+    String? creativity,
   }) async {
     // Prefer the new constrained endpoint.
     // Keep this method signature stable; we adapt backend response to the existing `Recipe` model.
@@ -49,22 +50,31 @@ class CookNowService {
     }
     Future<List<Recipe>> fetchGenerated({required int attempts}) async {
       final byId = <String, Recipe>{};
-      for (var i = 0; i < attempts; i += 1) {
-        final req = <String, dynamic>{
-          'request_text': '',
-          if (cuisine != null && cuisine.trim().isNotEmpty) 'cuisine': cuisine.trim(),
-          'max_time_minutes': 45,
-          'serves': 4,
-          'include_inactive_inventory': includeInactiveInventory,
-          'use_expiring_items': true,
-          if (spiceLevel != null && spiceLevel.trim().isNotEmpty) 'spice_level': spiceLevel.trim(),
-        };
+      final creative = (creativity ?? '').trim().toLowerCase();
+      final creativityValue = (creative == 'high' || creative == 'standard') ? creative : '';
+      final req = <String, dynamic>{
+        'request_text': '',
+        if (cuisine != null && cuisine.trim().isNotEmpty) 'cuisine': cuisine.trim(),
+        'max_time_minutes': 45,
+        'serves': 4,
+        'include_inactive_inventory': includeInactiveInventory,
+        'use_expiring_items': true,
+        // Ask backend for multiple options in a single call.
+        'count': attempts.clamp(1, 8),
+        if (spiceLevel != null && spiceLevel.trim().isNotEmpty) 'spice_level': spiceLevel.trim(),
+        if (creativityValue.isNotEmpty) 'creativity': creativityValue,
+      };
 
-        final res = await apiClient.post('/recipes/generate', req);
-        final r = Recipe.fromRecipeGenerateResponse(res);
-        final id = r.recipeId.trim();
-        if (id.isNotEmpty) {
-          byId.putIfAbsent(id, () => r);
+      final res = await apiClient.post('/recipes/generate-options', req);
+      final rawOptions = (res['options'] is List) ? (res['options'] as List) : const [];
+
+      for (final row in rawOptions) {
+        if (row is Map) {
+          final r = Recipe.fromRecipeGenerateResponse(Map<String, dynamic>.from(row));
+          final id = r.recipeId.trim();
+          if (id.isNotEmpty) {
+            byId.putIfAbsent(id, () => r);
+          }
         }
       }
       return byId.values.toList();

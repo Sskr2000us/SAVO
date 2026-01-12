@@ -1,9 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
+import '../services/cook_now_service.dart';
+import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
+import '../models/profile_state.dart';
+import 'recipe_options_screen.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 
@@ -183,6 +188,44 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Saved $addedCount items to pantry')),
         );
+
+        // Immediately present recipe options (best-effort) so the user gets value
+        // without needing to press a separate "Generate recipes" button.
+        try {
+          final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+          if (!mounted) return;
+          if (gate.allowed) {
+            final apiClient = Provider.of<ApiClient>(context, listen: false);
+            final profileState = Provider.of<ProfileState>(context, listen: false);
+            final service = CookNowService();
+
+            final options = await service.generateRecipeOptions(
+              apiClient: apiClient,
+              profileState: profileState,
+              maxOptions: 5,
+              avoidRecentRecipes: 3,
+            );
+
+            if (!mounted) return;
+            if (options.isNotEmpty) {
+              await Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                  settings: const RouteSettings(name: '/recipe_options'),
+                  builder: (_) => RecipeOptionsScreen(
+                    recipes: options,
+                    showIngredientMatch: true,
+                    titleOverride: 'Meals you can cook tonight',
+                    skipSuggestionSessionGate: true,
+                  ),
+                ),
+                (route) => route.isFirst,
+              );
+              return;
+            }
+          }
+        } catch (_) {
+          // Best-effort only.
+        }
 
         // Exit the SnapPantry flow.
         Navigator.of(context).popUntil((route) => route.isFirst);

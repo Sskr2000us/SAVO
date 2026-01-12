@@ -13,6 +13,10 @@ async def generate_json_with_retries(
     schema: dict[str, Any],
     max_attempts: int = 2,
     repair_hint: str | None = None,
+    mode_hint: str | None = None,
+    temperature: float | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
 ) -> dict[str, Any]:
     """Generate JSON with a small retry/repair loop.
 
@@ -30,7 +34,14 @@ async def generate_json_with_retries(
 
     for attempt in range(max_attempts):
         try:
-            return await client.generate_json(messages=base_messages, schema=schema)
+            return await client.generate_json(
+                messages=base_messages,
+                schema=schema,
+                mode_hint=mode_hint,
+                temperature=temperature,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+            )
         except RateLimitException as e:
             last_error = e
             # Keep this quick; we only sleep if provider explicitly gives a short retry_after.

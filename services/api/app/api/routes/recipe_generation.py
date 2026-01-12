@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import asyncio
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Literal
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,6 +34,7 @@ from app.core.safety_constraints import (
 )
 from app.core.llm_client import get_reasoning_client
 from app.core.llm_utils import generate_json_with_retries
+from app.core.cultural_intelligence import build_cultural_intelligence_prompt
 
 
 router = APIRouter()
@@ -45,6 +46,49 @@ _GENERATION_BUDGET_SECONDS = 25
 
 
 _UUID_NAMESPACE = uuid5(UUID("00000000-0000-0000-0000-000000000000"), "savo-ingredient")
+
+
+_CREATIVE_RECIPE_KEYWORDS = {
+    "native",
+    "cultural",
+    "authentic",
+    "traditional",
+    "regional",
+    "heritage",
+    "innovative",
+    "creative",
+    "fusion",
+    "street food",
+}
+
+
+def _wants_native_or_innovative_recipe(request_text: str | None) -> bool:
+    text = (request_text or "").strip().lower()
+    if not text:
+        return False
+    # Conservative substring matching (supports phrases like "native style" / "cultural recipe").
+    return any(k in text for k in _CREATIVE_RECIPE_KEYWORDS)
+
+
+def _pick_cultural_focus_ingredients(*, pantry_names: list[str], expiring: list[str]) -> list[str]:
+    # Keep this very small to avoid bloating the prompt.
+    # Prefer expiring items, then whatever appears early in pantry_names.
+    chosen: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> None:
+        nm = (name or "").strip().lower()
+        if not nm or nm in seen:
+            return
+        seen.add(nm)
+        chosen.append(nm)
+
+    for n in (expiring or [])[:6]:
+        _add(n)
+    for n in (pantry_names or [])[:12]:
+        _add(n)
+
+    return chosen[:8]
 
 
 def _now_iso() -> str:
@@ -81,6 +125,19 @@ class RecipeGenerateRequest(BaseModel):
     include_inactive_inventory: bool = Field(default=False)
     use_expiring_items: bool = Field(default=False)
     spice_level: Optional[str] = Field(default=None)
+    creativity: Optional[Literal["standard", "high"]] = Field(
+        default=None,
+        description="Optional creativity level. 'high' forces LLM generation for more native/innovative recipes.",
+    )
+
+
+class RecipeGenerateOptionsRequest(RecipeGenerateRequest):
+    count: int = Field(
+        default=5,
+        ge=1,
+        le=8,
+        description="Number of recipe options to return in a single call.",
+    )
 
 
 class CanonicalIngredient(BaseModel):
@@ -128,6 +185,11 @@ class RecipeGenerateResponse(BaseModel):
     mode: str
     reason: str
     trust_signals: TrustSignals
+
+
+class RecipeGenerateOptionsResponse(BaseModel):
+    success: bool = True
+    options: List[RecipeGenerateResponse] = Field(default_factory=list)
 
 
 class RecipeAttemptRecord(BaseModel):
@@ -788,6 +850,23 @@ def _canonical_recipe_json_schema() -> Dict[str, Any]:
     }
 
 
+def _canonical_recipe_options_json_schema(*, count: int) -> Dict[str, Any]:
+    n = max(1, min(int(count or 1), 8))
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["recipes"],
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "minItems": n,
+                "maxItems": n,
+                "items": _canonical_recipe_json_schema(),
+            }
+        },
+    }
+
+
 def _validate_against_constraints(
     *,
     recipe: Dict[str, Any],
@@ -849,6 +928,9 @@ async def generate_recipe(
     constraints = _resolve_intent_to_constraints(req)
     constraints.ingredients_allowed = pantry_names
 
+    req_creativity = (req.creativity or "").strip().lower()
+    force_generation = (req_creativity == "high") or _wants_native_or_innovative_recipe(req.request_text)
+
     attempt_id = str(uuid4())
 
     # Store locked constraints as append-only event for auditability.
@@ -863,12 +945,16 @@ async def generate_recipe(
     preferred_threshold = 0.70
 
     # Try retrieved first.
-    retrieved = _try_retrieve_recipe(
-        user_id=str(user_id),
-        constraints=constraints,
-        pantry_names=pantry_names,
-        serves=req.serves,
-    )
+    # Optimization: for explicit creative/native requests we skip retrieval to reduce latency
+    # and maximize novelty.
+    retrieved = None
+    if not force_generation:
+        retrieved = _try_retrieve_recipe(
+            user_id=str(user_id),
+            constraints=constraints,
+            pantry_names=pantry_names,
+            serves=req.serves,
+        )
 
     assembled, coverage, missing = _assemble_recipe(
         pantry_names=pantry_names,
@@ -913,17 +999,20 @@ async def generate_recipe(
     ok_safety, safety_violations = validate_recipe_safety(recipe_obj.model_dump(), profile if isinstance(profile, dict) else {})
     safety_hint = " ".join(safety_violations)[:500] if not ok_safety else ""
 
-    needs_generation = (pantry_cov < preferred_threshold) or (not ok_safety)
+    needs_generation = force_generation or (pantry_cov < preferred_threshold) or (not ok_safety)
 
     if needs_generation:
         # Enforce distribution target best-effort (generated <= 20%).
-        if _generated_share_exceeded(user_id=str(user_id)):
+        if (not force_generation) and _generated_share_exceeded(user_id=str(user_id)):
             needs_generation = False
 
     if needs_generation:
         # Generated mode is allowed only after constraints are locked. This is best-effort and must be validated.
         mode = "generated"
-        reason = "pantry_match" if pantry_cov < preferred_threshold else "safety_repair"
+        if force_generation:
+            reason = "creative_request"
+        else:
+            reason = "pantry_match" if pantry_cov < preferred_threshold else "safety_repair"
 
         schema = _canonical_recipe_json_schema()
         client = get_reasoning_client()
@@ -935,6 +1024,8 @@ async def generate_recipe(
         family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
         pantry_context = _extract_pantry_context(
             pantry if isinstance(pantry, list) else [],
+            # Keep prompts smaller/faster for creative requests.
+            limit=40 if force_generation else 80,
             prefer_expiring_items=bool(constraints.use_expiring_items),
             expiring_names=expiring,
         )
@@ -944,6 +1035,12 @@ async def generate_recipe(
             "religious": build_religious_constraints(profile if isinstance(profile, dict) else {}),
             "dietary": build_dietary_constraints(profile if isinstance(profile, dict) else {}),
         }
+
+        focus_ingredients = _pick_cultural_focus_ingredients(pantry_names=pantry_names, expiring=expiring)
+        cultural_intelligence_text = build_cultural_intelligence_prompt(
+            focus_ingredients,
+            cuisine=constraints.cuisine,
+        ).strip()
 
         prompt = {
             "locked_constraints": constraints.model_dump(),
@@ -956,6 +1053,8 @@ async def generate_recipe(
             "expiring_items": expiring,
             "preferred_pantry_coverage_threshold": preferred_threshold,
             "serves": int(req.serves),
+            "creative_intent": bool(force_generation),
+            "cultural_focus_ingredients": focus_ingredients,
             "hard_constraints": [
                 "only_pantry_available_ingredients_or_explicitly_marked_missing",
                 "cuisine_logic_must_match",
@@ -968,6 +1067,7 @@ async def generate_recipe(
         }
 
         try:
+            budget_seconds = 18 if force_generation else _GENERATION_BUDGET_SECONDS
             generated = await asyncio.wait_for(
                 generate_json_with_retries(
                     client=client,
@@ -982,16 +1082,24 @@ async def generate_recipe(
                                 "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
                                 "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
                                 "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
+                                "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
+                                "Prefer a specific named dish style appropriate to the cuisine (including sub-region if relevant). "
+                                f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
                                 "Return JSON only that matches the schema." 
                             ),
                         },
                         {"role": "user", "content": str(prompt)},
                     ],
                     schema=schema,
-                    max_attempts=2,
+                    # For creative requests, prioritize speed. If generation fails,
+                    # we fail closed to assembled.
+                    max_attempts=1 if force_generation else 2,
                     repair_hint="constrained recipe json",
+                    mode_hint="recipe",
+                    # Encourage novelty while schema + validators keep structure/safety tight.
+                    presence_penalty=0.4 if force_generation else None,
                 ),
-                timeout=_GENERATION_BUDGET_SECONDS,
+                timeout=budget_seconds,
             )
 
             # Normalize fields and validate
@@ -1095,6 +1203,343 @@ async def generate_recipe(
         reason=reason,
         trust_signals=trust,
     )
+
+
+@router.post("/generate-options", response_model=RecipeGenerateOptionsResponse)
+async def generate_recipe_options(
+    req: RecipeGenerateOptionsRequest,
+    user_id: str = Depends(get_current_user),
+):
+    # Load profile + pantry truth
+    try:
+        profile = await get_full_profile(str(user_id))
+    except Exception:
+        profile = {}
+
+    try:
+        pantry = await get_inventory(str(user_id), include_inactive=bool(req.include_inactive_inventory))
+    except Exception:
+        pantry = []
+
+    pantry_names = _extract_pantry_names(pantry if isinstance(pantry, list) else [])
+    expiring = _find_expiring_items(pantry if isinstance(pantry, list) else [])
+
+    constraints = _resolve_intent_to_constraints(req)
+    constraints.ingredients_allowed = pantry_names
+
+    req_creativity = (req.creativity or "").strip().lower()
+    force_generation = (req_creativity == "high") or _wants_native_or_innovative_recipe(req.request_text)
+
+    preferred_threshold = 0.70
+
+    # Deterministic fallback (for fail-closed behavior)
+    assembled, assembled_cov, assembled_missing = _assemble_recipe(
+        pantry_names=pantry_names,
+        constraints=constraints,
+        serves=req.serves,
+        expiring_names=expiring,
+    )
+
+    # Prepare generation prompt
+    count = max(1, min(int(req.count or 1), 8))
+    schema = _canonical_recipe_options_json_schema(count=count)
+    client = get_reasoning_client()
+
+    pantry_id_to_name = _ingredient_id_map(pantry_names)
+    missing_candidates = _suggest_missing_candidates(pantry_names=pantry_names, cuisine=constraints.cuisine)
+    missing_id_to_name = _ingredient_id_map(missing_candidates)
+
+    family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
+    pantry_context = _extract_pantry_context(
+        pantry if isinstance(pantry, list) else [],
+        # Keep prompts smaller/faster. Multi-option responses can get large.
+        limit=35,
+        prefer_expiring_items=bool(constraints.use_expiring_items),
+        expiring_names=expiring,
+    )
+    pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
+    safety_constraints_text = {
+        "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
+        "religious": build_religious_constraints(profile if isinstance(profile, dict) else {}),
+        "dietary": build_dietary_constraints(profile if isinstance(profile, dict) else {}),
+    }
+
+    focus_ingredients = _pick_cultural_focus_ingredients(pantry_names=pantry_names, expiring=expiring)
+    cultural_intelligence_text = build_cultural_intelligence_prompt(
+        focus_ingredients,
+        cuisine=constraints.cuisine,
+    ).strip()
+
+    prompt = {
+        "locked_constraints": constraints.model_dump(),
+        "family_profile": family_profile_compact,
+        "safety_constraints": safety_constraints_text,
+        "allowed_pantry_ingredients": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in pantry_names],
+        "pantry_context": pantry_context,
+        "pantry_image_signals": pantry_image_signals,
+        "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
+        "expiring_items": expiring,
+        "preferred_pantry_coverage_threshold": preferred_threshold,
+        "serves": int(req.serves),
+        "creative_intent": bool(force_generation),
+        "cultural_focus_ingredients": focus_ingredients,
+        "option_count": int(count),
+        "diversity_rules": [
+            "return_exactly_option_count_recipes",
+            "each_recipe_name_must_be_distinct",
+            "vary_dish_type_and_primary_technique_across_options",
+            "avoid_generic_names_like_pantry_bowl",
+            "keep_each_recipe_compact_ingredients<=12_steps<=7",
+        ],
+        "hard_constraints": [
+            "only_pantry_available_ingredients_or_explicitly_marked_missing",
+            "cuisine_logic_must_match",
+            "dietary_rules_must_be_enforced",
+            "max_cooking_time_must_be_respected",
+            "llm_never_decides_constraints_only_fills_structure",
+            "ingredient_id_must_come_from_allowed_or_missing_lists_only",
+        ],
+        "safety_hint": "",
+    }
+
+    # Track as a single multi-option request
+    request_id = str(uuid4())
+    emit_event(
+        event_type="recipe.options.constraints_locked",
+        user_id=str(user_id),
+        entity_type="recipe_options_request",
+        entity_id=request_id,
+        payload={
+            "constraints": constraints.model_dump(),
+            "request_text": req.request_text or "",
+            "count": int(count),
+            "creative_intent": bool(force_generation),
+        },
+    )
+
+    try:
+        budget_seconds = 22
+        generated = await asyncio.wait_for(
+            generate_json_with_retries(
+                client=client,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are SAVO's constrained recipe generator. "
+                            "You MUST follow the locked constraints exactly. "
+                            "You must not invent constraints. "
+                            "You MUST respect family_profile + safety_constraints. "
+                            "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
+                            "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
+                            "Return a DIVERSE set of options; do not repeat the same dish with minor variations. "
+                            "Keep each option compact: steps <= 7, ingredient list <= 12. "
+                            "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
+                            f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
+                            "Return JSON only that matches the schema."
+                        ),
+                    },
+                    {"role": "user", "content": str(prompt)},
+                ],
+                schema=schema,
+                max_attempts=1,
+                repair_hint="constrained recipe options json",
+                mode_hint="recipe",
+                presence_penalty=0.5 if force_generation else 0.2,
+            ),
+            timeout=budget_seconds,
+        )
+
+        raw_recipes = generated.get("recipes") if isinstance(generated, dict) else None
+        if not isinstance(raw_recipes, list) or not raw_recipes:
+            raise ValueError("No recipes returned")
+
+        options: list[RecipeGenerateResponse] = []
+        seen_names: set[str] = set()
+
+        for item in raw_recipes:
+            if not isinstance(item, dict):
+                continue
+
+            is_ok, violations = _validate_against_constraints(recipe=item, constraints=constraints, pantry_names=pantry_names)
+            if not is_ok:
+                continue
+
+            ok_safety, _ = validate_recipe_safety(item, profile if isinstance(profile, dict) else {})
+            if not ok_safety:
+                continue
+
+            # Normalize + ensure ids
+            normalized = {
+                **item,
+                "recipe_id": (item.get("recipe_id") or str(uuid4())),
+                "version": (item.get("version") or "v1"),
+                "created_from": "generated",
+            }
+            recipe_obj = CanonicalRecipe(**normalized)
+
+            # Basic dedupe by name
+            nm = (recipe_obj.recipe_name or "").strip().lower()
+            if not nm or nm in seen_names:
+                continue
+            seen_names.add(nm)
+
+            ing_ids: List[str] = []
+            try:
+                for it in (item.get("ingredients") or []):
+                    if isinstance(it, dict) and it.get("ingredient_id"):
+                        ing_ids.append(str(it.get("ingredient_id")))
+            except Exception:
+                ing_ids = []
+
+            pantry_cov, missing_items = _pantry_coverage_by_id(
+                pantry_id_to_name=pantry_id_to_name,
+                ingredient_ids=ing_ids,
+                id_to_name_hint={**missing_id_to_name},
+            )
+
+            uses_what_you_have = float(pantry_cov or 0.0) >= preferred_threshold and len(missing_items) == 0
+            uses_expiring = bool(constraints.use_expiring_items and expiring)
+            trust = TrustSignals(
+                uses_what_you_have=uses_what_you_have,
+                estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
+                uses_expiring_items=uses_expiring,
+                adjustable_spice_level=True,
+            )
+
+            attempt_id = str(uuid4())
+            emit_event(
+                event_type="recipe.mode_selected",
+                user_id=str(user_id),
+                entity_type="recipe_attempt",
+                entity_id=attempt_id,
+                payload={
+                    "mode": "generated",
+                    "reason": "creative_request" if force_generation else "pantry_match",
+                    "pantry_coverage": float(pantry_cov or 0.0),
+                    "missing_count": len(missing_items),
+                    "options_request_id": request_id,
+                },
+            )
+
+            # Best-effort persist each option as its own attempt.
+            try:
+                pantry_context_all = _extract_pantry_context(
+                    pantry if isinstance(pantry, list) else [],
+                    prefer_expiring_items=bool(constraints.use_expiring_items),
+                    expiring_names=expiring,
+                )
+                image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
+                _best_effort_persist_recipe_attempt(
+                    user_id=str(user_id),
+                    attempt_id=attempt_id,
+                    payload={
+                        "recipe_id": str(getattr(recipe_obj, "recipe_id", "")),
+                        "request_text": (req.request_text or ""),
+                        "mode": "generated",
+                        "reason": "creative_request" if force_generation else "pantry_match",
+                        "pantry_coverage": float(pantry_cov or 0.0),
+                        "locked_constraints": constraints.model_dump(),
+                        "family_profile": family_profile_compact,
+                        "pantry_context": pantry_context_all,
+                        "missing_ingredients": [m.model_dump() for m in (missing_items or [])],
+                        "recipe": recipe_obj.model_dump(),
+                        "image_signals": image_signals,
+                        "options_request_id": request_id,
+                    },
+                )
+            except Exception:
+                pass
+
+            options.append(
+                RecipeGenerateResponse(
+                    recipe=recipe_obj,
+                    locked_constraints=constraints,
+                    pantry_coverage=float(pantry_cov or 0.0),
+                    missing_ingredients=list(missing_items or []),
+                    mode="generated",
+                    reason="creative_request" if force_generation else "pantry_match",
+                    trust_signals=trust,
+                )
+            )
+
+        if not options:
+            raise ValueError("No valid options")
+
+        emit_event(
+            event_type="recipe.options.generated",
+            user_id=str(user_id),
+            entity_type="recipe_options_request",
+            entity_id=request_id,
+            payload={
+                "requested": int(count),
+                "returned": int(len(options)),
+                "creative_intent": bool(force_generation),
+            },
+        )
+
+        return RecipeGenerateOptionsResponse(options=options)
+
+    except Exception:
+        # Fail closed: return at least one deterministic option.
+        attempt_id = str(uuid4())
+        trust = TrustSignals(
+            uses_what_you_have=float(assembled_cov or 0.0) >= preferred_threshold and len(assembled_missing or []) == 0,
+            estimated_time_minutes=int(getattr(assembled, "prep_time_minutes", 0) or 0),
+            uses_expiring_items=bool(constraints.use_expiring_items and expiring),
+            adjustable_spice_level=True,
+        )
+
+        emit_event(
+            event_type="recipe.options.fallback",
+            user_id=str(user_id),
+            entity_type="recipe_options_request",
+            entity_id=request_id,
+            payload={"requested": int(count), "returned": 1},
+        )
+
+        try:
+            family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
+            pantry_context_all = _extract_pantry_context(
+                pantry if isinstance(pantry, list) else [],
+                prefer_expiring_items=bool(constraints.use_expiring_items),
+                expiring_names=expiring,
+            )
+            image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
+            _best_effort_persist_recipe_attempt(
+                user_id=str(user_id),
+                attempt_id=attempt_id,
+                payload={
+                    "recipe_id": str(getattr(assembled, "recipe_id", "")),
+                    "request_text": (req.request_text or ""),
+                    "mode": "assembled",
+                    "reason": "fallback",
+                    "pantry_coverage": float(assembled_cov or 0.0),
+                    "locked_constraints": constraints.model_dump(),
+                    "family_profile": family_profile_compact,
+                    "pantry_context": pantry_context_all,
+                    "missing_ingredients": [m.model_dump() for m in (assembled_missing or [])],
+                    "recipe": assembled.model_dump(),
+                    "image_signals": image_signals,
+                    "options_request_id": request_id,
+                },
+            )
+        except Exception:
+            pass
+
+        return RecipeGenerateOptionsResponse(
+            options=[
+                RecipeGenerateResponse(
+                    recipe=assembled,
+                    locked_constraints=constraints,
+                    pantry_coverage=float(assembled_cov or 0.0),
+                    missing_ingredients=list(assembled_missing or []),
+                    mode="assembled",
+                    reason="fallback",
+                    trust_signals=trust,
+                )
+            ]
+        )
 
 
 @router.get("/attempts", response_model=RecipeAttemptListResponse)

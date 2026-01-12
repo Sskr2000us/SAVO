@@ -72,6 +72,8 @@ Generated from FastAPI route files at 2026-01-04 03:15:03Z.
 | GET | /profile/session/info | auth | services/api/app/api/routes/profile.py:router |
 | POST | /profile/session/track | auth | services/api/app/api/routes/profile.py:router |
 | GET | /r/{share_id} | public | services/api/app/api/routes/recipes.py:public_router |
+| POST | /recipes/generate | auth | services/api/app/api/routes/recipe_generation.py:router |
+| POST | /recipes/generate-options | auth | services/api/app/api/routes/recipe_generation.py:router |
 | POST | /recipes/image | public | services/api/app/api/routes/recipes.py:router |
 | GET | /recipes/image/{recipe_name} | public | services/api/app/api/routes/recipes.py:router |
 | POST | /recipes/import | auth | services/api/app/api/routes/recipes.py:router |

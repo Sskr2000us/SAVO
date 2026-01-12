@@ -104,7 +104,7 @@ class ApiClient {
       ? 240
       : endpoint.contains('/plan/')
         ? 180
-        : endpoint.contains('/recipes/generate')
+        : (endpoint.contains('/recipes/generate') || endpoint.contains('/recipes/generate-options'))
           ? 120
           : 30;
     
