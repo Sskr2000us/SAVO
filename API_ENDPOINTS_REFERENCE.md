@@ -91,6 +91,9 @@ These endpoints are authenticated and use pantry + locked constraints to generat
 ### POST /recipes/generate
 Generate a single recipe (best-effort). The backend may return a retrieved/assembled recipe unless generation is required or explicitly forced via `creativity`.
 
+Optional localization:
+- `output_language` / `output_languages` lets the backend return best-effort bilingual fields in `i18n` (recipe name + step text). This does not change the canonical `recipe.recipe_name` / `recipe.steps` strings (those remain English).
+
 **Request (example):**
 ```json
 {
@@ -102,6 +105,8 @@ Generate a single recipe (best-effort). The backend may return a retrieved/assem
   "include_inactive_inventory": false,
   "use_expiring_items": true,
   "spice_level": "medium",
+  "output_language": "te",
+  "output_languages": ["en", "te"],
   "creativity": "high"
 }
 ```
@@ -150,12 +155,24 @@ Generate a single recipe (best-effort). The backend may return a retrieved/assem
     "estimated_time_minutes": 25,
     "uses_expiring_items": true,
     "adjustable_spice_level": true
+  },
+  "i18n": {
+    "recipe_name": {
+      "en": "string",
+      "te": "string"
+    },
+    "steps": [
+      {"en": "string", "te": "string"}
+    ]
   }
 }
 ```
 
 ### POST /recipes/generate-options
 Generate multiple recipe options in a single backend call. This is faster than calling `/recipes/generate` in a loop.
+
+Optional localization:
+- Include `output_language` / `output_languages` to get best-effort bilingual fields in each option's `i18n`.
 
 **Request (example):**
 ```json
@@ -168,6 +185,8 @@ Generate multiple recipe options in a single backend call. This is faster than c
   "include_inactive_inventory": false,
   "use_expiring_items": true,
   "spice_level": "medium",
+  "output_language": "hi",
+  "output_languages": ["en", "hi"],
   "creativity": "high",
   "count": 5
 }
@@ -186,7 +205,11 @@ Generate multiple recipe options in a single backend call. This is faster than c
       "missing_ingredients": [],
       "mode": "generated",
       "reason": "creative_request",
-      "trust_signals": {}
+      "trust_signals": {},
+      "i18n": {
+        "recipe_name": {"en": "...", "hi": "..."},
+        "steps": [{"en": "...", "hi": "..."}]
+      }
     }
   ]
 }
@@ -205,6 +228,8 @@ $body = @{
   include_inactive_inventory = $false
   use_expiring_items = $true
   spice_level = "medium"
+  output_language = "hi"
+  output_languages = @("en", "hi")
   creativity = "high"
   count = 5
 } | ConvertTo-Json
@@ -231,6 +256,8 @@ curl "$API_BASE_URL/recipes/generate-options" \
     "include_inactive_inventory": false,
     "use_expiring_items": true,
     "spice_level": "medium",
+    "output_language": "hi",
+    "output_languages": ["en", "hi"],
     "creativity": "high",
     "count": 5
   }'
