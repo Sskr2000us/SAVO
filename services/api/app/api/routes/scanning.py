@@ -2962,6 +2962,27 @@ async def confirm_ingredients(
                                 inv_subcategory = _norm(md.get("subcategory"))
                             if not inv_cuisine:
                                 inv_cuisine = _norm(md.get("cuisine"))
+
+                        # Additional fallback: the analyzer response includes category/subcategory fields
+                        # directly on detected items. Use those if present.
+                        def _norm2(s: Any) -> Optional[str]:
+                            if s is None:
+                                return None
+                            txt = str(s).strip().lower()
+                            if not txt:
+                                return None
+                            txt = txt.replace(" ", "_")
+                            txt = txt.replace("-", "_")
+                            while "__" in txt:
+                                txt = txt.replace("__", "_")
+                            return txt
+
+                        if not inv_category:
+                            inv_category = _norm2(detected_item.get("category"))
+                        if not inv_subcategory:
+                            inv_subcategory = _norm2(detected_item.get("subcategory"))
+                        if not inv_cuisine:
+                            inv_cuisine = _norm2(detected_item.get("cuisine"))
                 except Exception:
                     pass
 

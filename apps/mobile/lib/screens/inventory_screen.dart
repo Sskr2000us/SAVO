@@ -612,7 +612,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   List<List<InventoryItem>> _findDuplicateGroups([List<InventoryItem>? items]) {
     final Map<String, List<InventoryItem>> groups = {};
     for (final item in (items ?? _items)) {
-      final key = item.canonicalName.trim().toLowerCase();
+      // Only treat as duplicates when we can actually merge: same identity + same unit/storage/state.
+      // This avoids noisy "duplicates" when the same ingredient exists in different locations.
+      final key = '${item.canonicalName.trim().toLowerCase()}|${item.unit.trim().toLowerCase()}|${item.storage.trim().toLowerCase()}|${item.state.trim().toLowerCase()}';
       if (key.isEmpty) continue;
       groups.putIfAbsent(key, () => []).add(item);
     }
@@ -1884,7 +1886,14 @@ class _InventoryCard extends StatelessWidget {
         ),
         title: Row(
           children: [
-            Expanded(child: Text(prettyName(item.displayLabel))),
+            Expanded(
+              child: Text(
+                prettyName(item.displayLabel),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+              ),
+            ),
             if (!item.isCurrent)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1899,7 +1908,10 @@ class _InventoryCard extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'),
+            Text(
+              '${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'
+              '${showExpiryChip ? ' • ${freshness}d' : ''}',
+            ),
             const SizedBox(height: 2),
             Text(metaParts.join(' • '), style: theme.textTheme.bodySmall),
             if (!hasImage) ...[
@@ -1915,9 +1927,10 @@ class _InventoryCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (onUse != null)
-              TextButton(
+              IconButton(
+                tooltip: 'Use',
                 onPressed: onUse,
-                child: const Text('Use'),
+                icon: const Icon(Icons.check_circle_outline),
               ),
             IconButton(
               tooltip: hasImage ? 'View image' : 'Add image',
@@ -1934,18 +1947,6 @@ class _InventoryCard extends StatelessWidget {
                     )
                   : Icon(hasImage ? Icons.image_outlined : Icons.photo_camera_outlined),
             ),
-            if (showExpiryChip)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Chip(
-                  label: Text(
-                    '${freshness}d',
-                    style: theme.textTheme.labelSmall?.copyWith(color: Colors.white) ??
-                        const TextStyle(fontSize: 12, color: Colors.white),
-                  ),
-                  backgroundColor: item.isExpiringSoon ? Colors.orange : Colors.grey,
-                ),
-              ),
             IconButton(
               icon: const Icon(Icons.edit_outlined),
               onPressed: onEdit,
