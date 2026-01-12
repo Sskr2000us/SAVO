@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/planning.dart';
+import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../services/cook_session_storage.dart';
 import 'cook_mode_screen.dart';
@@ -23,6 +24,22 @@ class _CookScreenState extends State<CookScreen> {
 
   List<Map<String, dynamic>> _recentlyCooked = const [];
   bool _loadingRecent = true;
+
+  String _preferredLanguageKey(BuildContext context) {
+    try {
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+      final lowered = raw.trim().toLowerCase();
+      if (lowered.isEmpty) return 'en';
+      return lowered.split(RegExp('[-_]')).first;
+    } catch (_) {
+      return 'en';
+    }
+  }
 
   @override
   void initState() {
@@ -208,6 +225,7 @@ class _CookScreenState extends State<CookScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final lang = _preferredLanguageKey(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -240,7 +258,7 @@ class _CookScreenState extends State<CookScreen> {
                     child: ListTile(
                       title: const Text('Resume cooking'),
                       subtitle: Text(
-                        _activeSession!.recipe.getLocalizedName('en'),
+                        _activeSession!.recipe.getLocalizedName(lang),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -311,7 +329,7 @@ class _CookScreenState extends State<CookScreen> {
                     return menu.courses.expand((course) {
                       if (course.recipeOptions.isEmpty) return const <Widget>[];
                       final recipe = course.recipeOptions.first;
-                      final title = recipe.getLocalizedName('en');
+                      final title = recipe.getLocalizedName(lang);
                       return [
                         Card(
                           child: ListTile(

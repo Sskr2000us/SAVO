@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
+import '../models/profile_state.dart';
 import '../widgets/quantity_picker.dart';
 import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
@@ -285,6 +286,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
     setState(() => _loading = true);
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+
+      final rawLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+      final outputLang = rawLang.trim().toLowerCase().split(RegExp('[-_]')).first;
 
       final rawItems = ingredients
           .where((i) => i.trim().isNotEmpty)
@@ -299,7 +308,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final normalized = await apiClient.post('/inventory/normalize', {
         'raw_items': rawItems,
         'measurement_system': 'metric',
-        'output_language': 'en',
+        'output_language': outputLang.isNotEmpty ? outputLang : 'en',
       });
 
       final normItems = normalized['normalized_inventory'];

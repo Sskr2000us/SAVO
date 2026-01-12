@@ -317,89 +317,121 @@ class _PantryAiSuggestionsScreenState extends State<PantryAiSuggestionsScreen> {
       fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
 
       final svc = ScanningService();
-      final res = await svc.confirmIngredients(
-        scanId: widget.scanId,
-        confirmations: _buildConfirmations(),
-      );
+      Map<String, dynamic>? saveResult;
 
-      if (!mounted) return;
+      final saveFuture = svc
+          .confirmIngredients(
+            scanId: widget.scanId,
+            confirmations: _buildConfirmations(),
+          )
+          .then((res) {
+        saveResult = res;
+        if (!mounted) return;
 
-      if (res['success'] == true) {
-        fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
-        fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
+        if (res['success'] == true) {
+          fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
+          fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
 
-        final added = res['pantry_items_added'];
-        final addedCount = (added is num)
-            ? added.toInt()
-            : _choices.values
-                .where((v) => v['action'] == 'confirmed' || v['action'] == 'modified')
-                .length;
+          final added = res['pantry_items_added'];
+          final addedCount = (added is num)
+              ? added.toInt()
+              : _choices.values
+                  .where((v) => v['action'] == 'confirmed' || v['action'] == 'modified')
+                  .length;
 
-        messenger.showSnackBar(
-          SnackBar(content: Text('Saved $addedCount items to pantry')),
-        );
-
-        // Fast value: immediately show 3–5 meal ideas after confirm.
-        try {
-          fireAndForget(MetricsService.instance.recordEvent('post_scan_meal_ideas_requested'));
-          final apiClient = Provider.of<ApiClient>(context, listen: false);
-          final profileState = Provider.of<ProfileState>(context, listen: false);
-          final service = CookNowService();
-
-          // Avoid interrupting the core scan->save flow: if the user has hit
-          // their daily suggestions limit, just skip meal ideas.
-          final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
-          if (!mounted) return;
-          if (!gate.allowed) {
-            messenger.showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Today\'s free meal ideas are used up. Upgrade to Pro for unlimited suggestions.',
-                ),
-              ),
-            );
-            navigator.popUntil((route) => route.isFirst);
-            return;
-          }
-
-          final options = await service.generateRecipeOptions(
-            apiClient: apiClient,
-            profileState: profileState,
-            maxOptions: 5,
-            avoidRecentRecipes: 3,
-          );
-
-          if (!mounted) return;
-
-          if (options.isEmpty) {
-            navigator.popUntil((route) => route.isFirst);
-            return;
-          }
-
-          await navigator.pushReplacement(
-            MaterialPageRoute(
-              settings: const RouteSettings(name: '/recipe_options'),
-              builder: (_) => RecipeOptionsScreen(
-                recipes: options,
-                showIngredientMatch: true,
-                titleOverride: 'Meals you can cook tonight',
-                skipSuggestionSessionGate: true,
+          final queued = res['queued'] == true;
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                queued
+                    ? 'Saved $addedCount items (will sync when online)'
+                    : 'Saved $addedCount items to pantry',
               ),
             ),
           );
           return;
-        } catch (_) {
-          // If suggestions fail, fall back to returning home.
+        }
+
+        final msg = res['error']?.toString() ?? 'Save failed';
+        messenger.showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }).catchError((e) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      });
+
+      // Optimistic/background save: don't block the UI on slow networks.
+      // Give the save a brief grace window so meal ideas can include new items
+      // on good connections, then proceed either way.
+      try {
+        await saveFuture.timeout(const Duration(milliseconds: 900));
+      } catch (_) {
+        // Ignore; proceed with best-effort meal ideas.
+      }
+
+      if (!mounted) return;
+      if (saveResult != null && saveResult!['success'] != true) {
+        setState(() => _saving = false);
+        return;
+      }
+
+      // Fast value: immediately show 3–5 meal ideas after save (best-effort).
+      try {
+        fireAndForget(MetricsService.instance.recordEvent('post_scan_meal_ideas_requested'));
+        final apiClient = Provider.of<ApiClient>(context, listen: false);
+        final profileState = Provider.of<ProfileState>(context, listen: false);
+        final service = CookNowService();
+
+        // Avoid interrupting the core scan->save flow: if the user has hit
+        // their daily suggestions limit, just skip meal ideas.
+        final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+        if (!mounted) return;
+        if (!gate.allowed) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Today\'s free meal ideas are used up. Upgrade to Pro for unlimited suggestions.',
+              ),
+            ),
+          );
           navigator.popUntil((route) => route.isFirst);
           return;
         }
-      }
 
-      final msg = res['error']?.toString() ?? 'Save failed';
-      messenger.showSnackBar(
-        SnackBar(content: Text(msg)),
-      );
-      setState(() => _saving = false);
+        final options = await service.generateRecipeOptions(
+          apiClient: apiClient,
+          profileState: profileState,
+          maxOptions: 5,
+          avoidRecentRecipes: 3,
+        );
+
+        if (!mounted) return;
+
+        if (options.isEmpty) {
+          navigator.popUntil((route) => route.isFirst);
+          return;
+        }
+
+        await navigator.pushReplacement(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/recipe_options'),
+            builder: (_) => RecipeOptionsScreen(
+              recipes: options,
+              showIngredientMatch: true,
+              titleOverride: 'Meals you can cook tonight',
+              skipSuggestionSessionGate: true,
+            ),
+          ),
+        );
+        return;
+      } catch (_) {
+        // If suggestions fail, fall back to returning home.
+        navigator.popUntil((route) => route.isFirst);
+        return;
+      }
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(

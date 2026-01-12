@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
 import '../models/inventory.dart';
+import '../models/profile_state.dart';
 import '../config/app_config.dart';
 import '../services/metrics_service.dart';
 import '../services/api_client.dart';
@@ -213,6 +214,23 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
     if (widget.showIngredientMatch) {
       final options = _sortedRecipesForDisplay(widget.recipes).take(5).toList();
       fireAndForget(_loadMatchCounts(options));
+    }
+  }
+
+  String _preferredLanguageKey() {
+    try {
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+
+      final lowered = raw.trim().toLowerCase();
+      if (lowered.isEmpty) return 'en';
+      return lowered.split(RegExp('[-_]')).first;
+    } catch (_) {
+      return 'en';
     }
   }
 
@@ -459,6 +477,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final lang = _preferredLanguageKey();
 
     if (_suggestionsLocked) {
       return Scaffold(
@@ -564,7 +583,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
 
                 final recipeIndex = showStaplesUi ? index - 1 : index;
                 final recipe = options[recipeIndex];
-                final title = _prettyName(recipe.getLocalizedName('en'));
+                final title = _prettyName(recipe.getLocalizedName(lang));
                 final why = _whyItWorks(recipe);
                 final imageUrl = _imageUrl(recipe);
                 final refs = recipe.youtubeReferences;
@@ -890,7 +909,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
     }
 
     if (kIsWeb) {
-      final name = recipe.getLocalizedName('en').trim();
+      final name = recipe.getLocalizedName(_preferredLanguageKey()).trim();
       if (name.isEmpty) return null;
       final cuisine = recipe.cuisine.trim().isEmpty ? 'general' : recipe.cuisine.trim();
       final url =
@@ -898,7 +917,7 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
       return '${Config.apiBaseUrl}$url';
     }
 
-    final name = recipe.getLocalizedName('en').trim();
+    final name = recipe.getLocalizedName(_preferredLanguageKey()).trim();
     if (name.isEmpty) return null;
     final encoded = Uri.encodeComponent(name);
     return 'https://source.unsplash.com/featured/?food,$encoded';

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning.dart';
+import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../services/cuisine_preference_service.dart';
 import '../services/metrics_service.dart';
@@ -333,13 +334,37 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     return ' — ${suffixParts.join(' ')}';
   }
 
-  String? _secondaryLanguageKey(Map<String, String> localized) {
+  String? _secondaryLanguageKey(
+    Map<String, String> localized, {
+    String? exclude,
+  }) {
+    final ex = exclude?.trim().toLowerCase();
     for (final e in localized.entries) {
       final key = e.key.trim().toLowerCase();
       final value = e.value.trim();
-      if (key.isNotEmpty && key != 'en' && value.isNotEmpty) return key;
+      if (key.isEmpty) continue;
+      if (key == 'en') continue;
+      if (ex != null && ex.isNotEmpty && key == ex) continue;
+      if (value.isNotEmpty) return key;
     }
     return null;
+  }
+
+  String _preferredLanguageKey(BuildContext context) {
+    try {
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+
+      final lowered = raw.trim().toLowerCase();
+      if (lowered.isEmpty) return 'en';
+      return lowered.split(RegExp('[-_]')).first;
+    } catch (_) {
+      return 'en';
+    }
   }
 
   @override
@@ -618,8 +643,12 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     final cs = theme.colorScheme;
 
     final recipe = widget.recipe;
-    final title = _prettyName(_stripIngredientDumpSuffix(recipe.getLocalizedName('en')));
-    final secondaryLang = _secondaryLanguageKey(recipe.recipeName);
+    final lang = _preferredLanguageKey(context);
+    final title = _prettyName(_stripIngredientDumpSuffix(recipe.getLocalizedName(lang)));
+
+    final String? secondaryLang = (lang != 'en' && (recipe.recipeName['en'] ?? '').trim().isNotEmpty)
+        ? 'en'
+        : _secondaryLanguageKey(recipe.recipeName, exclude: lang);
     final secondaryTitle = secondaryLang != null ? recipe.recipeName[secondaryLang] : null;
 
     final missingAll = <Map<String, dynamic>>[];
@@ -812,7 +841,7 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
                 title: const Text('Show steps'),
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: recipe.steps.map((s) {
-                  final instruction = s.getLocalizedInstruction('en').trim();
+                  final instruction = s.getLocalizedInstruction(lang).trim();
                   final secondaryInstruction = secondaryLang != null
                       ? (s.instruction[secondaryLang] ?? '').trim()
                       : '';

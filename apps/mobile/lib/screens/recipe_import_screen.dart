@@ -31,16 +31,22 @@ class _RecipeImportScreenState extends State<RecipeImportScreen> {
     super.dispose();
   }
 
-  String? _secondaryLanguage(BuildContext context) {
+  String _primaryLanguageKey(BuildContext context) {
     final profile = Provider.of<ProfileState>(context, listen: false);
     final lang = (profile.preferredLanguage?.trim().isNotEmpty == true)
         ? profile.preferredLanguage!.trim()
         : (profile.primaryLanguage?.trim().isNotEmpty == true)
             ? profile.primaryLanguage!.trim()
-            : null;
-    if (lang == null || lang.isEmpty) return null;
-    if (lang.toLowerCase() == 'en') return null;
-    return lang;
+            : Localizations.localeOf(context).languageCode;
+    final lowered = lang.trim().toLowerCase();
+    if (lowered.isEmpty) return 'en';
+    return lowered.split(RegExp('[-_]')).first;
+  }
+
+  String? _secondaryLanguageKey(String primary) {
+    final p = primary.trim().toLowerCase();
+    if (p.isEmpty || p == 'en') return null;
+    return 'en';
   }
 
   Future<void> _importFromUrl() async {
@@ -57,10 +63,11 @@ class _RecipeImportScreenState extends State<RecipeImportScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final secondary = _secondaryLanguage(context);
+      final primary = _primaryLanguageKey(context);
+      final secondary = _secondaryLanguageKey(primary);
       final resp = await apiClient.post('/recipes/import', {
         'source_url': url,
-        'output_language': 'en',
+        'output_language': primary,
         if (secondary != null) 'secondary_language': secondary,
       });
 
@@ -91,10 +98,11 @@ class _RecipeImportScreenState extends State<RecipeImportScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final secondary = _secondaryLanguage(context);
+      final primary = _primaryLanguageKey(context);
+      final secondary = _secondaryLanguageKey(primary);
       final resp = await apiClient.post('/recipes/import', {
         'source_text': text,
-        'output_language': 'en',
+        'output_language': primary,
         if (secondary != null) 'secondary_language': secondary,
       });
 
@@ -127,12 +135,13 @@ class _RecipeImportScreenState extends State<RecipeImportScreen> {
       }
 
       final apiClient = Provider.of<ApiClient>(context, listen: false);
-      final secondary = _secondaryLanguage(context);
+      final primary = _primaryLanguageKey(context);
+      final secondary = _secondaryLanguageKey(primary);
       final resp = await apiClient.postMultipart(
         '/recipes/import/image',
         file: file,
         fields: {
-          'output_language': 'en',
+          'output_language': primary,
           if (secondary != null) 'secondary_language': secondary,
         },
       );

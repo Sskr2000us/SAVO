@@ -392,11 +392,23 @@ class Recipe {
   String getLocalizedName(String languageCode) {
     if (recipeName.isEmpty) return recipeId;
 
+    String norm(String code) {
+      final c = code.trim().toLowerCase();
+      if (c.isEmpty) return c;
+      return c.split(RegExp('[-_]')).first;
+    }
+
+    final requestedExact = languageCode.trim();
+    final requested = norm(languageCode);
+
+    final preferredExact = recipeName[requestedExact];
+    if (preferredExact != null && preferredExact.trim().isNotEmpty) return preferredExact;
+
+    final preferred = recipeName[requested];
+    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
+
     final en = recipeName['en'];
     if (en != null && en.trim().isNotEmpty) return en;
-
-    final preferred = recipeName[languageCode];
-    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
 
     return recipeName.values.firstWhere(
       (v) => v.trim().isNotEmpty,
@@ -576,11 +588,23 @@ class RecipeStep {
   String getLocalizedInstruction(String languageCode) {
     if (instruction.isEmpty) return '';
 
+    String norm(String code) {
+      final c = code.trim().toLowerCase();
+      if (c.isEmpty) return c;
+      return c.split(RegExp('[-_]')).first;
+    }
+
+    final requestedExact = languageCode.trim();
+    final requested = norm(languageCode);
+
+    final preferredExact = instruction[requestedExact];
+    if (preferredExact != null && preferredExact.trim().isNotEmpty) return preferredExact;
+
+    final preferred = instruction[requested];
+    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
+
     final en = instruction['en'];
     if (en != null && en.trim().isNotEmpty) return en;
-
-    final preferred = instruction[languageCode];
-    if (preferred != null && preferred.trim().isNotEmpty) return preferred;
 
     return instruction.values.firstWhere(
       (v) => v.trim().isNotEmpty,

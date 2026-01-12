@@ -148,97 +148,131 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
 
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
     try {
       final svc = ScanningService();
-      final res = await svc.confirmIngredients(
-        scanId: widget.scanId,
-        confirmations: _buildConfirmations(),
-      );
+      Map<String, dynamic>? saveResult;
 
-      if (!mounted) return;
+      final saveFuture = svc
+          .confirmIngredients(
+            scanId: widget.scanId,
+            confirmations: _buildConfirmations(),
+          )
+          .then((res) {
+        saveResult = res;
+        if (!mounted) return;
 
-      if (res['success'] == true) {
-        fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
-        fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
-        fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
-        // Explicit confirm/save completion for activation funnel.
-        fireAndForget(MetricsService.instance.recordEvent('pantry_confirm_completed'));
-        // Time-to-first-value: best-effort end on first successful scan save.
-        fireAndForget(MetricsService.instance.endTimer('ttfv'));
+        if (res['success'] == true) {
+          fireAndForget(MetricsService.instance.recordWorkflowStep('SnapPantry', 'Save'));
+          fireAndForget(MetricsService.instance.endTimer('scan_to_confirm_time'));
+          fireAndForget(MetricsService.instance.recordEvent('pantry_scan_completed'));
+          // Explicit confirm/save completion for activation funnel.
+          fireAndForget(MetricsService.instance.recordEvent('pantry_confirm_completed'));
+          // Time-to-first-value: best-effort end on first successful scan save.
+          fireAndForget(MetricsService.instance.endTimer('ttfv'));
 
-        // Activation funnel reporting (best-effort; ignore failures).
-        fireAndForget(() async {
-          try {
-            final apiClient = ApiClient();
-            await apiClient.post('/analytics/events', {
-              'events': [
-                {
-                  'name': 'pantry_confirm_completed',
-                  'ts': DateTime.now().toIso8601String(),
-                }
-              ],
-            });
-          } catch (_) {
-            // ignore
-          }
-        }());
-        final added = res['pantry_items_added'];
-        final addedCount = (added is num) ? added.toInt() : _itemCount();
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved $addedCount items to pantry')),
-        );
-
-        // Immediately present recipe options (best-effort) so the user gets value
-        // without needing to press a separate "Generate recipes" button.
-        try {
-          final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
-          if (!mounted) return;
-          if (gate.allowed) {
-            final apiClient = Provider.of<ApiClient>(context, listen: false);
-            final profileState = Provider.of<ProfileState>(context, listen: false);
-            final service = CookNowService();
-
-            final options = await service.generateRecipeOptions(
-              apiClient: apiClient,
-              profileState: profileState,
-              maxOptions: 5,
-              avoidRecentRecipes: 3,
-            );
-
-            if (!mounted) return;
-            if (options.isNotEmpty) {
-              await Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                  settings: const RouteSettings(name: '/recipe_options'),
-                  builder: (_) => RecipeOptionsScreen(
-                    recipes: options,
-                    showIngredientMatch: true,
-                    titleOverride: 'Meals you can cook tonight',
-                    skipSuggestionSessionGate: true,
-                  ),
-                ),
-                (route) => route.isFirst,
-              );
-              return;
+          // Activation funnel reporting (best-effort; ignore failures).
+          fireAndForget(() async {
+            try {
+              final apiClient = ApiClient();
+              await apiClient.post('/analytics/events', {
+                'events': [
+                  {
+                    'name': 'pantry_confirm_completed',
+                    'ts': DateTime.now().toIso8601String(),
+                  }
+                ],
+              });
+            } catch (_) {
+              // ignore
             }
-          }
-        } catch (_) {
-          // Best-effort only.
+          }());
+
+          final added = res['pantry_items_added'];
+          final addedCount = (added is num) ? added.toInt() : _itemCount();
+          final queued = res['queued'] == true;
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                queued
+                    ? 'Saved $addedCount items (will sync when online)'
+                    : 'Saved $addedCount items to pantry',
+              ),
+            ),
+          );
+          return;
         }
 
-        // Exit the SnapPantry flow.
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      } else {
         final msg = res['error']?.toString() ?? 'Save failed';
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           SnackBar(content: Text(msg)),
         );
-        setState(() => _saving = false);
+      }).catchError((e) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      });
+
+      // Optimistic/background save. Brief grace window before meal ideas so fast
+      // connections include the newly saved ingredients.
+      try {
+        await saveFuture.timeout(const Duration(milliseconds: 900));
+      } catch (_) {
+        // Ignore; proceed with best-effort meal ideas.
       }
+
+      if (!mounted) return;
+      if (saveResult != null && saveResult!['success'] != true) {
+        setState(() => _saving = false);
+        return;
+      }
+
+      // Immediately present recipe options (best-effort) so the user gets value
+      // without needing to press a separate "Generate recipes" button.
+      try {
+        final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+        if (!mounted) return;
+        if (gate.allowed) {
+          final apiClient = Provider.of<ApiClient>(context, listen: false);
+          final profileState = Provider.of<ProfileState>(context, listen: false);
+          final service = CookNowService();
+
+          final options = await service.generateRecipeOptions(
+            apiClient: apiClient,
+            profileState: profileState,
+            maxOptions: 5,
+            avoidRecentRecipes: 3,
+          );
+
+          if (!mounted) return;
+          if (options.isNotEmpty) {
+            await navigator.pushAndRemoveUntil(
+              MaterialPageRoute(
+                settings: const RouteSettings(name: '/recipe_options'),
+                builder: (_) => RecipeOptionsScreen(
+                  recipes: options,
+                  showIngredientMatch: true,
+                  titleOverride: 'Meals you can cook tonight',
+                  skipSuggestionSessionGate: true,
+                ),
+              ),
+              (route) => route.isFirst,
+            );
+            return;
+          }
+        }
+      } catch (_) {
+        // Best-effort only.
+      }
+
+      // Exit the SnapPantry flow.
+      navigator.popUntil((route) => route.isFirst);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('Save failed: $e')),
       );
       setState(() => _saving = false);

@@ -11,6 +11,7 @@ import '../services/saved_recipes_local_service.dart';
 import '../services/upsell_service.dart';
 import '../services/shopping_list_storage.dart';
 import '../models/planning.dart';
+import '../models/profile_state.dart';
 import '../models/cuisine.dart';
 import '../config/app_config.dart';
 import 'recipe_detail_screen.dart';
@@ -277,6 +278,25 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
   List<String> _buildLeftoversScheduleLines(MenuPlanResponse menuPlan) {
     if (widget.planType != 'weekly') return const [];
 
+    String preferredLangKey() {
+      try {
+        final profileState = Provider.of<ProfileState>(context, listen: false);
+        final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+            ? profileState.preferredLanguage!.trim()
+            : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+                ? profileState.primaryLanguage!.trim()
+                : Localizations.localeOf(context).languageCode;
+
+        final lowered = raw.trim().toLowerCase();
+        if (lowered.isEmpty) return 'en';
+        return lowered.split(RegExp('[-_]')).first;
+      } catch (_) {
+        return 'en';
+      }
+    }
+
+    final lang = preferredLangKey();
+
     final lines = <String>[];
 
     for (final menu in menuPlan.menus) {
@@ -311,7 +331,7 @@ class _PlanningResultsScreenState extends State<PlanningResultsScreen> {
             (expectedNum != null && expectedNum > 0) || reuseIdeas.isNotEmpty;
         if (!hasLeftovers) continue;
 
-        final recipeName = recipe.getLocalizedName('en');
+        final recipeName = recipe.getLocalizedName(lang);
         final suffix = reuseIdeas.isNotEmpty ? reuseIdeas.first : 'Use within 1–2 days';
         lines.add('Day $dayIndex: $recipeName → $suffix');
       }
@@ -677,13 +697,30 @@ class _RecipeCardState extends State<_RecipeCard> {
     return v;
   }
 
+  String _preferredLanguageKey() {
+    try {
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+
+      final lowered = raw.trim().toLowerCase();
+      if (lowered.isEmpty) return 'en';
+      return lowered.split(RegExp('[-_]')).first;
+    } catch (_) {
+      return 'en';
+    }
+  }
+
   String? get _coverImageUrl {
     final fromPlan = _absoluteImageUrl(widget.recipe.imageUrl);
     if (fromPlan != null) return fromPlan;
 
     // Flutter web: avoid Unsplash CORS by using our backend proxy.
     if (kIsWeb) {
-      final name = _sanitizeTitle(widget.recipe.getLocalizedName('en')).trim();
+      final name = _sanitizeTitle(widget.recipe.getLocalizedName(_preferredLanguageKey())).trim();
       if (name.isEmpty) return null;
       final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
       final url =
@@ -691,7 +728,7 @@ class _RecipeCardState extends State<_RecipeCard> {
       return '${Config.apiBaseUrl}$url';
     }
 
-    final name = _sanitizeTitle(widget.recipe.getLocalizedName('en')).trim();
+    final name = _sanitizeTitle(widget.recipe.getLocalizedName(_preferredLanguageKey())).trim();
     if (name.isEmpty) {
       return 'https://source.unsplash.com/featured/?food';
     }
@@ -843,7 +880,7 @@ class _RecipeCardState extends State<_RecipeCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final title = _sanitizeTitle(widget.recipe.getLocalizedName('en'));
+    final title = _sanitizeTitle(widget.recipe.getLocalizedName(_preferredLanguageKey()));
 
     final refs = widget.recipe.youtubeReferences;
     final hasVideo = refs.isNotEmpty;

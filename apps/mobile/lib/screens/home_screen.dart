@@ -44,6 +44,23 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingInventory = true;
   List<InventoryItem> _inventory = const [];
 
+  String _preferredLanguageKey(BuildContext context) {
+    try {
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final raw = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : Localizations.localeOf(context).languageCode;
+
+      final lowered = raw.trim().toLowerCase();
+      if (lowered.isEmpty) return 'en';
+      return lowered.split(RegExp('[-_]')).first;
+    } catch (_) {
+      return 'en';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -323,7 +340,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ] else if (_tonightRecipe != null) ...[
                     Text(
-                      _tonightRecipe!.getLocalizedName('en'),
+                      _tonightRecipe!.getLocalizedName(_preferredLanguageKey(context)),
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: AppSpacing.xs),

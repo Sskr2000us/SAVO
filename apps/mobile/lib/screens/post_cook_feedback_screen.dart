@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/planning.dart';
+import '../models/profile_state.dart';
 import '../services/api_client.dart';
 import '../services/cook_session_storage.dart';
 import '../services/metrics_service.dart';
@@ -48,9 +49,17 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+        final profileState = Provider.of<ProfileState>(context, listen: false);
       final userNotes = _notesController.text.trim();
       final completion = 'Completed in ${widget.completionMinutes.toStringAsFixed(1)} minutes';
       final notes = userNotes.isEmpty ? completion : '$userNotes\n\n$completion';
+
+        final rawLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+            ? profileState.primaryLanguage!.trim()
+            : Localizations.localeOf(context).languageCode;
+        final lang = rawLang.trim().toLowerCase().split(RegExp('[-_]')).first;
 
       String feedbackEvent() {
         if (rating >= 4) return 'recipe.accepted';
@@ -60,7 +69,7 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
 
       await apiClient.post('/history/recipes', {
         'recipe_id': widget.recipe.recipeId,
-        'recipe_name': widget.recipe.recipeName['en'] ?? widget.recipe.getLocalizedName('en'),
+        'recipe_name': widget.recipe.getLocalizedName(lang),
         'cuisine': widget.recipe.cuisine,
         'cooking_method': widget.recipe.cookingMethod,
         'servings_made': widget.servingsMade,
@@ -137,6 +146,13 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
     }
 
     final theme = Theme.of(context);
+    final profileState = Provider.of<ProfileState>(context, listen: false);
+    final rawLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+      ? profileState.preferredLanguage!.trim()
+      : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+        ? profileState.primaryLanguage!.trim()
+        : Localizations.localeOf(context).languageCode;
+    final lang = rawLang.trim().toLowerCase().split(RegExp('[-_]')).first;
 
     return Scaffold(
       appBar: AppBar(
@@ -146,7 +162,7 @@ class _PostCookFeedbackScreenState extends State<PostCookFeedbackScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            widget.recipe.getLocalizedName('en'),
+            widget.recipe.getLocalizedName(lang),
             style: theme.textTheme.titleMedium,
           ),
           const SizedBox(height: 16),

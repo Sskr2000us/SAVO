@@ -177,7 +177,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
       final origin = Uri.base.origin;
       final link = origin.isNotEmpty ? '$origin/r/$shareId' : '/r/$shareId';
-      final title = _sanitizeRecipeTitle(widget.recipe.getLocalizedName('en'));
+      final title = _sanitizeRecipeTitle(widget.recipe.getLocalizedName(_recipeLanguageCode));
       await Share.share('$title\n$link');
     } catch (e) {
       if (mounted) {
@@ -271,15 +271,6 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         .map((c) => c.trim().toLowerCase())
         .where((c) => c.isNotEmpty)
         .toSet();
-  }
-
-  String? _secondaryLanguageCode(Recipe recipe) {
-    final available = _availableRecipeLanguageCodes(recipe);
-    if (_recipeLanguageCode != 'en' && available.contains(_recipeLanguageCode)) {
-      return _recipeLanguageCode;
-    }
-    final nonEnglish = available.where((c) => c != 'en').toList()..sort();
-    return nonEnglish.isNotEmpty ? nonEnglish.first : null;
   }
 
   String _languageLabel(String code) {
@@ -392,20 +383,20 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   String _buildRecipeMarkdown() {
     final recipe = widget.recipe;
     final scalingFactor = _baseServings > 0 ? (_targetServings / _baseServings) : 1.0;
-    final secondaryCode = _secondaryLanguageCode(recipe);
-    final showSecondary = _showBilingual && secondaryCode != null && secondaryCode != 'en';
+    final selectedCode = _recipeLanguageCode;
+    final showSecondary = _showBilingual && selectedCode != 'en';
 
-    final nameEn = _sanitizeRecipeTitle(recipe.getLocalizedName('en')).trim();
-    final nameSecondary = showSecondary ? recipe.getLocalizedName(secondaryCode!).trim() : '';
+    final namePrimary = _sanitizeRecipeTitle(recipe.getLocalizedName(selectedCode)).trim();
+    final nameEnglish = _sanitizeRecipeTitle(recipe.getLocalizedName('en')).trim();
 
     final buffer = StringBuffer();
-    buffer.writeln('## ${nameEn.isEmpty ? recipe.recipeId : nameEn}');
-    if (showSecondary && nameSecondary.isNotEmpty && nameSecondary != nameEn) {
-      buffer.writeln('### $nameSecondary');
+    buffer.writeln('## ${namePrimary.isEmpty ? recipe.recipeId : namePrimary}');
+    if (showSecondary && nameEnglish.isNotEmpty && nameEnglish != namePrimary) {
+      buffer.writeln('### $nameEnglish');
     }
 
     buffer.writeln('**Cuisine:** ${recipe.cuisine}');
-    buffer.writeln('**Language:** ${showSecondary ? '${_languageLabel(secondaryCode!)} + English' : 'English'}');
+    buffer.writeln('**Language:** ${showSecondary ? '${_languageLabel(selectedCode)} + English' : 'English'}');
     buffer.writeln('**Difficulty:** ${_titleCaseWords(recipe.difficulty)}');
 
     final t = recipe.estimatedTimes;
@@ -474,9 +465,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     buffer.writeln('');
 
     if (showSecondary) {
-      buffer.writeln('### Instructions (${_languageLabel(secondaryCode!)})');
+      buffer.writeln('### Instructions (${_languageLabel(selectedCode)})');
       for (var i = 0; i < recipe.steps.length; i++) {
-        final stepText = recipe.steps[i].getLocalizedInstruction(secondaryCode!).trim();
+        final stepText = recipe.steps[i].getLocalizedInstruction(selectedCode).trim();
         if (stepText.isEmpty) continue;
         buffer.writeln('${i + 1}. $stepText');
       }
@@ -612,14 +603,18 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
 
+      final preferredName = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
+      final fallbackNameEn = widget.recipe.getLocalizedName('en').trim();
+      final recipeNameQuery = preferredName.isNotEmpty ? preferredName : fallbackNameEn;
+
       // Extract techniques from recipe steps
       final techniques = _extractTechniques(widget.recipe.steps);
 
-      print('🎥 Searching YouTube for: ${widget.recipe.getLocalizedName('en')}');
+      print('🎥 Searching YouTube for: $recipeNameQuery');
 
       // Search YouTube for real videos using our API
       final searchResponse = await apiClient.post('/youtube/search', {
-        'recipe_name': widget.recipe.getLocalizedName('en'),
+        'recipe_name': recipeNameQuery,
         'cuisine': widget.recipe.cuisine,
         'max_results': 5,
       });
@@ -637,7 +632,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         setState(() {
           _rankedVideos = [];
           _loadingVideos = false;
-          _videoError = 'No YouTube videos found for "${widget.recipe.getLocalizedName('en')}"';
+          _videoError = 'No YouTube videos found for "$recipeNameQuery"';
         });
         print('🎥 No videos found');
         return;
@@ -645,11 +640,11 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
       // Rank candidates using /youtube/rank
       final request = YouTubeRankRequest(
-        recipeName: widget.recipe.getLocalizedName('en'),
+        recipeName: recipeNameQuery,
         recipeCuisine: widget.recipe.cuisine,
         recipeTechniques: techniques,
         candidates: candidates,
-        outputLanguage: 'en',
+        outputLanguage: _recipeLanguageCode,
       );
 
       print('🎥 Ranking ${candidates.length} videos...');
@@ -668,7 +663,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         setState(() {
           _rankedVideos = _fallbackRankFromCandidates(
             candidates,
-            widget.recipe.getLocalizedName('en'),
+            recipeNameQuery,
           );
           _videoError = 'Showing YouTube results (ranking unavailable)';
           _loadingVideos = false;
@@ -830,10 +825,13 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final preferredName = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
+      final fallbackNameEn = widget.recipe.getLocalizedName('en').trim();
+      final recipeNameQuery = preferredName.isNotEmpty ? preferredName : fallbackNameEn;
       final request = YouTubeSummaryRequest(
         videoId: videoId,
-        recipeName: widget.recipe.getLocalizedName('en'),
-        outputLanguage: 'en',
+        recipeName: recipeNameQuery,
+        outputLanguage: _recipeLanguageCode,
       );
 
       final response = await apiClient.post('/youtube/summary', request.toJson());
@@ -922,7 +920,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_sanitizeRecipeTitle(widget.recipe.getLocalizedName('en'))),
+        title: Text(_sanitizeRecipeTitle(widget.recipe.getLocalizedName(_recipeLanguageCode))),
         actions: [
           if (canShare)
             IconButton(

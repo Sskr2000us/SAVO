@@ -347,17 +347,19 @@ class ScanningService {
 
       // Send request
       final uri = Uri.parse('$baseUrl/api/scanning/confirm-ingredients');
-      final response = await http.post(
-        uri,
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'scan_id': scanId,
-          'confirmations': confirmations.map(_normalizeConfirmation).toList(),
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: json.encode({
+              'scan_id': scanId,
+              'confirmations': confirmations.map(_normalizeConfirmation).toList(),
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -844,7 +846,10 @@ class ScanningService {
       request.fields['unit'] = _normalizeUnit(unit);
       request.fields['scan_type'] = scanType;
 
-      final streamedResponse = await request.send();
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw TimeoutException('confirm-single timeout'),
+          );
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
