@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ApiClient {
@@ -253,21 +255,58 @@ class ApiClient {
         }
       }
 
-      final bytes = await file.readAsBytes();
+      var bytes = await file.readAsBytes();
+
+      // Guided scans can capture very large frames; shrink to keep uploads reliable.
+      // This reduces server/proxy drops that can surface on iOS as: ClientException: Bad file descriptor.
+      try {
+        // Only attempt to decode/resize if the payload is large enough to matter.
+        if (bytes.lengthInBytes > 900 * 1024) {
+          final decoded = img.decodeImage(bytes);
+          if (decoded != null) {
+            final maxDim = max(decoded.width, decoded.height);
+            // Resize if very large, otherwise still re-encode at a sane JPEG quality.
+            img.Image out = decoded;
+            if (maxDim > 1280) {
+              final scale = 1280 / maxDim;
+              final newW = max(1, (decoded.width * scale).round());
+              final newH = max(1, (decoded.height * scale).round());
+              out = img.copyResize(decoded, width: newW, height: newH);
+            }
+            bytes = img.encodeJpg(out, quality: 80);
+            mimeType = 'image/jpeg';
+          }
+        }
+      } catch (_) {
+        // Best-effort only; fall back to original bytes.
+      }
+
+      final filename = (mimeType == 'image/jpeg' && !file.name.toLowerCase().endsWith('.jpg') && !file.name.toLowerCase().endsWith('.jpeg'))
+          ? '${file.name}.jpg'
+          : file.name;
       request.files.add(
         http.MultipartFile.fromBytes(
           fieldName,
           bytes,
-          filename: file.name,
+          filename: filename,
           contentType: MediaType.parse(mimeType),
         ),
       );
     }
 
-    final streamed = await request.send().timeout(
-      Duration(seconds: timeoutSeconds),
-      onTimeout: () => throw Exception('Request timed out. Please try again.'),
-    );
+    http.StreamedResponse streamed;
+    try {
+      streamed = await request.send().timeout(
+        Duration(seconds: timeoutSeconds),
+        onTimeout: () => throw Exception('Request timed out. Please try again.'),
+      );
+    } on http.ClientException catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('bad file descriptor')) {
+        throw Exception('Upload failed. Please try again (move closer to Wi‑Fi / reduce movement).');
+      }
+      rethrow;
+    }
     final response = await http.Response.fromStream(streamed);
 
     if (response.statusCode == 200 || response.statusCode == 201) {

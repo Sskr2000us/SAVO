@@ -233,7 +233,8 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
           if (widget.barcodeUnitHint != null && widget.barcodeUnitHint!.trim().isNotEmpty)
             'barcode_unit_hint': widget.barcodeUnitHint!.trim(),
         },
-        timeoutSeconds: 30,
+        // Multi-frame analysis can legitimately exceed 30s on mobile networks.
+        timeoutSeconds: 90,
       );
 
       if (!mounted) return;
