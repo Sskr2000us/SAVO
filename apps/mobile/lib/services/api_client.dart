@@ -170,27 +170,25 @@ class ApiClient {
     request.fields.addAll(fields);
 
     // Determine MIME type from file extension
-    String? mimeType = file.mimeType;
-    if (mimeType == null) {
+    String mimeType = file.mimeType ?? (() {
       final extension = file.name.toLowerCase().split('.').last;
       if (extension == 'jpg' || extension == 'jpeg') {
-        mimeType = 'image/jpeg';
+        return 'image/jpeg';
       } else if (extension == 'png') {
-        mimeType = 'image/png';
+        return 'image/png';
       } else if (extension == 'gif') {
-        mimeType = 'image/gif';
+        return 'image/gif';
       } else if (extension == 'webp') {
-        mimeType = 'image/webp';
+        return 'image/webp';
       } else if (extension == 'mp4') {
-        mimeType = 'video/mp4';
+        return 'video/mp4';
       } else if (extension == 'mov') {
-        mimeType = 'video/quicktime';
+        return 'video/quicktime';
       } else if (extension == 'avi') {
-        mimeType = 'video/x-msvideo';
-      } else {
-        mimeType = 'image/jpeg'; // Default fallback
+        return 'video/x-msvideo';
       }
-    }
+      return 'image/jpeg'; // Default fallback
+    })();
 
     final bytes = await file.readAsBytes();
     request.files.add(
@@ -243,17 +241,15 @@ class ApiClient {
     // Cap is enforced server-side too, but avoid huge uploads.
     final capped = files.length > 20 ? files.sublist(0, 20) : files;
     for (final file in capped) {
-      String? mimeType = file.mimeType;
-      if (mimeType == null) {
+      String mimeType = file.mimeType ?? (() {
         final extension = file.name.toLowerCase().split('.').last;
         if (extension == 'jpg' || extension == 'jpeg') {
-          mimeType = 'image/jpeg';
+          return 'image/jpeg';
         } else if (extension == 'png') {
-          mimeType = 'image/png';
-        } else {
-          mimeType = 'image/jpeg';
+          return 'image/png';
         }
-      }
+        return 'image/jpeg';
+      })();
 
       var bytes = await file.readAsBytes();
 

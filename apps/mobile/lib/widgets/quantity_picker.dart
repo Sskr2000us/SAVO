@@ -275,6 +275,13 @@ List<String> getSmartUnitSuggestions(String? category, String? ingredientName) {
       name.contains('salt')) {
     return ['grams', 'kg', 'cups', 'tbsp', 'tsp'];
   }
+
+  // Pulses / dals / beans
+  if (name.contains('lentil') || name.contains('lentils') || name.contains('dal') ||
+      name.contains('beans') || name.contains('bean') || name.contains('chickpea') ||
+      name.contains('chana') || name.contains('rajma')) {
+    return ['grams', 'kg', 'cups', 'tbsp', 'tsp', 'pieces'];
+  }
   
   if (name.contains('oil') || name.contains('vinegar') || name.contains('sauce')) {
     return ['ml', 'tbsp', 'tsp', 'cups'];
@@ -312,6 +319,7 @@ List<String> getSmartUnitSuggestions(String? category, String? ingredientName) {
       return ['ml', 'tbsp', 'tsp', 'cups'];
     
     default:
-      return ['pieces', 'grams', 'ml', 'cups', 'items'];
+      // Always include common metric options so users can enter kg/g/ml/L easily.
+      return ['pieces', 'grams', 'kg', 'ml', 'liters', 'cups', 'items'];
   }
 }

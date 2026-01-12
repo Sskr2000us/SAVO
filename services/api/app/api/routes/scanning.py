@@ -137,46 +137,120 @@ def _resolve_inventory_taxonomy(
     cid = (canonical_name or "").strip()
     ing_id = (ingredient_id or "").strip() or None
 
+    def _norm_token(s: Any) -> Optional[str]:
+        if s is None:
+            return None
+        txt = str(s).strip().lower()
+        if not txt:
+            return None
+        txt = txt.replace(" ", "_").replace("-", "_")
+        while "__" in txt:
+            txt = txt.replace("__", "_")
+        return txt
+
+    # App taxonomy expects plural-ish buckets in some cases.
+    _CATEGORY_CANON = {
+        "grain": "grains",
+        "grains": "grains",
+        "pulse": "pulses",
+        "pulses": "pulses",
+        "spice": "spices",
+        "spices": "spices",
+        "vegetable": "vegetables",
+        "vegetables": "vegetables",
+        "fruit": "fruits",
+        "fruits": "fruits",
+        "protein": "proteins",
+        "proteins": "proteins",
+        "oil": "oils",
+        "oils": "oils",
+    }
+
     def _pick(row: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str], Optional[str]]:
         if not row or not isinstance(row, dict):
             return None, None, None
-        cat = row.get("category")
-        sub = row.get("subcategory")
-        cui = row.get("cuisine")
-        cat_s = (str(cat).strip() if cat is not None else "")
-        sub_s = (str(sub).strip() if sub is not None else "")
-        cui_s = (str(cui).strip() if cui is not None else "")
+        cat_s = _norm_token(row.get("category"))
+        sub_s = _norm_token(row.get("subcategory"))
+        cui_s = _norm_token(row.get("cuisine"))
+
+        if cat_s and cat_s in _CATEGORY_CANON:
+            cat_s = _CATEGORY_CANON[cat_s]
+        # Basic plural normalization for common subcategories.
+        if sub_s == "lentil":
+            sub_s = "lentils"
+        elif sub_s == "bean":
+            sub_s = "beans"
+        elif sub_s == "chickpea":
+            sub_s = "chickpeas"
+
         return (cat_s or None), (sub_s or None), (cui_s or None)
+
+    def _select_taxonomy_by_id(_id: str) -> Optional[Dict[str, Any]]:
+        # Some deployments don't have master_ingredients.cuisine; don't let that break category/subcategory.
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory, cuisine")
+                .eq("id", _id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0]
+        except Exception:
+            pass
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory")
+                .eq("id", _id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0]
+        except Exception:
+            pass
+        return None
+
+    def _select_taxonomy_by_name(_name: str) -> Optional[Dict[str, Any]]:
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory, cuisine")
+                .eq("canonical_name", _name)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0]
+        except Exception:
+            pass
+        try:
+            res = (
+                db.table("master_ingredients")
+                .select("category, subcategory")
+                .eq("canonical_name", _name)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0]
+        except Exception:
+            pass
+        return None
 
     # 1) Direct by ingredient_id
     if ing_id:
-        try:
-            res = (
-                db.table("master_ingredients")
-                .select("category, subcategory, cuisine")
-                .eq("id", ing_id)
-                .limit(1)
-                .execute()
-            )
-            if res.data:
-                return _pick(res.data[0])
-        except Exception:
-            pass
+        row = _select_taxonomy_by_id(ing_id)
+        if row:
+            return _pick(row)
 
     # 2) Fallback by canonical_name
     if cid:
-        try:
-            res = (
-                db.table("master_ingredients")
-                .select("category, subcategory, cuisine")
-                .eq("canonical_name", cid)
-                .limit(1)
-                .execute()
-            )
-            if res.data:
-                return _pick(res.data[0])
-        except Exception:
-            pass
+        row = _select_taxonomy_by_name(cid)
+        if row:
+            return _pick(row)
 
     return None, None, None
 

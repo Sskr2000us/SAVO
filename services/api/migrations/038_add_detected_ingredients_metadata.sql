@@ -11,8 +11,14 @@ ALTER TABLE IF EXISTS public.detected_ingredients
     ALTER COLUMN metadata SET DEFAULT '{}'::jsonb;
 
 -- Optional index for querying metadata (safe to skip if not needed yet).
-CREATE INDEX IF NOT EXISTS idx_detected_ingredients_metadata_gin
-    ON public.detected_ingredients
-    USING GIN (metadata);
+DO $$
+BEGIN
+    IF to_regclass('public.detected_ingredients') IS NOT NULL THEN
+        CREATE INDEX IF NOT EXISTS idx_detected_ingredients_metadata_gin
+            ON public.detected_ingredients
+            USING GIN (metadata);
+    END IF;
+END
+$$;
 
 COMMIT;
