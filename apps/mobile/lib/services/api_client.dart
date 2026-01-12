@@ -190,12 +190,39 @@ class ApiClient {
       return 'image/jpeg'; // Default fallback
     })();
 
-    final bytes = await file.readAsBytes();
+    var bytes = await file.readAsBytes();
+
+    // Large images can slow recognition and cause iOS upload flakiness.
+    // Best-effort: resize and re-encode to a sane JPEG.
+    try {
+      final isImage = mimeType.startsWith('image/');
+      if (isImage && bytes.lengthInBytes > 900 * 1024) {
+        final decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          final maxDim = max(decoded.width, decoded.height);
+          img.Image out = decoded;
+          if (maxDim > 1280) {
+            final scale = 1280 / maxDim;
+            final newW = max(1, (decoded.width * scale).round());
+            final newH = max(1, (decoded.height * scale).round());
+            out = img.copyResize(decoded, width: newW, height: newH);
+          }
+          bytes = img.encodeJpg(out, quality: 80);
+          mimeType = 'image/jpeg';
+        }
+      }
+    } catch (_) {
+      // Best-effort only; fall back to original bytes.
+    }
+
+    final filename = (mimeType == 'image/jpeg' && !file.name.toLowerCase().endsWith('.jpg') && !file.name.toLowerCase().endsWith('.jpeg'))
+        ? '${file.name}.jpg'
+        : file.name;
     request.files.add(
       http.MultipartFile.fromBytes(
         fieldName,
         bytes,
-        filename: file.name,
+        filename: filename,
         contentType: MediaType.parse(mimeType),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../services/camera_cache.dart';
 import '../services/scanning_service.dart';
 import '../services/metrics_service.dart';
 import '../theme/app_theme.dart';
@@ -44,7 +45,7 @@ class _PantryCameraScreenState extends State<PantryCameraScreen> {
 
   Future<void> _init() async {
     try {
-      final cams = await availableCameras();
+      final cams = await CameraCache.getCameras();
       if (cams.isEmpty) {
         if (mounted) setState(() => _initializing = false);
         return;

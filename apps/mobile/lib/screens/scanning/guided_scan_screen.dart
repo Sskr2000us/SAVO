@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/api_client.dart';
+import '../../services/camera_cache.dart';
 import '../../utils/scan_quality.dart';
 
 class GuidedScanResult {
@@ -74,7 +75,7 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
 
   Future<void> _initCamera() async {
     try {
-      _cameras = await availableCameras();
+      _cameras = await CameraCache.getCameras();
       if (_cameras == null || _cameras!.isEmpty) {
         throw Exception('No cameras available');
       }

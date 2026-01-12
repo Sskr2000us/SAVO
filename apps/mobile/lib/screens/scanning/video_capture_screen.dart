@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/camera_cache.dart';
+
 class VideoCaptureResult {
   final XFile video;
   final int durationSeconds;
@@ -55,7 +57,7 @@ class _VideoCaptureScreenState extends State<VideoCaptureScreen> {
 
   Future<void> _initCamera() async {
     try {
-      final cams = await availableCameras();
+      final cams = await CameraCache.getCameras();
       if (cams.isEmpty) {
         throw Exception('No cameras available');
       }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
+import '../services/camera_cache.dart';
 
 /// Real-time ingredient scanning with bounding boxes
 /// 
@@ -45,7 +46,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
 
   Future<void> _initializeCamera() async {
     try {
-      final cameras = await availableCameras();
+      final cameras = await CameraCache.getCameras();
       if (cameras.isEmpty) {
         return;
       }

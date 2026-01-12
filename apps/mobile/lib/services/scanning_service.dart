@@ -175,11 +175,10 @@ class ScanningService {
       // Add headers
       request.headers['Authorization'] = 'Bearer $token';
 
-      // Add image file
-      final imageBytes = await imageFile.readAsBytes();
-      final multipartFile = http.MultipartFile.fromBytes(
+      // Add image file (stream from disk; avoids loading whole file into memory)
+      final multipartFile = await http.MultipartFile.fromPath(
         'image',
-        imageBytes,
+        imageFile.path,
         filename: 'scan.jpg',
         contentType: MediaType('image', 'jpeg'),
       );
