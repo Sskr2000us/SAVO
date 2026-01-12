@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import asyncio
 import os
+import random
 import re
 from typing import Any, Dict, List, Optional, Tuple, Literal
 from uuid import UUID, uuid4, uuid5
@@ -844,6 +845,7 @@ def _try_retrieve_recipe(
     constraints: LockedConstraints,
     pantry_names: List[str],
     serves: int,
+    seed: Optional[str] = None,
 ) -> Optional[Tuple[CanonicalRecipe, float, List[MissingIngredient]]]:
     """Best-effort recipe retrieval from the `recipes` table (if present)."""
     cuisine = (constraints.cuisine or "").strip().lower()
@@ -860,8 +862,7 @@ def _try_retrieve_recipe(
     except Exception:
         return None
 
-    best: Optional[Tuple[CanonicalRecipe, float, List[MissingIngredient]]] = None
-    best_score = -1.0
+    candidates: List[Tuple[float, CanonicalRecipe, float, List[MissingIngredient]]] = []
 
     for r in rows:
         if not isinstance(r, dict):
@@ -923,12 +924,43 @@ def _try_retrieve_recipe(
         )
 
         # Simple rank: pantry coverage dominates.
-        score = cov
-        if score > best_score:
-            best_score = score
-            best = (recipe, cov, missing_items)
+        score = float(cov or 0.0)
+        candidates.append((score, recipe, float(cov or 0.0), missing_items))
 
-    return best
+    if not candidates:
+        return None
+
+    # Avoid the appearance of "hard caching": if multiple recipes tie for best pantry
+    # coverage (very common when the pantry is large), do NOT always return the first.
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    best_score = float(candidates[0][0])
+    eps = 1e-9
+    tied = [c for c in candidates if abs(float(c[0]) - best_score) <= eps]
+
+    # Best-effort: avoid recently returned recipes to reduce repeats on "regenerate".
+    recent_ids: set[str] = set()
+    try:
+        recent = (
+            db.table("recipe_attempts")
+            .select("recipe_id,created_at")
+            .eq("user_id", str(user_id))
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+        for r in (recent.data or []):
+            if isinstance(r, dict) and r.get("recipe_id"):
+                recent_ids.add(str(r.get("recipe_id")))
+    except Exception:
+        recent_ids = set()
+
+    not_recent = [c for c in tied if str(getattr(c[1], "recipe_id", "")) not in recent_ids]
+    pool = not_recent if not_recent else tied
+
+    rng = random.Random(seed or str(uuid4()))
+    pick = rng.choice(pool)
+    _score, recipe, cov, missing_items = pick
+    return recipe, cov, missing_items
 
 
 def _generated_share_exceeded(*, user_id: str, window_days: int = 7, max_share: float = 0.20) -> bool:
@@ -1196,6 +1228,7 @@ async def generate_recipe(
             constraints=constraints,
             pantry_names=pantry_names,
             serves=req.serves,
+            seed=attempt_id,
         )
 
     assembled, coverage, missing = _assemble_recipe(
