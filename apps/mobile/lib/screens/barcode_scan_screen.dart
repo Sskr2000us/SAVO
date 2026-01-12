@@ -272,7 +272,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                       ],
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String?>(
-                        initialValue: category,
+                        value: category,
                         decoration: const InputDecoration(
                           labelText: 'Category (recommended)',
                         ),

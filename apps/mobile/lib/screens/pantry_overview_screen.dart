@@ -312,7 +312,7 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
                 builder: (context) {
                   final options = <String>{..._categoryOptions, if (category != null) category!}.toList()..sort();
                   return DropdownButtonFormField<String?>(
-                    initialValue: category,
+                    value: category,
                     decoration: const InputDecoration(
                       labelText: 'Category',
                       border: OutlineInputBorder(),
