@@ -29,6 +29,47 @@ router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
 _ALLOWED_SCAN_TYPES = {"pantry", "fridge", "counter", "shopping", "other"}
 
 
+def _retry_without_missing_column(db, table: str, op: str, payload: Dict[str, Any], where: Optional[Dict[str, Any]] = None):
+    """Best-effort: PostgREST schema cache can lag migrations; retry once removing missing columns."""
+    try:
+        if op == "insert":
+            return db.table(table).insert(payload).execute()
+        if op == "update":
+            q = db.table(table).update(payload)
+            if where:
+                for k, v in where.items():
+                    q = q.eq(k, v)
+            return q.execute()
+        raise ValueError("Unsupported op")
+    except Exception as e:
+        msg = str(e)
+        missing = None
+        try:
+            import re
+
+            m = re.search(r'column\s+"([a-zA-Z0-9_]+)"\s+of\s+relation', msg)
+            if m:
+                missing = m.group(1)
+            if not missing:
+                m2 = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column of '([a-zA-Z0-9_]+)'", msg)
+                if m2:
+                    missing = m2.group(1)
+        except Exception:
+            missing = None
+
+        if missing and missing in payload:
+            payload = dict(payload)
+            payload.pop(missing, None)
+            if op == "insert":
+                return db.table(table).insert(payload).execute()
+            q = db.table(table).update(payload)
+            if where:
+                for k, v in where.items():
+                    q = q.eq(k, v)
+            return q.execute()
+        raise
+
+
 def _normalize_confidence(raw: Any) -> float:
     """Normalize confidence to a float in [0, 1].
 
@@ -506,7 +547,10 @@ async def _process_video_scan(
             except Exception:
                 pass
 
-            db.table("detected_ingredients").insert(
+            _retry_without_missing_column(
+                db,
+                "detected_ingredients",
+                "insert",
                 {
                     "id": detected_id,
                     "scan_id": scan_id,
@@ -524,8 +568,8 @@ async def _process_video_scan(
                     # Fallback for inventory reference images when bbox crops aren't available.
                     "full_image_url": representative_image_ref,
                     **({"metadata": md} if md else {}),
-                }
-            ).execute()
+                },
+            )
 
         # Some deployments use KPI fields like `detected_count` (migration 016).
         # Older clients/code used `total_detections`; avoid writing unknown columns.
@@ -688,37 +732,45 @@ async def analyze_video(
         
         # NOTE: ingredient_scans schema defines image_metadata (not metadata).
         # Also, scan_type has a CHECK constraint and must be one of: pantry|fridge|counter|shopping|other.
-        db.table("ingredient_scans").insert({
-            "id": scan_id,
-            "user_id": user_id,
-            "scan_type": scan_type,
-            "location_hint": location_hint,
-            "status": "processing",
-            "image_url": representative_image_ref,
-            "created_at": datetime.utcnow().isoformat(),
-            "image_metadata": {
-                "source": "video_scan",
-                "duration_seconds": duration_seconds,
-                "video_filename": video.filename,
-                "video_size_mb": video_size_mb,
-                "video_ref": video_ref,
-                "max_frames": max_frames,
-                "frames_extracted": 0,
-                "frames_total": None,
-                "frames_done": 0,
-                "representative_frame_image_url": representative_image_ref,
-                "barcode": (barcode or "").strip() or None,
-                "barcode_name_hint": (barcode_name_hint or "").strip() or None,
-                "barcode_quantity_hint": barcode_quantity_hint,
-                "barcode_unit_hint": (barcode_unit_hint or "").strip() or None,
-                "barcode_product": barcode_product,
-                "barcode_image_url": barcode_ref,
+        _retry_without_missing_column(
+            db,
+            "ingredient_scans",
+            "insert",
+            {
+                "id": scan_id,
+                "user_id": user_id,
+                "scan_type": scan_type,
+                "location_hint": location_hint,
+                "status": "processing",
+                "image_url": representative_image_ref,
+                "created_at": datetime.utcnow().isoformat(),
+                "image_metadata": {
+                    "source": "video_scan",
+                    "duration_seconds": duration_seconds,
+                    "video_filename": video.filename,
+                    "video_size_mb": video_size_mb,
+                    "video_ref": video_ref,
+                    "max_frames": max_frames,
+                    "frames_extracted": 0,
+                    "frames_total": None,
+                    "frames_done": 0,
+                    "representative_frame_image_url": representative_image_ref,
+                    "barcode": (barcode or "").strip() or None,
+                    "barcode_name_hint": (barcode_name_hint or "").strip() or None,
+                    "barcode_quantity_hint": barcode_quantity_hint,
+                    "barcode_unit_hint": (barcode_unit_hint or "").strip() or None,
+                    "barcode_product": barcode_product,
+                    "barcode_image_url": barcode_ref,
+                },
             },
-        }).execute()
+        )
 
         # Best-effort: enqueue a durable job record so a worker can resume processing.
         try:
-            db.table("scan_jobs").insert(
+            _retry_without_missing_column(
+                db,
+                "scan_jobs",
+                "insert",
                 {
                     "scan_id": scan_id,
                     "user_id": user_id,
@@ -727,8 +779,8 @@ async def analyze_video(
                     "attempts": 0,
                     "created_at": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow().isoformat(),
-                }
-            ).execute()
+                },
+            )
         except Exception:
             pass
 

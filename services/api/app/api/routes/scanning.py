@@ -238,6 +238,12 @@ def _retry_without_missing_column(db, table: str, op: str, payload: Dict[str, An
             m = re.search(r'column\s+"([a-zA-Z0-9_]+)"\s+of\s+relation', msg)
             if m:
                 missing = m.group(1)
+            if not missing:
+                # Supabase/PostgREST schema cache error style:
+                # "Could not find the 'metadata' column of 'detected_ingredients' in the schema cache"
+                m2 = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column of '([a-zA-Z0-9_]+)'", msg)
+                if m2:
+                    missing = m2.group(1)
         except Exception:
             missing = None
         if missing and missing in payload:
