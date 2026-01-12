@@ -127,30 +127,33 @@ def _resolve_inventory_taxonomy(
     *,
     canonical_name: str,
     ingredient_id: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str]]:
-    """Resolve (category, subcategory) from master_ingredients.
 
-    Best-effort only; returns (None, None) if the taxonomy cannot be resolved.
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve (category, subcategory, cuisine) from master_ingredients.
+
+    Best-effort only; returns (None, None, None) if the taxonomy cannot be resolved.
     """
 
     cid = (canonical_name or "").strip()
     ing_id = (ingredient_id or "").strip() or None
 
-    def _pick(row: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
+    def _pick(row: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str], Optional[str]]:
         if not row or not isinstance(row, dict):
-            return None, None
+            return None, None, None
         cat = row.get("category")
         sub = row.get("subcategory")
+        cui = row.get("cuisine")
         cat_s = (str(cat).strip() if cat is not None else "")
         sub_s = (str(sub).strip() if sub is not None else "")
-        return (cat_s or None), (sub_s or None)
+        cui_s = (str(cui).strip() if cui is not None else "")
+        return (cat_s or None), (sub_s or None), (cui_s or None)
 
     # 1) Direct by ingredient_id
     if ing_id:
         try:
             res = (
                 db.table("master_ingredients")
-                .select("category, subcategory")
+                .select("category, subcategory, cuisine")
                 .eq("id", ing_id)
                 .limit(1)
                 .execute()
@@ -165,7 +168,7 @@ def _resolve_inventory_taxonomy(
         try:
             res = (
                 db.table("master_ingredients")
-                .select("category, subcategory")
+                .select("category, subcategory, cuisine")
                 .eq("canonical_name", cid)
                 .limit(1)
                 .execute()
@@ -175,7 +178,7 @@ def _resolve_inventory_taxonomy(
         except Exception:
             pass
 
-    return None, None
+    return None, None, None
 
 
 def _anonymized_item_signature(user_id: str, detected_item: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> str:
@@ -2136,6 +2139,10 @@ async def analyze_frames(
         aggregated_issues: set[str] = set()
         last_metrics: Dict[str, Any] = {}
 
+        # If all frames fail the quality gate (common when the user moves near the end),
+        # fall back to the best-available frame so the scan can still progress.
+        best_fallback: Optional[Dict[str, Any]] = None  # {idx, bytes, metrics, issues}
+
         for idx, image in enumerate(images):
             if image.content_type not in ["image/jpeg", "image/jpg", "image/png"]:
                 aggregated_issues.add("invalid_format")
@@ -2157,6 +2164,23 @@ async def analyze_frames(
                 metrics = quality.get("metrics")
                 if isinstance(metrics, dict):
                     last_metrics = metrics
+
+                # Track best fallback candidate (maximize sharpness proxy / contrast).
+                try:
+                    m = metrics if isinstance(metrics, dict) else {}
+                    # Use whatever proxy is available; default to 0.
+                    score = float(m.get("sharpness") or m.get("variance") or m.get("contrast") or 0.0)
+                except Exception:
+                    score = 0.0
+                if best_fallback is None or score > float(best_fallback.get("score") or 0.0):
+                    best_fallback = {
+                        "idx": idx,
+                        "bytes": image_data,
+                        "metrics": metrics if isinstance(metrics, dict) else {},
+                        "issues": list(quality.get("issues") or []),
+                        "score": score,
+                        "content_type": image.content_type,
+                    }
                 continue
 
             any_ok_frame = True
@@ -2225,25 +2249,65 @@ async def analyze_frames(
                 pass
 
         if not any_ok_frame:
-            # Mirror /analyze-image quality error structure so clients can show guidance.
-            issues = sorted(list(aggregated_issues))
-            if "too_dark" in issues:
-                msg = "Too dark — turn on lights and retake."
-            elif "too_blurry" in issues:
-                msg = "Too blurry — hold steady and retake."
-            elif "too_bright" in issues:
-                msg = "Too bright/glare — adjust angle and retake."
-            else:
-                msg = "Image quality too low — please retake."
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "image_quality",
-                    "message": msg,
-                    "issues": issues,
-                    "metrics": last_metrics,
-                },
-            )
+            # Fallback: proceed with the best available frame to avoid blocking the UX.
+            if best_fallback and isinstance(best_fallback.get("bytes"), (bytes, bytearray)):
+                fb_bytes = bytes(best_fallback["bytes"])
+                try:
+                    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+                    representative_image_url = upload_inventory_image(
+                        user_id=user_id,
+                        content=fb_bytes,
+                        content_type=str(best_fallback.get("content_type") or "image/jpeg"),
+                        asset_type="scan_frame_reference",
+                        source="frames",
+                        expires_at=expires_at,
+                        links={"scan_id": scan_id, "session_id": session_id},
+                        metadata={"fallback": True},
+                    )
+                except Exception:
+                    representative_image_url = None
+
+                try:
+                    analysis_result = await vision_client.analyze_image(
+                        image_data=fb_bytes,
+                        scan_type=scan_type,
+                        location_hint=location_hint,
+                        user_preferences=profile,
+                        barcode=(barcode or None),
+                        barcode_name_hint=(barcode_name_hint or None),
+                        barcode_quantity_hint=barcode_quantity_hint,
+                        barcode_unit_hint=_normalize_unit(barcode_unit_hint) if barcode_unit_hint else None,
+                    )
+                    if isinstance(analysis_result, dict) and analysis_result.get("success") and analysis_result.get("ingredients"):
+                        any_ok_frame = True
+                        usable_frame_bytes[int(best_fallback.get("idx") or 0)] = fb_bytes
+                        for det in analysis_result.get("ingredients") or []:
+                            if isinstance(det, dict):
+                                det["_frame_idx"] = int(best_fallback.get("idx") or 0)
+                                all_detections.append(det)
+                except Exception:
+                    pass
+
+            if not any_ok_frame:
+                # Mirror /analyze-image quality error structure so clients can show guidance.
+                issues = sorted(list(aggregated_issues))
+                if "too_dark" in issues:
+                    msg = "Too dark — turn on lights and retake."
+                elif "too_blurry" in issues:
+                    msg = "Too blurry — hold steady and retake."
+                elif "too_bright" in issues:
+                    msg = "Too bright/glare — adjust angle and retake."
+                else:
+                    msg = "Image quality too low — please retake."
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "image_quality",
+                        "message": msg,
+                        "issues": issues,
+                        "metrics": last_metrics,
+                    },
+                )
 
         if not all_detections:
             raise HTTPException(status_code=400, detail="No ingredients detected. Try scanning again with better coverage.")
@@ -2792,13 +2856,13 @@ async def confirm_ingredients(
                 inv_subcategory: Optional[str] = None
                 inv_cuisine: Optional[str] = None
                 try:
-                    inv_category, inv_subcategory = _resolve_inventory_taxonomy(
+                    inv_category, inv_subcategory, inv_cuisine = _resolve_inventory_taxonomy(
                         db,
                         canonical_name=canonical_name,
                         ingredient_id=resolved_ingredient_id,
                     )
                 except Exception:
-                    inv_category, inv_subcategory = None, None
+                    inv_category, inv_subcategory, inv_cuisine = None, None, None
 
                 # Fallback: some scan paths attach taxonomy hints to detected_ingredients.metadata.
                 # Normalize to our inventory taxonomy keys (lower snake-ish strings).

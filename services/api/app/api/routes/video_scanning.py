@@ -19,8 +19,10 @@ from io import BytesIO
 logger = logging.getLogger(__name__)
 
 from app.middleware.auth import get_current_user
-from app.core.media_storage import upload_inventory_image, upload_scan_video
-from app.api.routes.profile import get_full_profile
+
+# NOTE: Avoid importing Supabase-backed modules at import time.
+# This file also hosts pure-Python helpers (e.g., deduplication) that we want
+# to unit test without requiring the Supabase SDK to be installed.
 
 
 router = APIRouter(prefix="/api/scanning/video", tags=["video-scanning"])
@@ -116,6 +118,7 @@ async def _try_fetch_barcode_image(user_id: str, barcode: str) -> Tuple[Optional
         return None, None
 
     try:
+        from app.core.media_storage import upload_inventory_image
         from app.integrations.openfoodfacts import get_openfoodfacts_client
         import httpx
 
@@ -312,21 +315,63 @@ async def deduplicate_detections(
     """
     from collections import defaultdict
     
-    # Group by canonical name
+    # Group by canonical name (normalized)
     grouped = defaultdict(list)
     for detection in all_detections:
-        canonical_name = detection.get("canonical_name") or detection.get("detected_name")
+        if not isinstance(detection, dict):
+            continue
+        canonical_name = (detection.get("canonical_name") or detection.get("detected_name") or "").strip().lower()
+        if not canonical_name:
+            continue
         grouped[canonical_name].append(detection)
     
     # Deduplicate each group
     deduplicated = []
     for canonical_name, detections in grouped.items():
         # Take highest confidence detection as base
-        best = max(detections, key=lambda d: d.get("confidence", 0))
-        
-        # Average quantities if detected multiple times
-        quantities = [d.get("quantity") for d in detections if d.get("quantity")]
-        avg_quantity = sum(quantities) / len(quantities) if quantities else None
+        best = max(detections, key=lambda d: float(d.get("confidence") or 0.0))
+
+        # Quantity/unit handling:
+        # - If we have consistent units across frames, compute a weighted average by quantity_confidence.
+        # - Otherwise, pick the quantity with the highest quantity_confidence.
+        qty_candidates = []
+        for d in detections:
+            q = d.get("quantity")
+            u = d.get("unit")
+            qc = d.get("quantity_confidence")
+            try:
+                qv = float(q) if q is not None else None
+            except Exception:
+                qv = None
+            if qv is None:
+                continue
+            uu = (str(u).strip().lower() if isinstance(u, str) else None) or None
+            try:
+                qcv = float(qc) if qc is not None else 0.0
+            except Exception:
+                qcv = 0.0
+            qty_candidates.append({"q": qv, "u": uu, "qc": qcv})
+
+        merged_quantity = None
+        merged_unit = None
+        merged_qc = None
+        if qty_candidates:
+            units = {c.get("u") for c in qty_candidates}
+            if len(units) == 1:
+                merged_unit = list(units)[0]
+                weights = [max(0.05, float(c.get("qc") or 0.0)) for c in qty_candidates]
+                vals = [float(c.get("q") or 0.0) for c in qty_candidates]
+                try:
+                    merged_quantity = sum(v * w for v, w in zip(vals, weights)) / max(1e-6, sum(weights))
+                    merged_qc = min(1.0, max(weights))
+                except Exception:
+                    merged_quantity = vals[0]
+                    merged_qc = max(0.0, float(qty_candidates[0].get("qc") or 0.0))
+            else:
+                best_q = max(qty_candidates, key=lambda c: float(c.get("qc") or 0.0))
+                merged_quantity = best_q.get("q")
+                merged_unit = best_q.get("u")
+                merged_qc = best_q.get("qc")
         
         # Merge close alternatives (unique)
         all_alternatives = []
@@ -341,11 +386,37 @@ async def deduplicate_detections(
         # Build deduplicated detection
         deduplicated_detection = {
             **best,
-            "quantity": avg_quantity,
+            **({"quantity": merged_quantity} if merged_quantity is not None else {}),
+            **({"unit": merged_unit} if merged_unit else {}),
+            **({"quantity_confidence": merged_qc} if merged_qc is not None else {}),
             "detection_count": len(detections),
             "close_alternatives": all_alternatives[:5],  # Top 5 alternatives
-            "deduplication_note": f"Detected in {len(detections)} frames"
+            "deduplication_note": f"Detected in {len(detections)} frames",
         }
+
+        # Preserve best-effort hints/bbox across frames (some frames omit these).
+        try:
+            for k in ("category", "subcategory", "cuisine", "item_form"):
+                if not deduplicated_detection.get(k):
+                    for d in detections:
+                        v = d.get(k)
+                        if isinstance(v, str) and v.strip():
+                            deduplicated_detection[k] = v.strip()
+                            break
+            if not deduplicated_detection.get("bbox"):
+                for d in detections:
+                    b = d.get("bbox")
+                    if isinstance(b, dict) and b:
+                        deduplicated_detection["bbox"] = b
+                        break
+            if not deduplicated_detection.get("visual_similarity_group"):
+                for d in detections:
+                    vsg = d.get("visual_similarity_group")
+                    if isinstance(vsg, str) and vsg.strip():
+                        deduplicated_detection["visual_similarity_group"] = vsg.strip()
+                        break
+        except Exception:
+            pass
         
         deduplicated.append(deduplicated_detection)
     
@@ -378,7 +449,9 @@ async def _process_video_scan(
     """
     try:
         from app.core.database import get_db_client
+        from app.core.media_storage import upload_inventory_image
         from app.core.vision_api import get_vision_client
+        from app.api.routes.profile import get_full_profile
 
         db = get_db_client()
 
