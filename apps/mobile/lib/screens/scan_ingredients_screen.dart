@@ -6,10 +6,14 @@ import 'package:provider/provider.dart';
 import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../services/barcode_lookup_service.dart';
+import '../services/cook_now_service.dart';
+import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
+import '../models/profile_state.dart';
 import 'scanning/guided_scan_screen.dart';
 import 'scanning/barcode_scan_screen.dart';
 import 'scanning/video_capture_screen.dart';
+import 'recipe_options_screen.dart';
 
 class ScanIngredientsScreen extends StatefulWidget {
   const ScanIngredientsScreen({super.key, this.autoStartVideoScan = false});
@@ -46,6 +50,45 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   String? _videoProcessingText;
   double? _videoProgressValue;
   bool _loadingIsVideo = false;
+
+  Future<void> _maybeShowRecipeOptionsAfterSave() async {
+    // Best-effort only. If this fails or user is gated, we fall back to the
+    // existing navigation (pop back).
+    try {
+      final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
+      if (!mounted) return;
+      if (!gate.allowed) return;
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final profileState = Provider.of<ProfileState>(context, listen: false);
+      final service = CookNowService();
+
+      final options = await service.generateRecipeOptions(
+        apiClient: apiClient,
+        profileState: profileState,
+        maxOptions: 5,
+        avoidRecentRecipes: 3,
+      );
+
+      if (!mounted) return;
+      if (options.isEmpty) return;
+
+      await Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          settings: const RouteSettings(name: '/recipe_options'),
+          builder: (_) => RecipeOptionsScreen(
+            recipes: options,
+            showIngredientMatch: true,
+            titleOverride: 'Meals you can cook tonight',
+            skipSuggestionSessionGate: true,
+          ),
+        ),
+        (route) => route.isFirst,
+      );
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
 
   Future<Map<String, dynamic>> _pollVideoScanStatus(String scanId) async {
     final apiClient = Provider.of<ApiClient>(context, listen: false);
@@ -119,31 +162,125 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
   Future<void> _editQuantityDialog(_Candidate c) async {
     final initial = c.quantityController.text.trim();
-    final controller = TextEditingController(text: initial);
+
+    // Parse the existing free-form quantity string into (number, unit) so we can
+    // offer a unit dropdown (metric/imperial) while keeping numeric typing easy.
+    final parsed = RegExp(r'^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?').firstMatch(initial);
+    final initialQty = parsed?.group(1) ?? '';
+    final rawUnit = (parsed?.group(2) ?? '').trim().toLowerCase();
+
+    String normalizeUnit(String u) {
+      final unit = (u).trim().toLowerCase();
+      if (unit == 'g' || unit == 'gram' || unit == 'grams') return 'grams';
+      if (unit == 'kg' || unit == 'kilo' || unit == 'kilos') return 'kg';
+      if (unit == 'ml') return 'ml';
+      if (unit == 'l' || unit == 'lt' || unit == 'liter' || unit == 'litre' || unit == 'liters' || unit == 'litres') {
+        return 'liters';
+      }
+      if (unit == 'lb' || unit == 'lbs' || unit == 'pound' || unit == 'pounds') return 'lbs';
+      if (unit == 'oz' || unit == 'ounce' || unit == 'ounces') return 'oz';
+      if (unit == 'cup' || unit == 'cups') return 'cups';
+      if (unit == 'piece' || unit == 'pieces') return 'pieces';
+      if (unit == 'item' || unit == 'items') return 'items';
+      return unit.isEmpty ? 'pieces' : unit;
+    }
+
+    final qtyController = TextEditingController(text: initialQty);
+    String selectedUnit = normalizeUnit(rawUnit);
+
+    const units = <String>[
+      'pieces',
+      'items',
+      'grams',
+      'kg',
+      'ml',
+      'liters',
+      'cups',
+      'oz',
+      'lbs',
+    ];
+    if (!units.contains(selectedUnit)) {
+      selectedUnit = 'pieces';
+    }
 
     final res = await showDialog<String>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setLocalState) => AlertDialog(
         title: const Text('Edit quantity'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'e.g., 500 g, 2 kg, 3 pieces',
-            border: OutlineInputBorder(),
-          ),
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: qtyController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Quantity',
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: DropdownButtonFormField<String>(
+                    value: selectedUnit,
+                    decoration: const InputDecoration(
+                      labelText: 'Unit',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: units
+                        .map(
+                          (u) => DropdownMenuItem(
+                            value: u,
+                            child: Text(
+                              u == 'grams'
+                                  ? 'g'
+                                  : u == 'liters'
+                                      ? 'L'
+                                      : u,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setLocalState(() => selectedUnit = v);
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Tip: use g/kg/ml/L/oz/lbs as needed.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            onPressed: () {
+              final qtyText = qtyController.text.trim();
+              if (qtyText.isEmpty) {
+                Navigator.pop(ctx, '');
+                return;
+              }
+              Navigator.pop(ctx, '$qtyText $selectedUnit'.trim());
+            },
             child: const Text('Save'),
           ),
         ],
+        ),
       ),
     );
 
@@ -584,6 +721,11 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         SnackBar(content: Text('Saved $savedSoFar/$total items to inventory')),
       );
 
+      if (savedSoFar > 0) {
+        await _maybeShowRecipeOptionsAfterSave();
+        if (!mounted) return;
+      }
+
       Navigator.pop(context, savedSoFar > 0);
     } catch (e) {
       if (!mounted) return;
@@ -859,6 +1001,10 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
       final next = _nextPendingIndex(startAt: _currentIndex + 1);
       if (next == null) {
+        if (_savedCount > 0) {
+          await _maybeShowRecipeOptionsAfterSave();
+          if (!mounted) return;
+        }
         Navigator.pop(context, _savedCount > 0);
         return;
       }
@@ -1112,7 +1258,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
                       : 'Quantity (optional, e.g., 2 kg)',
                   border: const OutlineInputBorder(),
                 ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                // Allow entry of units like "500 g" / "2 kg".
+                keyboardType: TextInputType.text,
                 onChanged: (v) {
                   current.quantityEstimate = v;
                   // Any edit counts as confirmation for low-confidence quantities.

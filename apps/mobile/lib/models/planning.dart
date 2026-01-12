@@ -268,6 +268,9 @@ class Recipe {
     final rawRecipe = json['recipe'];
     final recipe = (rawRecipe is Map) ? Map<String, dynamic>.from(rawRecipe) : <String, dynamic>{};
 
+    final rawI18n = json['i18n'];
+    final i18n = (rawI18n is Map) ? Map<String, dynamic>.from(rawI18n) : <String, dynamic>{};
+
     final name = (recipe['recipe_name'] ?? 'Recipe').toString().trim();
     final cuisine = (recipe['cuisine'] ?? '').toString();
     final difficulty = (recipe['difficulty'] ?? 'easy').toString();
@@ -313,6 +316,36 @@ class Recipe {
       steps.add(RecipeStep(step: 1, instruction: {'en': 'Follow the recipe steps.'}, timeMinutes: 0));
     }
 
+    // Best-effort bilingual hydration (if backend provided i18n fields)
+    final localizedName = <String, String>{'en': name};
+    final rawNameMap = i18n['recipe_name'];
+    if (rawNameMap is Map) {
+      for (final entry in rawNameMap.entries) {
+        final k = entry.key.toString().trim();
+        final v = entry.value?.toString().trim() ?? '';
+        if (k.isNotEmpty && v.isNotEmpty) {
+          localizedName[k] = v;
+        }
+      }
+    }
+
+    final rawStepMaps = i18n['steps'];
+    if (rawStepMaps is List) {
+      for (var idx = 0; idx < rawStepMaps.length && idx < steps.length; idx++) {
+        final row = rawStepMaps[idx];
+        if (row is Map) {
+          final m = Map<String, dynamic>.from(row);
+          for (final entry in m.entries) {
+            final k = entry.key.toString().trim();
+            final v = entry.value?.toString().trim() ?? '';
+            if (k.isNotEmpty && v.isNotEmpty) {
+              steps[idx].instruction[k] = v;
+            }
+          }
+        }
+      }
+    }
+
     double? pantryCoverage;
     final rawCoverage = json['pantry_coverage'];
     if (rawCoverage is num) pantryCoverage = rawCoverage.toDouble();
@@ -341,7 +374,7 @@ class Recipe {
     final rid = (recipe['recipe_id'] ?? '').toString().trim();
     return Recipe(
       recipeId: rid,
-      recipeName: {'en': name},
+      recipeName: localizedName,
       cuisine: cuisine,
       difficulty: difficulty,
       estimatedTimes: EstimatedTimes(prepMinutes: prep, cookMinutes: 0, totalMinutes: prep),

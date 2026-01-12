@@ -52,6 +52,13 @@ class CookNowService {
       final byId = <String, Recipe>{};
       final creative = (creativity ?? '').trim().toLowerCase();
       final creativityValue = (creative == 'high' || creative == 'standard') ? creative : '';
+
+      final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
+          ? profileState.preferredLanguage!.trim()
+          : (profileState.primaryLanguage?.trim().isNotEmpty == true)
+              ? profileState.primaryLanguage!.trim()
+              : 'en';
+
       final req = <String, dynamic>{
         'request_text': '',
         if (cuisine != null && cuisine.trim().isNotEmpty) 'cuisine': cuisine.trim(),
@@ -59,6 +66,8 @@ class CookNowService {
         'serves': 4,
         'include_inactive_inventory': includeInactiveInventory,
         'use_expiring_items': true,
+        'output_language': outputLang,
+        'output_languages': outputLang == 'en' ? ['en'] : ['en', outputLang],
         // Ask backend for multiple options in a single call.
         'count': attempts.clamp(1, 8),
         if (spiceLevel != null && spiceLevel.trim().isNotEmpty) 'spice_level': spiceLevel.trim(),

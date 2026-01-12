@@ -125,6 +125,14 @@ class RecipeGenerateRequest(BaseModel):
     include_inactive_inventory: bool = Field(default=False)
     use_expiring_items: bool = Field(default=False)
     spice_level: Optional[str] = Field(default=None)
+    output_language: Optional[str] = Field(
+        default=None,
+        description="Preferred output language (BCP-47-ish, e.g. 'en', 'hi', 'te'). Used for best-effort bilingual fields.",
+    )
+    output_languages: List[str] = Field(
+        default_factory=list,
+        description="Optional list of output languages. If provided, backend may include best-effort bilingual fields.",
+    )
     creativity: Optional[Literal["standard", "high"]] = Field(
         default=None,
         description="Optional creativity level. 'high' forces LLM generation for more native/innovative recipes.",
@@ -176,6 +184,11 @@ class TrustSignals(BaseModel):
     adjustable_spice_level: bool = True
 
 
+class RecipeI18n(BaseModel):
+    recipe_name: Dict[str, str] = Field(default_factory=dict)
+    steps: List[Dict[str, str]] = Field(default_factory=list)
+
+
 class RecipeGenerateResponse(BaseModel):
     success: bool = True
     recipe: CanonicalRecipe
@@ -185,6 +198,232 @@ class RecipeGenerateResponse(BaseModel):
     mode: str
     reason: str
     trust_signals: TrustSignals
+    i18n: Optional[RecipeI18n] = None
+
+
+def _normalize_language_code(code: str | None) -> str:
+    c = (code or "").strip().lower()
+    if not c:
+        return ""
+    # Preserve simple BCP-47-ish tags but normalize case.
+    return c
+
+
+def _requested_translation_target(req: RecipeGenerateRequest) -> str:
+    langs: list[str] = []
+    if isinstance(getattr(req, "output_languages", None), list):
+        langs.extend([_normalize_language_code(x) for x in (req.output_languages or [])])
+    if isinstance(getattr(req, "output_language", None), str):
+        langs.append(_normalize_language_code(req.output_language))
+
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for l in langs:
+        if not l or l in seen:
+            continue
+        seen.add(l)
+        ordered.append(l)
+
+    for l in ordered:
+        if l and l != "en":
+            return l
+    return ""
+
+
+async def _translate_canonical_recipe_i18n(
+    *,
+    recipe: CanonicalRecipe,
+    target_language: str,
+    include_steps: bool,
+) -> Optional[RecipeI18n]:
+    target = _normalize_language_code(target_language)
+    if not target or target == "en":
+        return None
+
+    base = RecipeI18n(
+        recipe_name={"en": recipe.recipe_name},
+        steps=[{"en": s} for s in (recipe.steps or [])],
+    )
+
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "recipe_name": {"type": "string"},
+        },
+        "required": ["recipe_name"],
+        "additionalProperties": False,
+    }
+    if include_steps:
+        schema["properties"]["steps"] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 12,
+        }
+        schema["required"].append("steps")
+
+    client = get_reasoning_client()
+    prompt = {
+        "target_language": target,
+        "source_language": "en",
+        "recipe_name": recipe.recipe_name,
+        "steps": recipe.steps if include_steps else [],
+        "rules": [
+            "keep_measurements_numbers_units_same",
+            "do_not_translate_proper_nouns_or_brand_names",
+            "keep_ingredient_names_as_common_local_terms_when_possible",
+            "do_not_add_or_remove_steps",
+        ],
+    }
+
+    try:
+        translated = await asyncio.wait_for(
+            generate_json_with_retries(
+                client=client,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You translate recipe text. "
+                            "Return JSON only matching the schema. "
+                            "Do not change meaning, quantities, or step count."
+                        ),
+                    },
+                    {"role": "user", "content": str(prompt)},
+                ],
+                schema=schema,
+                max_attempts=1,
+                timeout_seconds=8,
+            ),
+            timeout=9,
+        )
+    except Exception:
+        return base
+
+    try:
+        if isinstance(translated, dict):
+            t_name = (translated.get("recipe_name") or "").strip()
+            if t_name:
+                base.recipe_name[target] = t_name
+            if include_steps:
+                t_steps = translated.get("steps")
+                if isinstance(t_steps, list):
+                    for i, s in enumerate(t_steps):
+                        if i >= len(base.steps):
+                            break
+                        line = (str(s) if s is not None else "").strip()
+                        if line:
+                            base.steps[i][target] = line
+    except Exception:
+        return base
+
+    return base
+
+
+async def _translate_canonical_recipes_batch_i18n(
+    *,
+    recipes: list[CanonicalRecipe],
+    target_language: str,
+) -> list[Optional[RecipeI18n]]:
+    target = _normalize_language_code(target_language)
+    if not target or target == "en" or not recipes:
+        return [None for _ in recipes]
+
+    bases: list[RecipeI18n] = [
+        RecipeI18n(
+            recipe_name={"en": r.recipe_name},
+            steps=[{"en": s} for s in (r.steps or [])],
+        )
+        for r in recipes
+    ]
+
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "translations": {
+                "type": "array",
+                "minItems": len(recipes),
+                "maxItems": len(recipes),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "recipe_name": {"type": "string"},
+                        "steps": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12},
+                    },
+                    "required": ["recipe_name", "steps"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["translations"],
+        "additionalProperties": False,
+    }
+
+    client = get_reasoning_client()
+    prompt = {
+        "target_language": target,
+        "source_language": "en",
+        "recipes": [
+            {
+                "recipe_name": r.recipe_name,
+                "steps": r.steps,
+            }
+            for r in recipes
+        ],
+        "rules": [
+            "keep_measurements_numbers_units_same",
+            "do_not_translate_proper_nouns_or_brand_names",
+            "do_not_add_or_remove_steps",
+        ],
+    }
+
+    try:
+        translated = await asyncio.wait_for(
+            generate_json_with_retries(
+                client=client,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Translate each recipe_name and steps into target_language. "
+                            "Return JSON only matching the schema."
+                        ),
+                    },
+                    {"role": "user", "content": str(prompt)},
+                ],
+                schema=schema,
+                max_attempts=1,
+                timeout_seconds=10,
+            ),
+            timeout=11,
+        )
+    except Exception:
+        return bases
+
+    try:
+        rows = translated.get("translations") if isinstance(translated, dict) else None
+        if not isinstance(rows, list):
+            return bases
+
+        for idx, row in enumerate(rows):
+            if idx >= len(bases) or not isinstance(row, dict):
+                continue
+            t_name = (row.get("recipe_name") or "").strip()
+            if t_name:
+                bases[idx].recipe_name[target] = t_name
+            t_steps = row.get("steps")
+            if isinstance(t_steps, list):
+                for i, s in enumerate(t_steps):
+                    if i >= len(bases[idx].steps):
+                        break
+                    line = (str(s) if s is not None else "").strip()
+                    if line:
+                        bases[idx].steps[i][target] = line
+    except Exception:
+        return bases
+
+    return bases
 
 
 class RecipeGenerateOptionsResponse(BaseModel):
@@ -1194,6 +1433,13 @@ async def generate_recipe(
     except Exception:
         pass
 
+    target_language = _requested_translation_target(req)
+    i18n = await _translate_canonical_recipe_i18n(
+        recipe=recipe_obj,
+        target_language=target_language,
+        include_steps=True,
+    )
+
     return RecipeGenerateResponse(
         recipe=recipe_obj,
         locked_constraints=constraints,
@@ -1202,6 +1448,7 @@ async def generate_recipe(
         mode=mode,
         reason=reason,
         trust_signals=trust,
+        i18n=i18n,
     )
 
 
@@ -1478,6 +1725,14 @@ async def generate_recipe_options(
             },
         )
 
+        target_language = _requested_translation_target(req)
+        i18n_list = await _translate_canonical_recipes_batch_i18n(
+            recipes=[o.recipe for o in options],
+            target_language=target_language,
+        )
+        for o, i18n in zip(options, i18n_list):
+            o.i18n = i18n
+
         return RecipeGenerateOptionsResponse(options=options)
 
     except Exception:
@@ -1527,6 +1782,13 @@ async def generate_recipe_options(
         except Exception:
             pass
 
+        target_language = _requested_translation_target(req)
+        i18n = await _translate_canonical_recipe_i18n(
+            recipe=assembled,
+            target_language=target_language,
+            include_steps=True,
+        )
+
         return RecipeGenerateOptionsResponse(
             options=[
                 RecipeGenerateResponse(
@@ -1537,6 +1799,7 @@ async def generate_recipe_options(
                     mode="assembled",
                     reason="fallback",
                     trust_signals=trust,
+                    i18n=i18n,
                 )
             ]
         )
