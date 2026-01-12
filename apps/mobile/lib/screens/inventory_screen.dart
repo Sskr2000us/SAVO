@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../ui/ui_principles.dart';
@@ -43,6 +44,7 @@ class _InventoryThumb extends StatelessWidget {
 }
 
 class _InventoryScreenState extends State<InventoryScreen> {
+  final Set<String> _uploadingImageIds = <String>{};
   List<InventoryItem> _items = [];
   bool _loading = true;
   bool _mergingDuplicates = false;
@@ -1272,6 +1274,95 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Future<void> _showImagePreview(String imageUrl) async {
+    final url = imageUrl.trim();
+    if (url.isEmpty) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Item image'),
+          content: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) {
+                return Container(
+                  height: 200,
+                  width: 300,
+                  color: Colors.grey.shade100,
+                  alignment: Alignment.center,
+                  child: const Text('Image unavailable'),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _captureAndAttachImage(InventoryItem item) async {
+    if (_uploadingImageIds.contains(item.inventoryId)) return;
+
+    if (kIsWeb) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Adding images is best done on mobile (camera upload not available on web).')),
+      );
+      return;
+    }
+
+    setState(() => _uploadingImageIds.add(item.inventoryId));
+    try {
+      final picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+      if (photo == null) return;
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final uploadRes = await apiClient.postMultipart(
+        '/inventory-db/upload-image',
+        file: photo,
+        fieldName: 'image',
+      );
+      final url = (uploadRes['image_url'] ?? '').toString().trim();
+      if (url.isEmpty) {
+        throw Exception('Upload succeeded but image_url missing');
+      }
+
+      await apiClient.patch('/inventory-db/items/${item.inventoryId}', {
+        'image_url': url,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image saved.')),
+      );
+      await _loadInventory();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save image: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploadingImageIds.remove(item.inventoryId));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (kDebugMode || kProfileMode) {
@@ -1543,6 +1634,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             onEdit: () => _showEditItemSheet(item),
                             onDelete: () => _deleteItem(item.inventoryId),
                             onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
+                            uploadingImage: _uploadingImageIds.contains(item.inventoryId),
+                            onViewImage: (url) => _showImagePreview(url),
+                            onCaptureImage: () => _captureAndAttachImage(item),
                           )),
                       const SizedBox(height: 8),
                     ],
@@ -1609,6 +1703,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                   onEdit: () => _showEditItemSheet(item),
                                   onDelete: () => _deleteItem(item.inventoryId),
                                   onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
+                                  uploadingImage: _uploadingImageIds.contains(item.inventoryId),
+                                  onViewImage: (url) => _showImagePreview(url),
+                                  onCaptureImage: () => _captureAndAttachImage(item),
                                 )),
                           ];
 
@@ -1634,6 +1731,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                     onEdit: () => _showEditItemSheet(item),
                                     onDelete: () => _deleteItem(item.inventoryId),
                                     onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
+                                uploadingImage: _uploadingImageIds.contains(item.inventoryId),
+                                onViewImage: (url) => _showImagePreview(url),
+                                onCaptureImage: () => _captureAndAttachImage(item),
                                   )),
                             );
                           }
@@ -1702,6 +1802,9 @@ class _InventoryCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback? onUse;
+  final bool uploadingImage;
+  final void Function(String imageUrl)? onViewImage;
+  final VoidCallback? onCaptureImage;
 
   const _InventoryCard({
     required this.item,
@@ -1709,6 +1812,9 @@ class _InventoryCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.onUse,
+    this.uploadingImage = false,
+    this.onViewImage,
+    this.onCaptureImage,
   });
 
   String _formatQty(double qty) {
@@ -1749,24 +1855,33 @@ class _InventoryCard extends StatelessWidget {
       if (cuisine.isNotEmpty) 'Cuisine: ${prettyName(cuisine)}',
     ];
 
+    final hasImage = (item.imageUrl ?? '').trim().isNotEmpty;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       color: item.isExpiringSoon ? Colors.orange[50] : null,
       child: ListTile(
         onTap: onEdit,
-        leading: (item.imageUrl ?? '').trim().isNotEmpty
-            ? _InventoryThumb(imageUrl: item.imageUrl)
-            : CircleAvatar(
-                backgroundColor: item.isExpiringSoon
-                    ? Colors.orange
-                    : item.isLeftover
-                        ? Colors.blue
-                        : Colors.green,
-                child: Icon(
-                  item.isLeftover ? Icons.restaurant : Icons.inventory,
-                  color: Colors.white,
+        leading: InkWell(
+          onTap: hasImage
+              ? () => onViewImage?.call(item.imageUrl!.trim())
+              : (onCaptureImage == null || uploadingImage)
+                  ? null
+                  : onCaptureImage,
+          child: hasImage
+              ? _InventoryThumb(imageUrl: item.imageUrl)
+              : CircleAvatar(
+                  backgroundColor: item.isExpiringSoon
+                      ? Colors.orange
+                      : item.isLeftover
+                          ? Colors.blue
+                          : Colors.green,
+                  child: Icon(
+                    item.isLeftover ? Icons.restaurant : Icons.inventory,
+                    color: Colors.white,
+                  ),
                 ),
-              ),
+        ),
         title: Row(
           children: [
             Expanded(child: Text(prettyName(item.displayLabel))),
@@ -1787,6 +1902,13 @@ class _InventoryCard extends StatelessWidget {
             Text('${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'),
             const SizedBox(height: 2),
             Text(metaParts.join(' • '), style: theme.textTheme.bodySmall),
+            if (!hasImage) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Image required',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.red.shade700),
+              ),
+            ],
           ],
         ),
         trailing: Row(
@@ -1797,6 +1919,21 @@ class _InventoryCard extends StatelessWidget {
                 onPressed: onUse,
                 child: const Text('Use'),
               ),
+            IconButton(
+              tooltip: hasImage ? 'View image' : 'Add image',
+              onPressed: uploadingImage
+                  ? null
+                  : hasImage
+                      ? (onViewImage == null ? null : () => onViewImage!.call(item.imageUrl!.trim()))
+                      : onCaptureImage,
+              icon: uploadingImage
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(hasImage ? Icons.image_outlined : Icons.photo_camera_outlined),
+            ),
             if (showExpiryChip)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
