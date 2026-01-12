@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
@@ -20,6 +21,48 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   );
 
   bool _handling = false;
+
+  static const List<String> _categoryOptions = [
+    'vegetables',
+    'fruits',
+    'dairy',
+    'proteins',
+    'condiments',
+    'beverages',
+    'leftovers',
+    'grains',
+    'pulses',
+    'flours',
+    'spices',
+    'powders',
+    'oils',
+    'snacks',
+    'canned',
+    'baking',
+    'frozen_vegetables',
+    'frozen_fruits',
+    'meat_seafood',
+    'prepared_meals',
+    'desserts',
+    'produce',
+    'breads',
+    'other',
+  ];
+
+  static String _prettyToken(String raw) {
+    final s = raw.trim().replaceAll('_', ' ');
+    if (s.isEmpty) return s;
+    return s.split(RegExp(r'\s+')).map((w) {
+      if (w.isEmpty) return w;
+      return w[0].toUpperCase() + w.substring(1);
+    }).join(' ');
+  }
+
+  static String? _cleanOptional(String? raw) {
+    final trimmed = raw?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed;
+  }
 
   @override
   void dispose() {
@@ -79,45 +122,195 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
           final qtyController = TextEditingController(text: quantity.toString());
           final unitController = TextEditingController(text: unit);
 
+          String? category;
+          final subcategoryController = TextEditingController();
+
+          // Image is mandatory. Prefer product image from lookup; otherwise require a user photo upload.
+          String? chosenImageUrl = imageUrl.isNotEmpty ? imageUrl : null;
+          bool uploadingImage = false;
+
           return AlertDialog(
             title: const Text('Add to inventory'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Name'),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: qtyController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(labelText: 'Quantity'),
+            content: StatefulBuilder(
+              builder: (context, setDialogState) {
+                final canAdd = (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) && !uploadingImage;
+
+                Widget imageWidget;
+                if (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) {
+                  imageWidget = ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      chosenImageUrl!,
+                      height: 140,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) {
+                        return Container(
+                          height: 140,
+                          width: double.infinity,
+                          color: Colors.grey.shade200,
+                          alignment: Alignment.center,
+                          child: const Text('Image unavailable'),
+                        );
+                      },
+                    ),
+                  );
+                } else {
+                  imageWidget = Container(
+                    height: 140,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.photo_outlined, size: 28, color: Colors.grey),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Package photo required',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      imageWidget,
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: uploadingImage
+                            ? null
+                            : () async {
+                                try {
+                                  setDialogState(() => uploadingImage = true);
+                                  final picker = ImagePicker();
+                                  final XFile? photo = await picker.pickImage(
+                                    source: ImageSource.camera,
+                                    maxWidth: 1920,
+                                    maxHeight: 1080,
+                                    imageQuality: 85,
+                                  );
+                                  if (photo == null) {
+                                    setDialogState(() => uploadingImage = false);
+                                    return;
+                                  }
+
+                                  final uploadRes = await apiClient.postMultipart(
+                                    '/inventory-db/upload-image',
+                                    file: photo,
+                                    fieldName: 'image',
+                                  );
+
+                                  final url = (uploadRes['image_url'] ?? '').toString().trim();
+                                  if (url.isEmpty) {
+                                    throw Exception('Upload succeeded but image_url missing');
+                                  }
+
+                                  setDialogState(() {
+                                    chosenImageUrl = url;
+                                    uploadingImage = false;
+                                  });
+                                } catch (e) {
+                                  setDialogState(() => uploadingImage = false);
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Failed to upload photo: $e')),
+                                  );
+                                }
+                              },
+                        icon: uploadingImage
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.photo_camera_outlined),
+                        label: Text(uploadingImage ? 'Uploading…' : 'Capture package photo'),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: unitController,
-                        decoration: const InputDecoration(labelText: 'Unit'),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(labelText: 'Name'),
                       ),
-                    ),
-                  ],
-                ),
-                if (packageSizeText.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Package: $packageSizeText',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: qtyController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(labelText: 'Quantity'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: unitController,
+                              decoration: const InputDecoration(labelText: 'Unit'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (packageSizeText.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Package: $packageSizeText',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String?>(
+                        initialValue: category,
+                        decoration: const InputDecoration(
+                          labelText: 'Category (recommended)',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(value: null, child: Text('Uncategorized')),
+                          ..._categoryOptions.map(
+                            (c) => DropdownMenuItem<String?>(value: c, child: Text(_prettyToken(c))),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setDialogState(() {
+                            category = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: subcategoryController,
+                        decoration: const InputDecoration(
+                          labelText: 'Subcategory (optional)',
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Note: You can change category later in Pantry/Inventory.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (!canAdd) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Please provide a package photo to continue.',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ],
+                );
+              },
             ),
             actions: [
               TextButton(
@@ -126,22 +319,31 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
               ),
               FilledButton(
                 onPressed: () async {
+                  if (chosenImageUrl == null || chosenImageUrl!.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Package photo is required.')),
+                    );
+                    return;
+                  }
+
                   final q = double.tryParse(qtyController.text.trim()) ?? 1.0;
                   final u = unitController.text.trim().isEmpty ? 'pcs' : unitController.text.trim();
 
                   await apiClient.post('/inventory-db/items', {
                     'canonical_name': nameController.text.trim(),
                     'display_name': nameController.text.trim(),
+                    'category': _cleanOptional(category),
+                    'subcategory': _cleanOptional(subcategoryController.text),
                     'quantity': q,
                     'unit': u,
                     'storage_location': 'pantry',
                     'item_state': 'raw',
-                    'source': 'scan',
+                    'source': 'barcode',
                     'scan_confidence': 1.0,
                     'barcode': digits,
                     'product_name': productName.isNotEmpty ? productName : null,
                     'brand': brand.isNotEmpty ? brand : null,
-                    'image_url': imageUrl.isNotEmpty ? imageUrl : null,
+                    'image_url': chosenImageUrl,
                     'package_size_text': packageSizeText.isNotEmpty ? packageSizeText : null,
                   });
 

@@ -18,6 +18,29 @@ class InventoryScreen extends StatefulWidget {
   @override
   State<InventoryScreen> createState() => _InventoryScreenState();
 }
+class _InventoryThumb extends StatelessWidget {
+  const _InventoryThumb({required this.imageUrl});
+
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = (imageUrl ?? '').trim();
+    if (url.isEmpty) {
+      return CircleAvatar(
+        backgroundColor: Colors.grey.shade200,
+        child: const Icon(Icons.inventory_2_outlined, color: Colors.black54),
+      );
+    }
+
+    return CircleAvatar(
+      backgroundColor: Colors.grey.shade200,
+      backgroundImage: NetworkImage(url),
+      onBackgroundImageError: (_, __) {},
+      child: const SizedBox.shrink(),
+    );
+  }
+}
 
 class _InventoryScreenState extends State<InventoryScreen> {
   List<InventoryItem> _items = [];
@@ -1048,6 +1071,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   void _showAddItemDialog() {
+    final rootContext = context;
     final nameController = TextEditingController();
     final quantityController = TextEditingController();
     final unitController = TextEditingController();
@@ -1201,6 +1225,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         const SnackBar(content: Text('Name cannot be empty.')),
                       );
                       return;
+                    }
+
+                    // Manual add is allowed without an image, but we should nudge the user.
+                    if (rootContext.mounted) {
+                      ScaffoldMessenger.of(rootContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('Tip: Add an image for better recognition (you can add it later from Pantry).'),
+                        ),
+                      );
                     }
 
                     final item = {
@@ -1721,17 +1754,19 @@ class _InventoryCard extends StatelessWidget {
       color: item.isExpiringSoon ? Colors.orange[50] : null,
       child: ListTile(
         onTap: onEdit,
-        leading: CircleAvatar(
-          backgroundColor: item.isExpiringSoon
-              ? Colors.orange
-              : item.isLeftover
-                  ? Colors.blue
-                  : Colors.green,
-          child: Icon(
-            item.isLeftover ? Icons.restaurant : Icons.inventory,
-            color: Colors.white,
-          ),
-        ),
+        leading: (item.imageUrl ?? '').trim().isNotEmpty
+            ? _InventoryThumb(imageUrl: item.imageUrl)
+            : CircleAvatar(
+                backgroundColor: item.isExpiringSoon
+                    ? Colors.orange
+                    : item.isLeftover
+                        ? Colors.blue
+                        : Colors.green,
+                child: Icon(
+                  item.isLeftover ? Icons.restaurant : Icons.inventory,
+                  color: Colors.white,
+                ),
+              ),
         title: Row(
           children: [
             Expanded(child: Text(prettyName(item.displayLabel))),

@@ -34,6 +34,60 @@ class IngredientConfirmationScreen extends StatefulWidget {
       _IngredientConfirmationScreenState();
 }
 
+class _IngredientThumb extends StatelessWidget {
+  const _IngredientThumb({
+    required this.thumbnailUrl,
+    required this.fullImageUrl,
+  });
+
+  final String? thumbnailUrl;
+  final String? fullImageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = (thumbnailUrl ?? '').trim().isNotEmpty
+        ? thumbnailUrl!.trim()
+        : ((fullImageUrl ?? '').trim().isNotEmpty ? fullImageUrl!.trim() : null);
+
+    if (url == null) {
+      return Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        alignment: Alignment.center,
+        child: const Icon(Icons.photo_outlined, size: 18, color: Colors.grey),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Image.network(
+        url,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) {
+          return Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image_outlined, size: 18, color: Colors.grey),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _IngredientConfirmationScreenState
     extends State<IngredientConfirmationScreen> {
   final ScanningService _scanningService = ScanningService();
@@ -885,7 +939,7 @@ class _IngredientConfirmationScreenState
     String likelihood,
     bool isSelected,
   ) {
-    return ChoiceChip(
+    return Scaffold(
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -897,6 +951,8 @@ class _IngredientConfirmationScreenState
         ],
       ),
       selected: isSelected,
+                  final thumbUrl = (item['thumbnail_url'] ?? item['thumbnailUrl'] ?? '').toString();
+                  final fullUrl = (item['full_image_url'] ?? item['fullImageUrl'] ?? '').toString();
       onSelected: (selected) {
         if (selected) {
           _handleModify(detectedId, name);
@@ -904,9 +960,14 @@ class _IngredientConfirmationScreenState
       },
       selectedColor: const Color(0xFF4CAF50),
       labelStyle: TextStyle(
-        color: isSelected ? Colors.white : Colors.black87,
+                          Row(
         fontSize: 13,
       ),
+                              _IngredientThumb(
+                                thumbnailUrl: thumbUrl,
+                                fullImageUrl: fullUrl,
+                              ),
+                              const SizedBox(width: 10),
     );
   }
 }

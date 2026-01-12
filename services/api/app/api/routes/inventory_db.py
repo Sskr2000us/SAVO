@@ -3,7 +3,7 @@ Inventory Management API Routes with Database Integration
 Handles inventory CRUD, low stock alerts, and automatic deduction
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 from datetime import date, datetime
@@ -55,6 +55,50 @@ async def _log_inventory_event(
         return
 
 router = APIRouter()  # Remove duplicate prefix - already set in main router
+
+
+@router.post("/upload-image")
+async def upload_inventory_image_ref(
+    image: UploadFile = File(..., description="Inventory/package image (JPEG/PNG)"),
+    user_id: str = Depends(get_current_user),
+):
+    """Upload an inventory-related image and return a stored ref + signed URL.
+
+    This is used by barcode flows when a product lookup has no image.
+    """
+    try:
+        from datetime import timedelta
+
+        from app.core.media_storage import upload_inventory_image, to_signed_url
+
+        if image.content_type is None or not image.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Only image uploads are supported")
+
+        raw = await image.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Empty image upload")
+        if len(raw) > 7 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image too large (max 7MB)")
+
+        expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+        stored_ref = upload_inventory_image(
+            user_id=user_id,
+            content=raw,
+            content_type=image.content_type,
+            asset_type="inventory_package_photo",
+            source="barcode",
+            expires_at=expires_at,
+        )
+
+        return {
+            "success": True,
+            "image_ref": stored_ref,
+            "image_url": to_signed_url(stored_ref) if stored_ref else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
 
 
 # ============================================================================

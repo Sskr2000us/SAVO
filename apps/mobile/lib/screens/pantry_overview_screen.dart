@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../models/inventory.dart';
@@ -29,6 +30,54 @@ String _formatPantryDate(DateTime d) {
   return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }
 
+class _PantryThumb extends StatelessWidget {
+  const _PantryThumb({required this.imageUrl, required this.missingRequired});
+
+  final String? imageUrl;
+  final bool missingRequired;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = (imageUrl ?? '').trim();
+    if (url.isEmpty) {
+      return Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: missingRequired ? Colors.red.shade400 : Colors.grey.shade300),
+        ),
+        alignment: Alignment.center,
+        child: const Icon(Icons.photo_outlined, size: 18, color: Colors.grey),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Image.network(
+        url,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) {
+          return Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image_outlined, size: 18, color: Colors.grey),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class PantryOverviewScreen extends StatefulWidget {
   const PantryOverviewScreen({super.key});
 
@@ -40,6 +89,34 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
   bool _loading = true;
   List<InventoryItem> _items = const [];
   bool _cleaning = false;
+  final Set<String> _uploadingImageIds = <String>{};
+
+  static const List<String> _categoryOptions = [
+    'vegetables',
+    'fruits',
+    'dairy',
+    'proteins',
+    'condiments',
+    'beverages',
+    'leftovers',
+    'grains',
+    'pulses',
+    'flours',
+    'spices',
+    'powders',
+    'oils',
+    'snacks',
+    'canned',
+    'baking',
+    'frozen_vegetables',
+    'frozen_fruits',
+    'meat_seafood',
+    'prepared_meals',
+    'desserts',
+    'produce',
+    'breads',
+    'other',
+  ];
 
   bool _loadingWaste = true;
   WasteAnalyticsSummary? _waste;
@@ -143,6 +220,174 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
     }
   }
 
+  Future<void> _captureAndAttachImage(InventoryItem item) async {
+    if (kIsWeb) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Capturing a package photo is not supported on web.')),
+      );
+      return;
+    }
+
+    if (_uploadingImageIds.contains(item.inventoryId)) return;
+
+    setState(() => _uploadingImageIds.add(item.inventoryId));
+    try {
+      final picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+      if (photo == null) return;
+
+      final apiClient = Provider.of<ApiClient>(context, listen: false);
+      final uploadRes = await apiClient.postMultipart(
+        '/inventory-db/upload-image',
+        file: photo,
+        fieldName: 'image',
+      );
+
+      final url = (uploadRes['image_url'] ?? '').toString().trim();
+      if (url.isEmpty) {
+        throw Exception('Upload succeeded but image_url missing');
+      }
+
+      await apiClient.patch('/inventory-db/items/${item.inventoryId}', {
+        'image_url': url,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image saved.')),
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save image: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploadingImageIds.remove(item.inventoryId));
+      }
+    }
+  }
+
+  static String? _cleanOptional(String? raw) {
+    final trimmed = raw?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed;
+  }
+
+  Future<void> _showCategorySheet(InventoryItem item) async {
+    String? category = _cleanOptional(item.category);
+    final subcategoryController = TextEditingController(text: (item.subcategory ?? '').trim());
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 8,
+            bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Assign category', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              Text(
+                item.displayLabel,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              Builder(
+                builder: (context) {
+                  final options = <String>{..._categoryOptions, if (category != null) category!}.toList()..sort();
+                  return DropdownButtonFormField<String?>(
+                    initialValue: category,
+                    decoration: const InputDecoration(
+                      labelText: 'Category',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(value: null, child: Text('Uncategorized')),
+                      ...options.map((c) => DropdownMenuItem<String?>(value: c, child: Text(_prettyPantryToken(c)))),
+                    ],
+                    onChanged: (value) {
+                      category = value;
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: subcategoryController,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  labelText: 'Subcategory (optional)',
+                  hintText: 'e.g. cheese, leafy, rice',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () async {
+                        final cleanCategory = _cleanOptional(category);
+                        final subcategory = _cleanOptional(subcategoryController.text);
+
+                        // Allow clearing both values.
+                        final updates = <String, dynamic>{
+                          'category': cleanCategory,
+                          'subcategory': subcategory,
+                        };
+
+                        try {
+                          final apiClient = Provider.of<ApiClient>(context, listen: false);
+                          await apiClient.patch('/inventory-db/items/${item.inventoryId}', updates);
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Category updated.')),
+                          );
+                          await _load();
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Failed to update category: $e')),
+                          );
+                        }
+                      },
+                      child: const Text('Save'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   List<InventoryItem> get _useSoon {
     final list = _items
         .where((i) => i.isCurrent)
@@ -213,13 +458,26 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
                   children: [
                     _PantryList(
                       items: _useSoon,
+                      onEditCategory: _showCategorySheet,
+                      onCaptureImage: _captureAndAttachImage,
+                      uploadingImageIds: _uploadingImageIds,
                       header: _WasteHeader(
                         loading: _loadingWaste,
                         summary: _waste,
                       ),
                     ),
-                    _PantryList(items: _available),
-                    _PantryList(items: _missing),
+                    _PantryList(
+                      items: _available,
+                      onEditCategory: _showCategorySheet,
+                      onCaptureImage: _captureAndAttachImage,
+                      uploadingImageIds: _uploadingImageIds,
+                    ),
+                    _PantryList(
+                      items: _missing,
+                      onEditCategory: _showCategorySheet,
+                      onCaptureImage: _captureAndAttachImage,
+                      uploadingImageIds: _uploadingImageIds,
+                    ),
                   ],
                 ),
               ),
@@ -231,8 +489,17 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
 class _PantryList extends StatelessWidget {
   final List<InventoryItem> items;
   final Widget? header;
+  final Future<void> Function(InventoryItem item)? onEditCategory;
+  final Future<void> Function(InventoryItem item)? onCaptureImage;
+  final Set<String> uploadingImageIds;
 
-  const _PantryList({required this.items, this.header});
+  const _PantryList({
+    required this.items,
+    this.header,
+    this.onEditCategory,
+    this.onCaptureImage,
+    this.uploadingImageIds = const <String>{},
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -265,12 +532,23 @@ class _PantryList extends StatelessWidget {
         }
 
         final item = items[realIndex];
+        final categoryIsEmpty = (item.category ?? '').trim().isEmpty;
+        final imageMissing = (item.imageUrl ?? '').trim().isEmpty;
+        final uploading = uploadingImageIds.contains(item.inventoryId);
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
             child: Row(
               children: [
                 _FreshnessIndicator(item: item),
+                const SizedBox(width: AppSpacing.md),
+                InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: (imageMissing && onCaptureImage != null && !uploading)
+                      ? () => onCaptureImage!(item)
+                      : null,
+                  child: _PantryThumb(imageUrl: item.imageUrl, missingRequired: imageMissing),
+                ),
                 const SizedBox(width: AppSpacing.md),
                 _StorageIcon(item: item),
                 const SizedBox(width: AppSpacing.md),
@@ -312,10 +590,35 @@ class _PantryList extends StatelessWidget {
                             metaParts.join(' • '),
                             style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                           ),
+                          if (imageMissing) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Image required',
+                              style: theme.textTheme.bodySmall?.copyWith(color: Colors.red.shade700),
+                            ),
+                          ],
                         ],
                       );
                     },
                   ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                if (imageMissing)
+                  IconButton(
+                    tooltip: 'Capture image',
+                    onPressed: (onCaptureImage == null || uploading) ? null : () => onCaptureImage!(item),
+                    icon: uploading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.photo_camera_outlined),
+                  ),
+                IconButton(
+                  tooltip: categoryIsEmpty ? 'Assign category' : 'Edit category',
+                  onPressed: onEditCategory == null ? null : () => onEditCategory!(item),
+                  icon: Icon(categoryIsEmpty ? Icons.label_outline : Icons.edit_outlined),
                 ),
               ],
             ),
