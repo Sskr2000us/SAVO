@@ -990,16 +990,44 @@ def get_llm_client(provider: str) -> LlmClient:
     - anthropic: Anthropic Claude models
     - google: Google Gemini models
     """
-    if provider == "mock":
+    supported = {"mock", "openai", "anthropic", "google"}
+
+    raw = (provider or "").strip().lower()
+    if not raw:
+        raw = "openai"
+
+    # Allow specifying multiple providers as a fallback list (e.g. "google|anthropic").
+    # This is intentionally forgiving because env vars are commonly misconfigured.
+    options: list[str] = [p for p in re.split(r"[\s,;|]+", raw) if p]
+    if not options:
+        options = [raw]
+
+    chosen: str | None = None
+    for p in options:
+        if p in supported:
+            chosen = p
+            break
+
+    if chosen is None:
+        raise ValueError(
+            f"Unsupported SAVO_LLM_PROVIDER: {provider}. "
+            "Use 'mock', 'openai', 'anthropic', or 'google'."
+        )
+
+    if chosen == "mock":
         return MockLlmClient()
-    elif provider == "openai":
+    if chosen == "openai":
         return OpenAIClient()
-    elif provider == "anthropic":
+    if chosen == "anthropic":
         return AnthropicClient()
-    elif provider == "google":
+    if chosen == "google":
         return GoogleClient()
-    else:
-        raise ValueError(f"Unsupported SAVO_LLM_PROVIDER: {provider}. Use 'mock', 'openai', 'anthropic', or 'google'.")
+
+    # Defensive (should be unreachable due to supported check).
+    raise ValueError(
+        f"Unsupported SAVO_LLM_PROVIDER: {provider}. "
+        "Use 'mock', 'openai', 'anthropic', or 'google'."
+    )
 
 
 def get_vision_provider() -> str:
@@ -1007,7 +1035,7 @@ def get_vision_provider() -> str:
     Get the provider for vision tasks (image scanning).
     Defaults to Google Gemini Vision which excels at image understanding.
     """
-    return os.getenv("SAVO_VISION_PROVIDER", "google")
+    return (os.getenv("SAVO_VISION_PROVIDER", "google") or "google").strip().lower()
 
 
 def get_reasoning_provider() -> str:
@@ -1016,11 +1044,11 @@ def get_reasoning_provider() -> str:
     Defaults to OpenAI GPT for superior structured JSON outputs and reasoning.
     Falls back to SAVO_LLM_PROVIDER for backward compatibility.
     """
-    reasoning = os.getenv("SAVO_REASONING_PROVIDER")
+    reasoning = (os.getenv("SAVO_REASONING_PROVIDER") or "").strip()
     if reasoning:
-        return reasoning
+        return reasoning.lower()
     # Fallback to legacy SAVO_LLM_PROVIDER for backward compatibility
-    return os.getenv("SAVO_LLM_PROVIDER", "openai")
+    return (os.getenv("SAVO_LLM_PROVIDER", "openai") or "openai").strip().lower()
 
 
 def get_vision_client() -> LlmClient:
