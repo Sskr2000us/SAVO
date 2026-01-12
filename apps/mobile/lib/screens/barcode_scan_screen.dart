@@ -128,58 +128,59 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
           // Image is mandatory. Prefer product image from lookup; otherwise require a user photo upload.
           String? chosenImageUrl = imageUrl.isNotEmpty ? imageUrl : null;
           bool uploadingImage = false;
+          bool saving = false;
 
-          return AlertDialog(
-            title: const Text('Add to inventory'),
-            content: StatefulBuilder(
-              builder: (context, setDialogState) {
-                final canAdd = (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) && !uploadingImage;
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final canAdd = (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) && !uploadingImage;
 
-                Widget imageWidget;
-                if (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) {
-                  imageWidget = ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      chosenImageUrl!,
-                      height: 140,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) {
-                        return Container(
-                          height: 140,
-                          width: double.infinity,
-                          color: Colors.grey.shade200,
-                          alignment: Alignment.center,
-                          child: const Text('Image unavailable'),
-                        );
-                      },
-                    ),
-                  );
-                } else {
-                  imageWidget = Container(
+              Widget imageWidget;
+              if (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) {
+                imageWidget = ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    chosenImageUrl!,
                     height: 140,
                     width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    alignment: Alignment.center,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.photo_outlined, size: 28, color: Colors.grey),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Package photo required',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  );
-                }
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) {
+                      return Container(
+                        height: 140,
+                        width: double.infinity,
+                        color: Colors.grey.shade200,
+                        alignment: Alignment.center,
+                        child: const Text('Image unavailable'),
+                      );
+                    },
+                  ),
+                );
+              } else {
+                imageWidget = Container(
+                  height: 140,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  alignment: Alignment.center,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.photo_outlined, size: 28, color: Colors.grey),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Package photo required',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                );
+              }
 
-                return SingleChildScrollView(
+              return AlertDialog(
+                title: const Text('Add to inventory'),
+                content: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -309,16 +310,16 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                       ],
                     ],
                   ),
-                );
-              },
-            ),
-            actions: [
+                ),
+                actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                onPressed: () async {
+                onPressed: saving
+                    ? null
+                    : () async {
                   if (chosenImageUrl == null || chosenImageUrl!.trim().isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Package photo is required.')),
@@ -326,34 +327,59 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                     return;
                   }
 
+                  final name = nameController.text.trim();
+                  if (name.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Name is required.')),
+                    );
+                    return;
+                  }
+
                   final q = double.tryParse(qtyController.text.trim()) ?? 1.0;
                   final u = unitController.text.trim().isEmpty ? 'pcs' : unitController.text.trim();
 
-                  await apiClient.post('/inventory-db/items', {
-                    'canonical_name': nameController.text.trim(),
-                    'display_name': nameController.text.trim(),
-                    'category': _cleanOptional(category),
-                    'subcategory': _cleanOptional(subcategoryController.text),
-                    'quantity': q,
-                    'unit': u,
-                    'storage_location': 'pantry',
-                    'item_state': 'raw',
-                    'source': 'barcode',
-                    'scan_confidence': 1.0,
-                    'barcode': digits,
-                    'product_name': productName.isNotEmpty ? productName : null,
-                    'brand': brand.isNotEmpty ? brand : null,
-                    'image_url': chosenImageUrl,
-                    'package_size_text': packageSizeText.isNotEmpty ? packageSizeText : null,
-                  });
+                  setDialogState(() => saving = true);
+                  try {
+                    await apiClient.post('/inventory-db/items', {
+                      'canonical_name': name,
+                      'display_name': name,
+                      'category': _cleanOptional(category),
+                      'subcategory': _cleanOptional(subcategoryController.text),
+                      'quantity': q,
+                      'unit': u,
+                      'storage_location': 'pantry',
+                      'item_state': 'raw',
+                      'source': 'barcode',
+                      'scan_confidence': 1.0,
+                      'barcode': digits,
+                      'product_name': productName.isNotEmpty ? productName : null,
+                      'brand': brand.isNotEmpty ? brand : null,
+                      'image_url': chosenImageUrl,
+                      'package_size_text': packageSizeText.isNotEmpty ? packageSizeText : null,
+                    });
 
-                  if (context.mounted) {
-                    Navigator.pop(context, true);
+                    if (context.mounted) {
+                      Navigator.pop(context, true);
+                    }
+                  } catch (e) {
+                    setDialogState(() => saving = false);
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to save item: $e')),
+                    );
                   }
                 },
-                child: const Text('Add'),
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Add'),
               ),
             ],
+              );
+            },
           );
         },
       );

@@ -371,11 +371,6 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
           Navigator.pop(context);
           _onIngredientConfirmed(confirmedData);
           
-          final qty = confirmedData['quantity'];
-          final unit = confirmedData['unit'] ?? '';
-          final qtyStr = qty != null ? ' ($qty $unit)' : '';
-          _showSuccessSnackbar('${confirmedData['name']}$qtyStr added!');
-          
           // Dismiss onboarding after first success
           if (_showOnboarding) {
             setState(() {
@@ -451,14 +446,32 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
       );
 
       if (!mounted) return;
-      if (res['success'] != true) {
-        final msg = res['error']?.toString() ?? 'Could not save item to pantry.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+
+      final qtyStr = '${quantity <= 0 ? 1.0 : quantity} ${unit.isEmpty ? 'pieces' : unit}'.trim();
+      final label = name;
+
+      if (res['success'] == true) {
+        final queued = res['queued'] == true;
+        final message = queued
+            ? (res['message']?.toString().trim().isNotEmpty == true ? res['message'].toString() : 'Saved offline. Will sync when online.')
+            : 'Saved $label ($qtyStr)';
+        _showSuccessSnackbar(message);
+        return;
       }
+
+      // Roll back optimistic add on failure.
+      setState(() {
+        _scannedItems.remove(ingredient);
+      });
+
+      final msg = res['error']?.toString() ?? 'Could not save item to pantry.';
+      _showError(msg);
     } catch (_) {
-      // Best-effort only.
+      if (!mounted) return;
+      setState(() {
+        _scannedItems.remove(ingredient);
+      });
+      _showError('Could not save item. Please try again.');
     }
   }
 
