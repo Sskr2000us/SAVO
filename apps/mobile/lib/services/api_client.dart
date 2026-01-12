@@ -116,7 +116,7 @@ class ApiClient {
       ).timeout(
         Duration(seconds: timeout),
         onTimeout: () {
-          if (endpoint.contains('/plan/')) {
+          if (endpoint.contains('/plan/') || endpoint.contains('/recipes/')) {
             throw Exception('Recipe generation is taking longer than usual. This can happen with complex requirements. Please try again.');
           }
           throw Exception('Request timed out. Please check your connection and try again.');

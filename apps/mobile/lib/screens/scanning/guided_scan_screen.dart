@@ -55,6 +55,8 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
   final List<XFile> _captures = [];
 
   Timer? _tick;
+  Timer? _captureTimer;
+  Timer? _autoStopTimer;
 
   String _cue = 'Move camera left';
   String? _qualityHint;
@@ -102,6 +104,8 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
   @override
   void dispose() {
     _tick?.cancel();
+    _captureTimer?.cancel();
+    _autoStopTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -175,8 +179,12 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
       }
     }
 
+    // Start with an immediate capture so “Finish” can work right away.
+    await captureOnce();
+
     // Kick off captures on a timer.
-    final captureTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
+    _captureTimer?.cancel();
+    _captureTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       captureOnce();
     });
 
@@ -196,18 +204,41 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
       }
     });
 
-    // Stop after allotted time.
-    await Future.delayed(Duration(seconds: _secondsTotal));
-    captureTimer.cancel();
+    // Auto-finish after allotted time.
+    _autoStopTimer?.cancel();
+    _autoStopTimer = Timer(Duration(seconds: _secondsTotal), () {
+      unawaited(_finishScan());
+    });
+  }
+
+  Future<void> _finishScan() async {
+    if (_uploading) return;
+    if (!_scanning) return;
+
+    _captureTimer?.cancel();
+    _captureTimer = null;
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+    _tick?.cancel();
+    _tick = null;
 
     if (!mounted) return;
-
     setState(() {
       _scanning = false;
       _uploading = true;
     });
 
     await _uploadFramesAndReturn();
+  }
+
+  void _cancelScan() {
+    _captureTimer?.cancel();
+    _captureTimer = null;
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+    _tick?.cancel();
+    _tick = null;
+    Navigator.pop(context);
   }
 
   Future<void> _uploadFramesAndReturn() async {
@@ -305,7 +336,9 @@ class _GuidedScanScreenState extends State<GuidedScanScreen> {
                         scanning: _scanning,
                         uploading: _uploading,
                         onStart: _startScan,
-                        onCancel: () => Navigator.pop(context),
+                        onFinish: _finishScan,
+                        captureCount: _captureCount,
+                        onCancel: _cancelScan,
                       ),
                     ),
                   ],
@@ -374,30 +407,49 @@ class _BottomControls extends StatelessWidget {
   final bool scanning;
   final bool uploading;
   final VoidCallback onStart;
+  final VoidCallback onFinish;
+  final int captureCount;
   final VoidCallback onCancel;
 
   const _BottomControls({
     required this.scanning,
     required this.uploading,
     required this.onStart,
+    required this.onFinish,
+    required this.captureCount,
     required this.onCancel,
   });
 
   @override
   Widget build(BuildContext context) {
+    final canFinish = captureCount > 0;
     return Row(
       children: [
         Expanded(
           child: OutlinedButton(
-            onPressed: (scanning || uploading) ? null : onCancel,
+            onPressed: uploading ? null : onCancel,
             child: const Text('Cancel'),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: FilledButton(
-            onPressed: (scanning || uploading) ? null : onStart,
-            child: Text(uploading ? 'Uploading…' : (scanning ? 'Scanning…' : 'Start Scan')),
+            onPressed: uploading
+                ? null
+                : (scanning
+                    ? (canFinish
+                        ? onFinish
+                        : () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Hold steady for a moment to capture at least 1 frame.')),
+                            );
+                          })
+                    : onStart),
+            child: Text(
+              uploading
+                  ? 'Uploading…'
+                  : (scanning ? 'Finish (${captureCount} frames)' : 'Start Scan'),
+            ),
           ),
         ),
       ],

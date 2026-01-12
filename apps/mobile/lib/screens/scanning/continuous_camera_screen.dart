@@ -196,6 +196,8 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
       if (mounted) {
         if (result['success'] == true) {
           final ingredient = result['ingredient'];
+          final scanId = result['scan_id']?.toString().trim();
+          final imageUrl = result['image_url']?.toString().trim();
           final autoSaved = result['auto_saved'] ?? false;
           final metadata = (result['metadata'] is Map)
               ? Map<String, dynamic>.from(result['metadata'])
@@ -241,6 +243,13 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
 
           // Multi-frame voting for borderline detections.
           var votedIngredient = (ingredient is Map) ? Map<String, dynamic>.from(ingredient) : <String, dynamic>{};
+          if (scanId != null && scanId.isNotEmpty) {
+            votedIngredient['scan_id'] = scanId;
+          }
+          if (imageUrl != null && imageUrl.isNotEmpty) {
+            votedIngredient['image_url'] = imageUrl;
+          }
+          votedIngredient['auto_saved'] = (autoSaved == true);
           if (!autoSaved && conf >= 0.55 && conf < 0.80) {
             try {
               // Small delay to allow a steadier frame.
@@ -421,6 +430,9 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
     // Persist immediately so "Confirm" actually saves to pantry.
     // Best-effort: keep UX snappy and show a message only on failure.
     try {
+      // If the backend already auto-saved this item, don't double-add.
+      if (ingredient['auto_saved'] == true) return;
+
       final name = (ingredient['canonical_name'] ?? ingredient['name'] ?? '').toString().trim();
       if (name.isEmpty) return;
 
@@ -428,11 +440,14 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
       final quantity = (quantityRaw is num) ? quantityRaw.toDouble() : double.tryParse(quantityRaw?.toString() ?? '') ?? 1.0;
       final unit = (ingredient['unit'] ?? 'pieces').toString().trim();
 
+      final scanId = (ingredient['scan_id'] ?? '').toString().trim();
+
       final res = await _scanningService.confirmSingleIngredient(
         ingredientName: name,
         quantity: quantity <= 0 ? 1.0 : quantity,
         unit: unit.isEmpty ? 'pieces' : unit,
         scanType: _scanType,
+        scanId: scanId.isEmpty ? null : scanId,
       );
 
       if (!mounted) return;

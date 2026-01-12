@@ -366,7 +366,19 @@ async def get_inventory(
             query = query.eq("is_low_stock", True)
         
         result = query.order("updated_at", desc=True).execute()
-        items = result.data or []
+        raw_items = result.data or []
+
+        # Never surface explicitly-consumed/deleted items in the main inventory UI.
+        # These are created by "delete" actions which soft-deactivate rows for audit.
+        items: List[Dict[str, Any]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            status = (item.get("pantry_status") or "").strip().lower()
+            if status in {"consumed", "deleted"}:
+                continue
+            items.append(item)
+
         for item in items:
             if isinstance(item, dict) and item.get("image_url"):
                 item["image_url"] = to_signed_url(item.get("image_url"))
@@ -398,7 +410,18 @@ async def get_inventory_by_category(
 
         result = query.execute()
 
-        items = result.data or []
+        raw_items = result.data or []
+
+        # Match get_inventory(): hide consumed/deleted items from UI lists.
+        items: List[Dict[str, Any]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            status = (item.get("pantry_status") or "").strip().lower()
+            if status in {"consumed", "deleted"}:
+                continue
+            items.append(item)
+
         for item in items:
             if isinstance(item, dict) and item.get("image_url"):
                 item["image_url"] = to_signed_url(item.get("image_url"))

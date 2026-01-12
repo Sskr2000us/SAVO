@@ -266,7 +266,16 @@ async def _translate_canonical_recipe_i18n(
         }
         schema["required"].append("steps")
 
-    client = get_reasoning_client()
+    try:
+        client = get_reasoning_client()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Recipe generation provider is not configured correctly. "
+                f"Reasoning provider error: {e}"
+            ),
+        )
     prompt = {
         "target_language": target,
         "source_language": "en",
@@ -362,7 +371,16 @@ async def _translate_canonical_recipes_batch_i18n(
         "additionalProperties": False,
     }
 
-    client = get_reasoning_client()
+    try:
+        client = get_reasoning_client()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Recipe generation provider is not configured correctly. "
+                f"Reasoning provider error: {e}"
+            ),
+        )
     prompt = {
         "target_language": target,
         "source_language": "en",
@@ -1293,7 +1311,16 @@ async def generate_recipe(
             reason = "pantry_match" if pantry_cov < preferred_threshold else "safety_repair"
 
         schema = _canonical_recipe_json_schema()
-        client = get_reasoning_client()
+        try:
+            client = get_reasoning_client()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Recipe generation provider is not configured correctly. "
+                    f"Reasoning provider error: {e}"
+                ),
+            )
 
         pantry_id_to_name = _ingredient_id_map(pantry_names)
         missing_candidates = _suggest_missing_candidates(pantry_names=pantry_names, cuisine=constraints.cuisine)
@@ -1553,7 +1580,16 @@ async def generate_recipe_options(
     # Prepare generation prompt
     count = max(1, min(int(req.count or 1), 8))
     schema = _canonical_recipe_options_json_schema(count=count)
-    client = get_reasoning_client()
+    try:
+        client = get_reasoning_client()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Recipe generation provider is not configured correctly. "
+                f"Reasoning provider error: {e}"
+            ),
+        )
 
     pantry_id_to_name = _ingredient_id_map(pantry_names)
     missing_candidates = _suggest_missing_candidates(pantry_names=pantry_names, cuisine=constraints.cuisine)

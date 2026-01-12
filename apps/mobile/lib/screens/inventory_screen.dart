@@ -45,6 +45,7 @@ class _InventoryThumb extends StatelessWidget {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   final Set<String> _uploadingImageIds = <String>{};
+  final Set<String> _deletingIds = <String>{};
   List<InventoryItem> _items = [];
   bool _loading = true;
   bool _mergingDuplicates = false;
@@ -589,16 +590,40 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _deleteItem(String inventoryId) async {
+    final id = inventoryId.trim();
+    if (id.isEmpty) return;
+    if (_deletingIds.contains(id)) return;
+
+    final priorItems = List<InventoryItem>.from(_items);
+    if (mounted) {
+      setState(() {
+        _deletingIds.add(id);
+        _items = _items.where((i) => i.inventoryId != id).toList();
+      });
+    }
+
     try {
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       // Use database endpoint with user header
-      await apiClient.delete('/inventory-db/items/$inventoryId');
-      _loadInventory();
+      await apiClient.delete('/inventory-db/items/$id');
+      await _loadInventory();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Deleted')),
+      );
     } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _items = priorItems;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error deleting from database: $e')),
+      );
+    } finally {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting from database: $e')),
-        );
+        setState(() {
+          _deletingIds.remove(id);
+        });
       }
     }
   }
@@ -667,8 +692,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  Future<void> _showMergeDuplicatesDialog() async {
-    final groups = _findDuplicateGroups();
+  Future<void> _showMergeDuplicatesDialog([List<InventoryItem>? sourceItems]) async {
+    final groups = _findDuplicateGroups(sourceItems);
     if (groups.isEmpty) return;
 
     await showDialog(
@@ -1389,7 +1414,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ? _items
       : _items.where((i) => (i.cuisine ?? '').trim() == _selectedCuisine).toList();
 
-    final duplicateGroups = _findDuplicateGroups(filteredItems);
+    // Duplicates are only actionable/meaningful for current items.
+    // When showing inactive history, we don't want the merge banner to stay stuck.
+    final duplicateSource = filteredItems.where((i) => i.isCurrent).toList(growable: false);
+    final duplicateGroups = _findDuplicateGroups(duplicateSource);
     final expiring = filteredItems.where((i) => i.isExpiringSoon).toList();
     final notExpiring = filteredItems.where((i) => !i.isExpiringSoon).toList();
     notExpiring.sort((a, b) => a.displayLabel.toLowerCase().compareTo(b.displayLabel.toLowerCase()));
@@ -1611,7 +1639,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ),
                         actions: [
                           TextButton(
-                            onPressed: _mergingDuplicates ? null : _showMergeDuplicatesDialog,
+                            onPressed: _mergingDuplicates ? null : () => _showMergeDuplicatesDialog(duplicateSource),
                             child: _mergingDuplicates
                                 ? const SizedBox(
                                     width: 16,
@@ -1634,7 +1662,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             item: item,
                             prettyName: _prettyName,
                             onEdit: () => _showEditItemSheet(item),
-                            onDelete: () => _deleteItem(item.inventoryId),
+                            deleting: _deletingIds.contains(item.inventoryId),
+                            onDelete: _deletingIds.contains(item.inventoryId) ? null : () => _deleteItem(item.inventoryId),
                             onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
                             uploadingImage: _uploadingImageIds.contains(item.inventoryId),
                             onViewImage: (url) => _showImagePreview(url),
@@ -1703,7 +1732,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                   item: item,
                                   prettyName: _prettyName,
                                   onEdit: () => _showEditItemSheet(item),
-                                  onDelete: () => _deleteItem(item.inventoryId),
+                                  deleting: _deletingIds.contains(item.inventoryId),
+                                  onDelete: _deletingIds.contains(item.inventoryId) ? null : () => _deleteItem(item.inventoryId),
                                   onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
                                   uploadingImage: _uploadingImageIds.contains(item.inventoryId),
                                   onViewImage: (url) => _showImagePreview(url),
@@ -1731,7 +1761,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                     item: item,
                                     prettyName: _prettyName,
                                     onEdit: () => _showEditItemSheet(item),
-                                    onDelete: () => _deleteItem(item.inventoryId),
+                                deleting: _deletingIds.contains(item.inventoryId),
+                                onDelete: _deletingIds.contains(item.inventoryId) ? null : () => _deleteItem(item.inventoryId),
                                     onUse: item.isCurrent ? null : () => _setItemCurrent(item, true),
                                 uploadingImage: _uploadingImageIds.contains(item.inventoryId),
                                 onViewImage: (url) => _showImagePreview(url),
@@ -1802,7 +1833,8 @@ class _InventoryCard extends StatelessWidget {
   final InventoryItem item;
   final String Function(String raw) prettyName;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onDelete;
+  final bool deleting;
   final VoidCallback? onUse;
   final bool uploadingImage;
   final void Function(String imageUrl)? onViewImage;
@@ -1813,6 +1845,7 @@ class _InventoryCard extends StatelessWidget {
     required this.prettyName,
     required this.onEdit,
     required this.onDelete,
+    this.deleting = false,
     this.onUse,
     this.uploadingImage = false,
     this.onViewImage,
@@ -1863,9 +1896,11 @@ class _InventoryCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       color: item.isExpiringSoon ? Colors.orange[50] : null,
       child: ListTile(
-        onTap: onEdit,
+        onTap: deleting ? null : onEdit,
         leading: InkWell(
-          onTap: hasImage
+          onTap: deleting
+              ? null
+              : hasImage
               ? () => onViewImage?.call(item.imageUrl!.trim())
               : (onCaptureImage == null || uploadingImage)
                   ? null
@@ -1884,32 +1919,17 @@ class _InventoryCard extends StatelessWidget {
                   ),
                 ),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                prettyName(item.displayLabel),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                softWrap: false,
-              ),
-            ),
-            if (!item.isCurrent)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text('Inactive', style: TextStyle(fontSize: 12)),
-              ),
-          ],
+        title: Text(
+          prettyName(item.displayLabel),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'
+              '${item.isCurrent ? '' : 'Inactive • '}${_formatQty(item.quantity)} ${item.unit} • ${item.storage} • ${prettyName(item.state)}'
               '${showExpiryChip ? ' • ${freshness}d' : ''}',
             ),
             const SizedBox(height: 2),
@@ -1949,12 +1969,18 @@ class _InventoryCard extends StatelessWidget {
             ),
             IconButton(
               icon: const Icon(Icons.edit_outlined),
-              onPressed: onEdit,
+              onPressed: deleting ? null : onEdit,
               tooltip: 'Edit',
             ),
             IconButton(
-              icon: const Icon(Icons.delete, color: Colors.red),
-              onPressed: onDelete,
+              icon: deleting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete, color: Colors.red),
+              onPressed: deleting ? null : onDelete,
               tooltip: 'Delete',
             ),
           ],

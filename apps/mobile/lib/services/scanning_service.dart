@@ -781,6 +781,8 @@ class ScanningService {
         final data = json.decode(response.body);
         return {
           'success': true,
+          'scan_id': data['scan_id'],
+          'image_url': data['image_url'],
           'ingredient': data['ingredient'],
           'metadata': data['metadata'],
           'auto_saved': data['auto_saved'] ?? false,
@@ -818,6 +820,7 @@ class ScanningService {
     required double quantity,
     required String unit,
     String scanType = 'pantry',
+    String? scanId,
     bool queueOnFailure = true,
   }) async {
     try {
@@ -845,6 +848,10 @@ class ScanningService {
       request.fields['quantity'] = (quantity <= 0 ? 1.0 : quantity).toString();
       request.fields['unit'] = _normalizeUnit(unit);
       request.fields['scan_type'] = scanType;
+      final sid = (scanId ?? '').trim();
+      if (sid.isNotEmpty) {
+        request.fields['scan_id'] = sid;
+      }
 
       final streamedResponse = await request.send().timeout(
         const Duration(seconds: 12),

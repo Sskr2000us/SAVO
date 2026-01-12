@@ -3634,6 +3634,8 @@ async def scan_single_item(
         image_data = await image.read()
         if len(image_data) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="Image too large. Maximum 10MB.")
+
+        db = get_db_client()
         
         # Get user profile for context
         try:
@@ -3668,48 +3670,67 @@ async def scan_single_item(
         analysis_ms = int(max(0.0, (time.perf_counter() - started) * 1000.0))
         release_version = (os.getenv("SAVO_RELEASE_VERSION") or os.getenv("SAVO_RELEASE") or "").strip() or None
 
+        # Always mint a scan_id so confirmation can link to this frame.
+        scan_id = str(uuid4())
+        now_iso = datetime.utcnow().isoformat()
+
+        # Upload frame so inventory items created by realtime scan can have images.
+        image_url = None
+        try:
+            image_url = upload_inventory_image(
+                user_id=user_id,
+                content=image_data,
+                content_type=image.content_type,
+                asset_type="inventory_item",
+                source="scan",
+                links={"scan_id": scan_id},
+            )
+        except Exception as e:
+            logger.warning(f"Failed to upload single-item scan image: {e}")
+
+        # Best-effort scan record.
+        try:
+            auto_saved_pred = bool(confidence >= 0.85)
+            scan_payload = {
+                "id": scan_id,
+                "user_id": user_id,
+                "image_url": image_url,
+                "image_hash": (result.get("metadata") or {}).get("image_hash"),
+                "image_metadata": {
+                    "analysis_ms": analysis_ms,
+                    "auto_saved": auto_saved_pred,
+                    **({"release_version": release_version} if release_version else {}),
+                    **({"model_version": model_version} if model_version else {}),
+                    "model_provider": model_provider,
+                },
+                "scan_type": f"single_{scan_type}",
+                "location_hint": None,
+                "status": "completed",
+                "vision_provider": "openai",
+                "api_cost_cents": 0,
+                **({"model_version": model_version} if model_version else {}),
+                "model_provider": model_provider,
+                "analysis_ms": analysis_ms,
+                **({"release_version": release_version} if release_version else {}),
+                "auto_added_count": 1 if auto_saved_pred else 0,
+                "detected_count": 1,
+                "confirmed_count": 1 if auto_saved_pred else 0,
+                **({"confirmed_at": now_iso} if auto_saved_pred else {}),
+            }
+            _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
+        except Exception:
+            pass
+
         # Auto-save high-confidence items
         auto_saved = False
         if confidence >= 0.85:
             try:
-                db = get_db_client()
                 normalizer = get_normalizer()
                 
                 canonical_name = normalizer.normalize_name(ingredient["detected_name"])
                 if not canonical_name:
                     raise ValueError("Empty canonical name")
                 storage_location = _scan_type_to_storage_location(scan_type)
-                now_iso = datetime.utcnow().isoformat()
-
-                # Create a scan record for audit/KPI attribution.
-                scan_id = str(uuid4())
-                scan_payload = {
-                    "id": scan_id,
-                    "user_id": user_id,
-                    "image_url": None,
-                    "image_hash": None,
-                    "image_metadata": {
-                        "analysis_ms": analysis_ms,
-                        "auto_saved": True,
-                        **({"release_version": release_version} if release_version else {}),
-                        **({"model_version": model_version} if model_version else {}),
-                        "model_provider": model_provider,
-                    },
-                    "scan_type": f"single_{scan_type}",
-                    "location_hint": None,
-                    "status": "completed",
-                    "vision_provider": "openai",
-                    "api_cost_cents": 0,
-                    **({"model_version": model_version} if model_version else {}),
-                    "model_provider": model_provider,
-                    "analysis_ms": analysis_ms,
-                    **({"release_version": release_version} if release_version else {}),
-                    "auto_added_count": 1,
-                    "detected_count": 1,
-                    "confirmed_count": 1,
-                    "confirmed_at": now_iso,
-                }
-                _retry_without_missing_column(db, "ingredient_scans", "insert", scan_payload)
                 
                 # Upsert to inventory
                 truth_write_table = inventory_truth_write_table()
@@ -3742,6 +3763,8 @@ async def scan_single_item(
                         "model_provider": model_provider,
                         **({"release_version": release_version} if release_version else {}),
                     }
+                    if image_url and not (item.get("image_url") or "").strip():
+                        update_payload["image_url"] = image_url
                     _dual_write_inventory(
                         db,
                         "update",
@@ -3769,6 +3792,8 @@ async def scan_single_item(
                         "model_provider": model_provider,
                         **({"release_version": release_version} if release_version else {}),
                     }
+                    if image_url:
+                        insert_payload["image_url"] = image_url
                     _dual_write_inventory(
                         db,
                         "insert",
@@ -3783,6 +3808,8 @@ async def scan_single_item(
         
         return {
             "success": True,
+            "scan_id": scan_id,
+            "image_url": to_signed_url(image_url) if image_url else None,
             "ingredient": ingredient,
             "metadata": result["metadata"],
             "auto_saved": auto_saved,
@@ -3803,6 +3830,7 @@ async def confirm_single_ingredient(
     quantity: float = Form(...),
     unit: str = Form(...),
     scan_type: str = Form(default="pantry"),
+    scan_id: str = Form(default=""),
     user_id: str = Depends(get_current_user)
 ):
     """
@@ -3823,6 +3851,23 @@ async def confirm_single_ingredient(
         storage_location = _scan_type_to_storage_location(scan_type)
         normalized_unit = _normalize_unit(unit)
         now_iso = datetime.utcnow().isoformat()
+
+        scan_image_url = None
+        scan_id_value = (scan_id or "").strip()
+        if scan_id_value:
+            try:
+                row = (
+                    db.table("ingredient_scans")
+                    .select("image_url")
+                    .eq("id", scan_id_value)
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if row.data:
+                    scan_image_url = (row.data[0].get("image_url") if isinstance(row.data[0], dict) else None)
+            except Exception:
+                scan_image_url = None
         
         # Upsert to inventory
         existing = (
@@ -3861,6 +3906,7 @@ async def confirm_single_ingredient(
                     "quantity": new_qty,
                     "unit": normalized_unit,
                     "last_seen_at": now_iso,
+                    **({"image_url": scan_image_url} if scan_image_url and not (item.get("image_url") or "").strip() else {}),
                 },
                 where={"id": item["id"]},
                 user_id=user_id,
@@ -3883,6 +3929,7 @@ async def confirm_single_ingredient(
                     "scan_confidence": 1.0,  # User confirmed
                     "is_current": True,
                     "last_seen_at": now_iso,
+                    **({"image_url": scan_image_url} if scan_image_url else {}),
                 },
                 user_id=user_id,
                 endpoint="POST /api/scanning/<quick-add>",
