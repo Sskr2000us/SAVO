@@ -9,11 +9,15 @@ from __future__ import annotations
 import os
 import re
 import uuid
+import logging
 from typing import Optional, Tuple, Dict, Any
 
 from datetime import datetime, timezone
 
 from app.core.database import get_db_client
+
+
+logger = logging.getLogger(__name__)
 
 
 INVENTORY_IMAGES_BUCKET = os.getenv("SUPABASE_INVENTORY_IMAGES_BUCKET", "inventory-images")
@@ -149,17 +153,44 @@ def upload_inventory_image(
     # We include user_id in the path so it's naturally partitioned.
     object_path = f"{user_id}/{object_name}"
 
-    storage = client.storage.from_(INVENTORY_IMAGES_BUCKET)
-
     # If the object already exists, Supabase returns 409. Extremely unlikely with UUIDs.
-    result = storage.upload(
-        path=object_path,
-        file=content,
-        file_options={
-            "content-type": (content_type or "image/jpeg"),
-            "upsert": False,
-        },
-    )
+    result = None
+    try:
+        storage = client.storage.from_(INVENTORY_IMAGES_BUCKET)
+        result = storage.upload(
+            path=object_path,
+            file=content,
+            file_options={
+                "content-type": (content_type or "image/jpeg"),
+                "upsert": False,
+            },
+        )
+    except Exception as e:
+        # Defensive fallback: some environments may not have created the default bucket.
+        # If the bucket doesn't exist, try the historical bucket used elsewhere.
+        fallback_bucket = "ingredient-images"
+        using_default_bucket = os.getenv("SUPABASE_INVENTORY_IMAGES_BUCKET") in {None, ""}
+        msg = str(e)
+        if using_default_bucket and ("bucket" in msg.lower() and "not" in msg.lower() and "found" in msg.lower()):
+            logger.warning(
+                "Inventory images bucket '%s' missing; falling back to '%s'",
+                INVENTORY_IMAGES_BUCKET,
+                fallback_bucket,
+            )
+            storage = client.storage.from_(fallback_bucket)
+            result = storage.upload(
+                path=object_path,
+                file=content,
+                file_options={
+                    "content-type": (content_type or "image/jpeg"),
+                    "upsert": False,
+                },
+            )
+            stored_ref = f"{fallback_bucket}/{object_path}"
+        else:
+            raise
+    else:
+        stored_ref = f"{INVENTORY_IMAGES_BUCKET}/{object_path}"
 
     # supabase-py return types vary by version; handle dict-like or attribute-like errors.
     try:
@@ -175,8 +206,6 @@ def upload_inventory_image(
     except Exception:
         # If inspection fails, continue; errors will still surface as exceptions from upload() itself.
         pass
-
-    stored_ref = f"{INVENTORY_IMAGES_BUCKET}/{object_path}"
 
     # Best-effort central tracking for retention/audit.
     try:
