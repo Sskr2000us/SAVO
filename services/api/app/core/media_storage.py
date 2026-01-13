@@ -20,6 +20,70 @@ from app.core.database import get_db_client
 logger = logging.getLogger(__name__)
 
 
+def _supabase_base_url() -> str:
+    url = (os.getenv("SUPABASE_URL") or "").strip()
+    if not url:
+        raise ValueError("SUPABASE_URL is required for Storage operations")
+    return url.rstrip("/")
+
+
+def _supabase_service_key() -> str:
+    key = (os.getenv("SUPABASE_SERVICE_KEY") or "").strip()
+    if not key:
+        raise ValueError("SUPABASE_SERVICE_KEY is required for Storage operations")
+    return key
+
+
+def _ensure_storage_bucket_exists(bucket_name: str) -> None:
+    """Best-effort ensure a Supabase Storage bucket exists.
+
+    This eliminates production failures when the bucket was never created.
+    Requires SUPABASE_SERVICE_KEY (service role) in the environment.
+    """
+
+    b = (bucket_name or "").strip()
+    if not b:
+        raise ValueError("bucket_name is required")
+
+    try:
+        import httpx
+
+        base = _supabase_base_url()
+        key = _supabase_service_key()
+
+        headers = {
+            "authorization": f"Bearer {key}",
+            "apikey": key,
+            "content-type": "application/json",
+        }
+
+        # If it already exists, this will succeed and we do nothing.
+        # If it doesn't exist, create it.
+        get_url = f"{base}/storage/v1/bucket/{b}"
+        with httpx.Client(timeout=8.0) as client:
+            r = client.get(get_url, headers=headers)
+            if r.status_code == 200:
+                return
+
+            # Create (ignore if already exists)
+            create_url = f"{base}/storage/v1/bucket"
+            payload = {"id": b, "name": b, "public": False}
+            cr = client.post(create_url, headers=headers, json=payload)
+            if cr.status_code in {200, 201, 204, 409}:
+                return
+
+            # Some Supabase projects return 400 with a JSON error body.
+            logger.warning(
+                "Failed to ensure storage bucket '%s' (status=%s body=%s)",
+                b,
+                cr.status_code,
+                (cr.text or "")[:2000],
+            )
+    except Exception as e:
+        # Never break core flows; upload() will still raise with details.
+        logger.warning("Bucket ensure failed for '%s': %s", bucket_name, str(e))
+
+
 INVENTORY_IMAGES_BUCKET = os.getenv("SUPABASE_INVENTORY_IMAGES_BUCKET", "inventory-images")
 SCAN_VIDEOS_BUCKET = os.getenv("SUPABASE_SCAN_VIDEOS_BUCKET", "scan-videos")
 
@@ -106,6 +170,7 @@ def upload_file_to_storage(
     if not path:
         raise ValueError("file_path is required")
 
+    _ensure_storage_bucket_exists(bucket_name)
     storage = client.storage.from_(bucket_name)
     result = storage.upload(
         path=path,
@@ -153,44 +218,21 @@ def upload_inventory_image(
     # We include user_id in the path so it's naturally partitioned.
     object_path = f"{user_id}/{object_name}"
 
+    # Ensure bucket exists so uploads don't 500 in fresh Supabase projects.
+    _ensure_storage_bucket_exists(INVENTORY_IMAGES_BUCKET)
+
     # If the object already exists, Supabase returns 409. Extremely unlikely with UUIDs.
-    result = None
-    try:
-        storage = client.storage.from_(INVENTORY_IMAGES_BUCKET)
-        result = storage.upload(
-            path=object_path,
-            file=content,
-            file_options={
-                "content-type": (content_type or "image/jpeg"),
-                "upsert": False,
-            },
-        )
-    except Exception as e:
-        # Defensive fallback: some environments may not have created the default bucket.
-        # If the bucket doesn't exist, try the historical bucket used elsewhere.
-        fallback_bucket = "ingredient-images"
-        using_default_bucket = os.getenv("SUPABASE_INVENTORY_IMAGES_BUCKET") in {None, ""}
-        msg = str(e)
-        if using_default_bucket and ("bucket" in msg.lower() and "not" in msg.lower() and "found" in msg.lower()):
-            logger.warning(
-                "Inventory images bucket '%s' missing; falling back to '%s'",
-                INVENTORY_IMAGES_BUCKET,
-                fallback_bucket,
-            )
-            storage = client.storage.from_(fallback_bucket)
-            result = storage.upload(
-                path=object_path,
-                file=content,
-                file_options={
-                    "content-type": (content_type or "image/jpeg"),
-                    "upsert": False,
-                },
-            )
-            stored_ref = f"{fallback_bucket}/{object_path}"
-        else:
-            raise
-    else:
-        stored_ref = f"{INVENTORY_IMAGES_BUCKET}/{object_path}"
+    storage = client.storage.from_(INVENTORY_IMAGES_BUCKET)
+    result = storage.upload(
+        path=object_path,
+        file=content,
+        file_options={
+            "content-type": (content_type or "image/jpeg"),
+            "upsert": False,
+        },
+    )
+
+    stored_ref = f"{INVENTORY_IMAGES_BUCKET}/{object_path}"
 
     # supabase-py return types vary by version; handle dict-like or attribute-like errors.
     try:

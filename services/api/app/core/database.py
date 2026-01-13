@@ -53,7 +53,12 @@ class SupabaseDB:
             )
 
         try:
-            self._client = create_client(url, key)
+            # storage3 can be sensitive to base URL formatting; normalize once.
+            safe_url = (url or "").strip()
+            if safe_url and not safe_url.endswith("/"):
+                safe_url = f"{safe_url}/"
+
+            self._client = create_client(safe_url, key)
             logger.info("Supabase client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Supabase client: {e}")
