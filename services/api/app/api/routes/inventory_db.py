@@ -4,6 +4,7 @@ Handles inventory CRUD, low stock alerts, and automatic deduction
 """
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+import logging
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 from datetime import date, datetime
@@ -21,6 +22,9 @@ from app.core.database import (
     activate_inventory_items_for_scan_set,
 )
 from app.middleware.auth import get_current_user
+
+
+logger = logging.getLogger(__name__)
 
 
 async def _log_inventory_event(
@@ -98,6 +102,7 @@ async def upload_inventory_image_ref(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("/inventory-db/upload-image failed for user_id=%s content_type=%s size=%s", user_id, image.content_type, getattr(image, 'size', None))
         raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
 
 
@@ -123,7 +128,7 @@ class InventoryItemCreate(BaseModel):
     expiry_date: Optional[date] = None
     low_stock_threshold: float = Field(default=1.0, description="Alert when quantity <= this")
     
-    source: str = Field(default="manual", description="manual|scan|import")
+    source: str = Field(default="manual", description="manual|scan|import|barcode")
     scan_confidence: Optional[float] = Field(None, ge=0, le=1)
 
     # Inventory freshness semantics

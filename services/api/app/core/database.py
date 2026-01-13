@@ -101,6 +101,30 @@ async def get_db_connection() -> asyncpg.Connection:
 _MISSING_COLUMN_RE = re.compile(r"Could not find the '([^']+)' column")
 
 
+def _normalize_inventory_source(value: Optional[str]) -> str:
+    """Normalize client-provided inventory source to DB-compatible value.
+
+    The DB constraint (v1) allows only: manual | scan | import.
+    Mobile barcode flows may send "barcode"; we persist that as "import".
+    """
+
+    raw = (value or "").strip().lower()
+    if not raw:
+        return "manual"
+
+    # Known client variants
+    if raw in {"barcode", "barcodescan", "barcode_scan", "barcode-scan"}:
+        return "import"
+    if raw in {"photo", "camera", "image"}:
+        return "scan"
+
+    if raw in {"manual", "scan", "import"}:
+        return raw
+
+    # Defensive fallback: keep DB insert working.
+    return "manual"
+
+
 def _extract_missing_column_name(err: Exception) -> Optional[str]:
     text = str(err)
     match = _MISSING_COLUMN_RE.search(text)
@@ -439,6 +463,9 @@ async def add_inventory_item(user_id: str, item_data: Dict[str, Any]) -> Dict[st
 
         item_data = dict(item_data or {})
         item_data["user_id"] = user_id
+
+        # Keep DB inserts compatible with inventory_items_source_check.
+        item_data["source"] = _normalize_inventory_source(item_data.get("source"))
 
         # Required version stamps (defense-in-depth for v2 tables).
         # Keep additive: only fill if missing.

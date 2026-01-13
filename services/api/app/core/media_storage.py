@@ -103,7 +103,7 @@ def upload_file_to_storage(
         raise ValueError("file_path is required")
 
     storage = client.storage.from_(bucket_name)
-    storage.upload(
+    result = storage.upload(
         path=path,
         file=file_content,
         file_options={
@@ -111,6 +111,18 @@ def upload_file_to_storage(
             "upsert": bool(upsert),
         },
     )
+    # supabase-py return types vary by version; handle dict-like or attribute-like errors.
+    try:
+        err = None
+        if isinstance(result, dict):
+            err = result.get("error")
+        else:
+            err = getattr(result, "error", None)
+        if err:
+            raise RuntimeError(f"Storage upload failed (bucket={bucket_name}, path={path}): {err}")
+    except Exception:
+        # If inspection fails, still return the reference (older SDK versions may not return a response).
+        pass
     return f"{bucket_name}/{path}"
 
 
@@ -140,7 +152,7 @@ def upload_inventory_image(
     storage = client.storage.from_(INVENTORY_IMAGES_BUCKET)
 
     # If the object already exists, Supabase returns 409. Extremely unlikely with UUIDs.
-    storage.upload(
+    result = storage.upload(
         path=object_path,
         file=content,
         file_options={
@@ -148,6 +160,21 @@ def upload_inventory_image(
             "upsert": False,
         },
     )
+
+    # supabase-py return types vary by version; handle dict-like or attribute-like errors.
+    try:
+        err = None
+        if isinstance(result, dict):
+            err = result.get("error")
+        else:
+            err = getattr(result, "error", None)
+        if err:
+            raise RuntimeError(
+                f"Storage upload failed (bucket={INVENTORY_IMAGES_BUCKET}, path={object_path}): {err}"
+            )
+    except Exception:
+        # If inspection fails, continue; errors will still surface as exceptions from upload() itself.
+        pass
 
     stored_ref = f"{INVENTORY_IMAGES_BUCKET}/{object_path}"
 
