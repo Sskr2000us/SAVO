@@ -19,12 +19,14 @@ class ContinuousCameraScanScreen extends StatefulWidget {
 class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen> {
   static const String _prefsScanTypeKey = 'savo.scan.single_item.scan_type';
   static const String _prefsAutoCaptureKey = 'savo.scan.single_item.auto_capture';
+  static const Duration _autoHoldDuration = Duration(seconds: 2);
+  static const Duration _autoCooldown = Duration(seconds: 2);
 
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _isInitialized = false;
   bool _isProcessing = false;
-  bool _autoCapture = true;
+  bool _autoCapture = false;
   Timer? _focusCheckTimer;
   List<Map<String, dynamic>> _scannedItems = [];
   String _scanType = 'pantry';
@@ -32,6 +34,9 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   String _currentStep = 'centering';  // centering, analyzing, confirming
   String _detectedItem = '';
   String _estimatedQuantity = '';
+
+  DateTime? _steadySince;
+  int? _autoCountdownSeconds;
 
   String? _qualityHint;
   DateTime? _qualityHintUntil;
@@ -108,20 +113,89 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   }
 
   void _startFocusDetection() {
-    _focusCheckTimer = Timer.periodic(const Duration(milliseconds: 450), (timer) async {
-      final allowAt = _nextAutoCaptureAllowedAt;
-      if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
+    _stopFocusDetection();
+    _steadySince = null;
+    if (mounted) {
+      setState(() {
+        _autoCountdownSeconds = null;
+      });
+    }
+
+    _focusCheckTimer = Timer.periodic(const Duration(milliseconds: 650), (timer) async {
       if (!mounted) return;
-      if (_currentStep != 'centering') return;
-      if (_isInFocus() && !_isProcessing) {
-        await _autoCaptureSingleItem();
+      if (!_autoCapture) {
+        _steadySince = null;
+        if (_autoCountdownSeconds != null) {
+          setState(() {
+            _autoCountdownSeconds = null;
+          });
+        }
+        return;
       }
+
+      final now = DateTime.now();
+      final allowAt = _nextAutoCaptureAllowedAt;
+      if (allowAt != null && now.isBefore(allowAt)) {
+        _steadySince = null;
+        if (_autoCountdownSeconds != null) {
+          setState(() {
+            _autoCountdownSeconds = null;
+          });
+        }
+        return;
+      }
+
+      if (_currentStep != 'centering' || _isProcessing) {
+        _steadySince = null;
+        if (_autoCountdownSeconds != null) {
+          setState(() {
+            _autoCountdownSeconds = null;
+          });
+        }
+        return;
+      }
+
+      if (!_isInFocus()) {
+        _steadySince = null;
+        if (_autoCountdownSeconds != null) {
+          setState(() {
+            _autoCountdownSeconds = null;
+          });
+        }
+        return;
+      }
+
+      _steadySince ??= now;
+      final elapsed = now.difference(_steadySince!);
+      final remaining = _autoHoldDuration - elapsed;
+      final seconds = remaining.isNegative ? 0 : (remaining.inMilliseconds / 1000).ceil();
+      if (seconds != _autoCountdownSeconds) {
+        setState(() {
+          _autoCountdownSeconds = seconds == 0 ? null : seconds;
+        });
+      }
+
+      if (elapsed < _autoHoldDuration) return;
+
+      // Enforce a minimum delay between auto-captures (even if focus stays stable).
+      _steadySince = null;
+      setState(() {
+        _autoCountdownSeconds = null;
+      });
+      _nextAutoCaptureAllowedAt = now.add(_autoCooldown);
+      await _autoCaptureSingleItem();
     });
   }
 
   void _stopFocusDetection() {
     _focusCheckTimer?.cancel();
     _focusCheckTimer = null;
+    _steadySince = null;
+    if (_autoCountdownSeconds != null && mounted) {
+      setState(() {
+        _autoCountdownSeconds = null;
+      });
+    }
   }
 
   bool _isInFocus() {
@@ -528,7 +602,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
   String _getStatusText() {
     switch (_currentStep) {
       case 'centering':
-        return _autoCapture ? 'Center 1 item • auto-capture when steady' : 'Center 1 item • tap Capture';
+        return _autoCapture ? 'Center 1 item • hold 2s for auto-capture' : 'Center 1 item • tap Capture';
       case 'analyzing':
         return 'Analyzing item...';
       case 'confirming':
@@ -595,7 +669,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                               ),
                               SizedBox(height: 4),
                               Text(
-                                '1. Center item in frame\n2. Wait 5 sec (auto) or tap Capture\n3. Confirm quantity & save',
+                                '1. Center item in frame\n2. Hold steady ~2 sec (auto) or tap Capture\n3. Confirm quantity & save',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 12,
@@ -678,7 +752,11 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                                 ),
                                 child: Text(
                                   _currentStep == 'centering' 
-                                      ? (hintActive ? (_qualityHint ?? 'Hold steady') : 'Fill box with the item/label')
+                                      ? (hintActive
+                                          ? (_qualityHint ?? 'Hold steady')
+                                          : (_autoCapture && _autoCountdownSeconds != null)
+                                              ? 'Hold steady… auto in ${_autoCountdownSeconds}s'
+                                              : 'Fill box with the item/label')
                                       : _currentStep == 'analyzing'
                                           ? 'Analyzing...'
                                           : _detectedItem.isNotEmpty
@@ -763,7 +841,7 @@ class _ContinuousCameraScanScreenState extends State<ContinuousCameraScanScreen>
                                   }
                                 },
                               ),
-                              const Text('Auto-capture'),
+                              const Text('Auto (hands-free)'),
                             ],
                           ),
                           Text(

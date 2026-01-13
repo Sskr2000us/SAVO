@@ -1486,7 +1486,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 final added = await Navigator.push<bool>(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const ScanIngredientsScreen(autoStartVideoScan: true),
+                    builder: (_) => const ScanIngredientsScreen(preferredMode: ScanIngredientsPreferredMode.video),
                   ),
                 );
                 if (added == true) {

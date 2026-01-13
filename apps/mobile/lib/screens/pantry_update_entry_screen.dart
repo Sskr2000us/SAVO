@@ -58,7 +58,7 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
     } else if (mode == 'video30' && !kIsWeb) {
       result = await Navigator.push<bool>(
         context,
-        AppMotion.createRoute(const ScanIngredientsScreen(autoStartVideoScan: true)),
+        AppMotion.createRoute(const ScanIngredientsScreen(preferredMode: ScanIngredientsPreferredMode.video)),
       );
     } else if (mode == 'barcode' && !kIsWeb) {
       result = await Navigator.push<bool>(

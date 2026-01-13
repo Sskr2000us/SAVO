@@ -15,10 +15,21 @@ import 'scanning/barcode_scan_screen.dart';
 import 'scanning/video_capture_screen.dart';
 import 'recipe_options_screen.dart';
 
+enum ScanIngredientsPreferredMode {
+  guided,
+  video,
+  gallery,
+}
+
 class ScanIngredientsScreen extends StatefulWidget {
-  const ScanIngredientsScreen({super.key, this.autoStartVideoScan = false});
+  const ScanIngredientsScreen({
+    super.key,
+    this.autoStartVideoScan = false,
+    this.preferredMode,
+  });
 
   final bool autoStartVideoScan;
+  final ScanIngredientsPreferredMode? preferredMode;
 
   @override
   State<ScanIngredientsScreen> createState() => _ScanIngredientsScreenState();
@@ -45,7 +56,6 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   int _currentIndex = 0;
   int _savedCount = 0;
   int _skippedCount = 0;
-  bool _autoVideoStarted = false;
 
   String? _videoProcessingText;
   double? _videoProgressValue;
@@ -137,18 +147,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.autoStartVideoScan && !kIsWeb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        // Presenting the native camera picker during a route transition can crash on iOS.
-        // Delay slightly and ensure this route is current before opening the picker.
-        await Future<void>.delayed(const Duration(milliseconds: 350));
-        if (!mounted || _autoVideoStarted) return;
-        final route = ModalRoute.of(context);
-        if (route != null && route.isCurrent != true) return;
-        _autoVideoStarted = true;
-        await _videoScan();
-      });
-    }
+    // No auto-start. If callers pass autoStartVideoScan=true, we only use it as
+    // a soft hint to highlight the Video Scan button (handled in build).
   }
 
   bool _quantityNeedsConfirmation(_Candidate c) {
@@ -1140,6 +1140,10 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
 
     final canScan = !_loading;
 
+    final effectivePreferredMode = widget.preferredMode ?? (widget.autoStartVideoScan ? ScanIngredientsPreferredMode.video : null);
+    final preferVideo = !kIsWeb && effectivePreferredMode == ScanIngredientsPreferredMode.video;
+    final preferGallery = effectivePreferredMode == ScanIngredientsPreferredMode.gallery;
+
     final hasResults = _scanId != null && _candidates.isNotEmpty;
     final int? pendingIndex = hasResults ? _nextPendingIndex(startAt: _currentIndex) : null;
     final _Candidate? current = (pendingIndex != null) ? _candidates[pendingIndex] : null;
@@ -1347,24 +1351,61 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
               spacing: 12,
               runSpacing: 12,
               children: [
-                FilledButton.icon(
-                  onPressed: canScan
-                      ? () => (kIsWeb ? _pickAndScan(source: ImageSource.gallery) : _guidedScan())
-                      : null,
-                  icon: Icon(kIsWeb ? Icons.upload_file : Icons.photo_camera),
-                  label: Text(kIsWeb ? 'Upload Photo' : 'Guided Scan'),
-                ),
+                (preferVideo || preferGallery)
+                    ? OutlinedButton.icon(
+                        onPressed: canScan
+                            ? () => (kIsWeb ? _pickAndScan(source: ImageSource.gallery) : _guidedScan())
+                            : null,
+                        icon: Icon(kIsWeb ? Icons.upload_file : Icons.photo_camera),
+                        label: Text(kIsWeb ? 'Upload Photo' : 'Guided Scan'),
+                      )
+                    : FilledButton.icon(
+                        onPressed: canScan
+                            ? () => (kIsWeb ? _pickAndScan(source: ImageSource.gallery) : _guidedScan())
+                            : null,
+                        icon: Icon(kIsWeb ? Icons.upload_file : Icons.photo_camera),
+                        label: Text(kIsWeb ? 'Upload Photo' : 'Guided Scan'),
+                      ),
                 if (!kIsWeb)
-                  OutlinedButton.icon(
-                    onPressed: canScan ? _videoScan : null,
-                    icon: const Icon(Icons.videocam),
-                    label: const Text('Video Scan (30s)'),
-                  ),
-                OutlinedButton.icon(
-                  onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Pick From Gallery'),
-                ),
+                  (preferVideo)
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: canScan ? _videoScan : null,
+                              icon: const Icon(Icons.videocam),
+                              label: const Text('Video Scan (30s)'),
+                            ),
+                            const SizedBox(height: 6),
+                            Chip(
+                              label: const Text('Recommended (fastest for many items)'),
+                              backgroundColor: const Color(0xFF2E7D32),
+                              labelStyle: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ],
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: canScan ? _videoScan : null,
+                          icon: const Icon(Icons.videocam),
+                          label: const Text('Video Scan (30s)'),
+                        ),
+                (preferGallery)
+                    ? FilledButton.icon(
+                        onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Pick From Gallery'),
+                      )
+                    : OutlinedButton.icon(
+                        onPressed: canScan ? () => _pickAndScan(source: ImageSource.gallery) : null,
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Pick From Gallery'),
+                      ),
               ],
             ),
             const SizedBox(height: 16),
