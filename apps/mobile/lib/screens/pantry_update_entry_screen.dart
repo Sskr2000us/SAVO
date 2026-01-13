@@ -7,6 +7,9 @@ import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
 import '../widgets/savo_widgets.dart';
+import 'barcode_scan_screen.dart';
+import 'cook_now_entry_screen.dart';
+import 'scanning/continuous_camera_screen.dart';
 import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
 
@@ -20,6 +23,137 @@ class PantryUpdateEntryScreen extends StatefulWidget {
 class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
   bool _scanningReceipt = false;
   final ImagePicker _picker = ImagePicker();
+
+  void _showCookNowNudge() {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Pantry updated. Ready to pick a recipe?'),
+        action: SnackBarAction(
+          label: 'Cook',
+          onPressed: () {
+            if (!mounted) return;
+            Navigator.of(context).push(
+              AppMotion.createRoute(const CookNowEntryScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startPantryScan(String mode) async {
+    dynamic result;
+
+    if (!mounted) return;
+
+    if (mode == 'realtime' && !kIsWeb) {
+      result = await Navigator.push<List<Map<String, dynamic>>>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const ContinuousCameraScanScreen(),
+        ),
+      );
+    } else if (mode == 'video30' && !kIsWeb) {
+      result = await Navigator.push<bool>(
+        context,
+        AppMotion.createRoute(const ScanIngredientsScreen(autoStartVideoScan: true)),
+      );
+    } else if (mode == 'barcode' && !kIsWeb) {
+      result = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const BarcodeScanScreen(),
+        ),
+      );
+    } else {
+      // photo (and web fallback)
+      result = await Navigator.push<bool>(
+        context,
+        AppMotion.createRoute(const ScanIngredientsScreen()),
+      );
+    }
+
+    final changed = (result is bool)
+        ? result == true
+        : (result is List)
+            ? result.isNotEmpty
+            : false;
+
+    if (changed) {
+      _showCookNowNudge();
+    }
+  }
+
+  Future<void> _openScanOptionsSheet() async {
+    final res = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final titleStyle = Theme.of(ctx).textTheme.titleMedium;
+
+        Widget tile({
+          required IconData icon,
+          required String label,
+          required String value,
+          String? subtitle,
+        }) {
+          return ListTile(
+            leading: Icon(icon),
+            title: Text(label, style: titleStyle),
+            subtitle: subtitle != null ? Text(subtitle) : null,
+            onTap: () => Navigator.of(ctx).pop(value),
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
+                child: Text('Choose a scan mode', style: titleStyle),
+              ),
+              if (!kIsWeb)
+                tile(
+                  icon: Icons.videocam,
+                  label: 'Real-time scan',
+                  subtitle: 'Fastest on mobile',
+                  value: 'realtime',
+                ),
+              if (!kIsWeb)
+                tile(
+                  icon: Icons.video_camera_back_outlined,
+                  label: 'Video scan (30s)',
+                  subtitle: 'Scan many items at once',
+                  value: 'video30',
+                ),
+              if (!kIsWeb)
+                tile(
+                  icon: Icons.qr_code_scanner,
+                  label: 'Barcode scan',
+                  subtitle: 'Packaged items',
+                  value: 'barcode',
+                ),
+              tile(
+                icon: Icons.photo_camera,
+                label: kIsWeb ? 'Upload photo' : 'Take photo',
+                subtitle: 'Single item',
+                value: 'photo',
+              ),
+              const SizedBox(height: AppSpacing.sm),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (res == null) return;
+    await _startPantryScan(res);
+  }
 
   Future<List<Map<String, dynamic>>?> _confirmReceiptItems(
     BuildContext context,
@@ -179,6 +313,10 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Inventory updated. Added $added, updated $updated items.')),
       );
+
+      if ((added + updated) > 0) {
+        _showCookNowNudge();
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -217,18 +355,13 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
             const SizedBox(height: AppSpacing.md),
             SavoCard(
               elevated: true,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  AppMotion.createRoute(const ScanIngredientsScreen(autoStartVideoScan: true)),
-                );
-              },
+              onTap: _openScanOptionsSheet,
               child: const Row(
                 children: [
-                  Icon(Icons.video_camera_back_outlined),
+                  Icon(Icons.photo_camera),
                   SizedBox(width: AppSpacing.md),
                   Expanded(
-                    child: Text('Scan items (30s video)'),
+                    child: Text('Scan pantry (realtime / video / barcode / photo)'),
                   ),
                 ],
               ),

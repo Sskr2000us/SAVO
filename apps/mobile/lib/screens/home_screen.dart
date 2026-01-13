@@ -15,6 +15,7 @@ import '../models/planning.dart';
 import '../theme/app_theme.dart';
 import '../widgets/savo_widgets.dart';
 import '../widgets/pro_paywall_sheet.dart';
+import 'cook_now_entry_screen.dart';
 import 'plan_screen.dart';
 import 'pantry_update_entry_screen.dart';
 import 'account_settings_screen.dart';
@@ -41,7 +42,6 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Recipe> _tonightOptions = const [];
   int _tonightIndex = 0;
 
-  bool _loadingInventory = true;
   List<InventoryItem> _inventory = const [];
 
   String _preferredLanguageKey(BuildContext context) {
@@ -143,7 +143,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       setState(() {
         _inventory = inventory;
-        _loadingInventory = false;
         _tonightOptions = tonight.rankedRecipes;
         _tonightIndex = 0;
         _loadingTonight = false;
@@ -157,7 +156,6 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         // If we have a suggestion already, keep CTA enabled and show no blocking state.
         _loadingTonight = (_tonightRecipe == null) ? false : false;
-        _loadingInventory = false;
         _tonightError = msg;
       });
     }
@@ -312,6 +310,65 @@ class _HomeScreenState extends State<HomeScreen> {
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: AppSpacing.sm),
+            SavoCard(
+              elevated: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Quick workflow',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'Scan pantry → Get recipe options → Cook step-by-step',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () async {
+                            final gate = await EntitlementsService.instance.tryConsumeScan();
+                            if (!gate.allowed && context.mounted) {
+                              await showProPaywallSheet(
+                                context,
+                                title: 'Upgrade to SAVO Pro',
+                                ctaLabel: 'Upgrade for unlimited scans',
+                                reason: 'You\'ve hit today\'s free scan limit. Upgrade to keep scanning and get unlimited suggestions.',
+                                trigger: 'scan_limit',
+                              );
+                              return;
+                            }
+
+                            if (!context.mounted) return;
+                            Navigator.push(
+                              context,
+                              AppMotion.createRoute(const PantryUpdateEntryScreen()),
+                            );
+                          },
+                          child: const Text('Scan pantry'),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              AppMotion.createRoute(const CookNowEntryScreen()),
+                            );
+                          },
+                          child: const Text('Get recipes'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
             SavoCard(
               elevated: true,
               child: Column(

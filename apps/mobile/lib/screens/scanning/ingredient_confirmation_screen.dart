@@ -939,7 +939,7 @@ class _IngredientConfirmationScreenState
     String likelihood,
     bool isSelected,
   ) {
-    return Scaffold(
+    return ChoiceChip(
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -951,23 +951,15 @@ class _IngredientConfirmationScreenState
         ],
       ),
       selected: isSelected,
-                  final thumbUrl = (item['thumbnail_url'] ?? item['thumbnailUrl'] ?? '').toString();
-                  final fullUrl = (item['full_image_url'] ?? item['fullImageUrl'] ?? '').toString();
       onSelected: (selected) {
         if (selected) {
           _handleModify(detectedId, name);
         }
       },
       selectedColor: const Color(0xFF4CAF50),
-      labelStyle: TextStyle(
-                          Row(
+      labelStyle: const TextStyle(
         fontSize: 13,
       ),
-                              _IngredientThumb(
-                                thumbnailUrl: thumbUrl,
-                                fullImageUrl: fullUrl,
-                              ),
-                              const SizedBox(width: 10),
     );
   }
 }
