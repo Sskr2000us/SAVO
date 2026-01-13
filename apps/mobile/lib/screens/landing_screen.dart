@@ -185,12 +185,12 @@ class _LandingScreenState extends State<LandingScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                _FlowStep(icon: Icons.camera_alt, label: 'Scan', color: cs.primary),
+                                _FlowStep(icon: Icons.camera_alt, label: 'Scan pantry', color: cs.primary),
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 10),
                                   child: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
                                 ),
-                                _FlowStep(icon: Icons.check_circle_outline, label: 'Confirm', color: cs.primary),
+                                _FlowStep(icon: Icons.auto_awesome, label: 'Pick recipe', color: cs.primary),
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 10),
                                   child: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),

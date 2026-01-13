@@ -943,7 +943,10 @@ class _IngredientConfirmationScreenState
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(displayName),
+          Text(
+            displayName,
+            overflow: TextOverflow.ellipsis,
+          ),
           if (likelihood == 'high') ...[
             const SizedBox(width: 4),
             const Icon(Icons.star, size: 14, color: Colors.orange),
@@ -957,9 +960,7 @@ class _IngredientConfirmationScreenState
         }
       },
       selectedColor: const Color(0xFF4CAF50),
-      labelStyle: const TextStyle(
-        fontSize: 13,
-      ),
+      labelStyle: const TextStyle(fontSize: 13),
     );
   }
 }

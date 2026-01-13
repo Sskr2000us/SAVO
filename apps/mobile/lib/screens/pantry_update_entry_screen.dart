@@ -45,10 +45,9 @@ class _PantryUpdateEntryScreenState extends State<PantryUpdateEntryScreen> {
   }
 
   Future<void> _startPantryScan(String mode) async {
-    dynamic result;
-
     if (!mounted) return;
 
+    dynamic result;
     if (mode == 'realtime' && !kIsWeb) {
       result = await Navigator.push<List<Map<String, dynamic>>>(
         context,
