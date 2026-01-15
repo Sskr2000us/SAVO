@@ -87,15 +87,60 @@ def _loremflickr_url(*, tags: str, lock: int) -> str:
     return f"https://loremflickr.com/1200/800/{t}?lock={l}"
 
 
-def _sanitize_query_to_tags(query: str) -> str:
+_TAMILISH_CUISINE_RE = re.compile(r"\b(tamil|tamilnadu|tamil-nadu|tamil\s+nadu)\b", flags=re.IGNORECASE)
+
+
+def _is_tamilish_cuisine(cuisine: str) -> bool:
+    return bool(_TAMILISH_CUISINE_RE.search((cuisine or "").strip()))
+
+
+def _normalize_cuisine_for_images(cuisine: str) -> str:
+    c = (cuisine or "").strip().lower()
+    if not c:
+        return "general"
+    if _is_tamilish_cuisine(c):
+        # Tamil food is typically South Indian cuisine; using this improves tag quality.
+        return "south indian"
+    return c
+
+
+def _sanitize_query_to_tags(query: str, cuisine: str = "") -> str:
+    """Convert a comma-separated query into safe tags for upstream providers.
+
+    - Always includes `food`.
+    - For Tamil/South Indian cuisines, adds Indian-food hints.
+    - Drops duplicate and overly-generic cuisine tokens that tend to produce junk results.
+    """
+
+    cuisine_norm = _normalize_cuisine_for_images(cuisine)
+
+    # Start with stable, safe tags.
+    base_tags: list[str] = ["food"]
+    if cuisine_norm in {"indian", "south indian"} or _is_tamilish_cuisine(cuisine):
+        base_tags.extend(["indian-food", "south-indian-food"])
+
     # `build_llm_image_query` returns comma-separated tokens. Keep them URL-path safe.
     q = (query or "").strip().lower()
     parts = [p.strip() for p in q.split(",") if p.strip()]
+
+    stop = {
+        "food",
+        "indian",
+        "south",
+        "south-indian",
+        "southindian",
+        "tamil",
+        "tamilnadu",
+        "tamil-nadu",
+    }
+
     cleaned: list[str] = []
     seen: set[str] = set()
-    for p in parts:
+    for p in base_tags + parts:
         p = re.sub(r"[^a-z0-9]+", "-", p).strip("-")
         if not p:
+            continue
+        if p in stop and p not in {"food", "indian-food", "south-indian-food"}:
             continue
         if p in seen:
             continue
@@ -103,6 +148,7 @@ def _sanitize_query_to_tags(query: str) -> str:
         cleaned.append(p)
         if len(cleaned) >= 8:
             break
+
     return ",".join(cleaned) or "food"
 
 
@@ -1171,19 +1217,28 @@ async def proxy_recipe_image(
     if seed > 20:
         seed = 20
 
+    cuisine_norm = _normalize_cuisine_for_images(cuisine_clean)
+
     # Build query terms (LLM best-effort; deterministic fallback when LLM unavailable).
-    query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_clean, ingredients=None)
-    tags = _sanitize_query_to_tags(query)
+    query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_norm, ingredients=None)
+    tags = _sanitize_query_to_tags(query, cuisine=cuisine_norm)
 
     # Deterministic lock for loremflickr.
     lock_key = f"{name}|{cuisine_clean}|{seed}".encode("utf-8", errors="ignore")
     lock = int(hashlib.sha256(lock_key).hexdigest()[:8], 16) % 100000
 
-    upstream_candidates = [
-        _loremflickr_url(tags=tags, lock=lock),
-        # Last-resort: always-available curated image.
-        _curated_food_image_url(recipe_name=name, cuisine=cuisine_clean, seed=seed),
-    ]
+    curated = _curated_food_image_url(recipe_name=name, cuisine=cuisine_norm, seed=seed)
+
+    # Tamil cuisine: loremflickr often returns low-quality/irrelevant results.
+    # Prefer curated images for reliability and to avoid "junk" photos.
+    if _is_tamilish_cuisine(cuisine_clean) or cuisine_norm == "south indian":
+        upstream_candidates = [curated]
+    else:
+        upstream_candidates = [
+            _loremflickr_url(tags=tags, lock=lock),
+            # Last-resort: always-available curated image.
+            curated,
+        ]
 
     timeout = httpx.Timeout(8.0, connect=5.0)
     def _looks_like_image(resp: httpx.Response) -> bool:
