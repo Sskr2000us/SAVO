@@ -24,6 +24,8 @@ class CookNowService {
     int avoidRecentRecipes = 3,
     bool preferCachedFirst = false,
     String? creativity,
+    String? mealType,
+    String? dayType,
   }) async {
     // Prefer the new constrained endpoint.
     // Keep this method signature stable; we adapt backend response to the existing `Recipe` model.
@@ -48,10 +50,11 @@ class CookNowService {
     } catch (_) {
       // Best-effort only
     }
-    Future<List<Recipe>> fetchGenerated({required int attempts}) async {
+    Future<List<Recipe>> fetchGenerated({required int attempts, required bool allowGeneration}) async {
       final byId = <String, Recipe>{};
       final creative = (creativity ?? '').trim().toLowerCase();
       final creativityValue = (creative == 'high' || creative == 'standard') ? creative : '';
+      final allowGen = allowGeneration || (creativityValue == 'high');
 
       final outputLang = (profileState.preferredLanguage?.trim().isNotEmpty == true)
           ? profileState.preferredLanguage!.trim()
@@ -61,11 +64,17 @@ class CookNowService {
 
       final req = <String, dynamic>{
         'request_text': '',
+        if ((mealType ?? '').trim().isNotEmpty) 'meal_type': mealType!.trim().toLowerCase(),
+        if ((dayType ?? '').trim().isNotEmpty) 'day_type': dayType!.trim().toLowerCase(),
         if (cuisine != null && cuisine.trim().isNotEmpty) 'cuisine': cuisine.trim(),
         'max_time_minutes': 45,
         'serves': 4,
         'include_inactive_inventory': includeInactiveInventory,
         'use_expiring_items': true,
+        // Inventory/catalog-first by default. Only enable LLM for explicit creative requests
+        // or as a best-effort fallback when we can't get enough options.
+        'allow_generation': allowGen,
+        'request_text_forces_generation': false,
         'output_language': outputLang,
         'output_languages': outputLang == 'en' ? ['en'] : ['en', outputLang],
         // Ask backend for multiple options in a single call.
@@ -91,7 +100,7 @@ class CookNowService {
 
     Future<List<Recipe>> fetchLegacyPlan() async {
       final body = <String, dynamic>{
-        'meal_type': _inferMealType(),
+        'meal_type': (mealType ?? _inferMealType()).trim().toLowerCase(),
         'time_available_minutes': 45,
         'servings': 4,
         if (includeInactiveInventory) 'include_inactive_inventory': true,
@@ -197,7 +206,25 @@ class CookNowService {
     try {
       // Try to get enough distinct options by making a few generation attempts.
       final attempts = (maxOptions * 2).clamp(2, 10);
-      candidates = await fetchGenerated(attempts: attempts);
+      candidates = await fetchGenerated(attempts: attempts, allowGeneration: false);
+
+      // If we couldn't get enough options (e.g., aggressive de-dupe on a small pantry),
+      // do a one-time best-effort top-up using generation.
+      final minTarget = min(4, maxOptions);
+      if (candidates.length < minTarget) {
+        final topUp = await fetchGenerated(attempts: 8, allowGeneration: true);
+        final byId = <String, Recipe>{};
+        for (final r in candidates) {
+          final id = r.recipeId.trim();
+          if (id.isNotEmpty) byId[id] = r;
+        }
+        for (final r in topUp) {
+          final id = r.recipeId.trim();
+          if (id.isNotEmpty) byId.putIfAbsent(id, () => r);
+          if (byId.length >= maxOptions) break;
+        }
+        candidates = byId.values.toList();
+      }
       if (candidates.isEmpty) {
         candidates = await fetchLegacyPlan();
       }

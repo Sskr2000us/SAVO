@@ -555,6 +555,14 @@ class LockedConstraints(BaseModel):
 
 class RecipeGenerateRequest(BaseModel):
     request_text: Optional[str] = Field(default=None, description="Free-form user request")
+    meal_type: Optional[Literal["breakfast", "lunch", "dinner", "snack", "any"]] = Field(
+        default=None,
+        description="Optional meal context hint for retrieval/generation.",
+    )
+    day_type: Optional[Literal["weekday", "weekend", "holiday"]] = Field(
+        default=None,
+        description="Optional day context hint for retrieval/generation.",
+    )
     cuisine: Optional[str] = Field(default=None)
     dietary_tags: List[str] = Field(default_factory=list)
     max_time_minutes: Optional[int] = Field(default=None, ge=1, le=240)
@@ -1508,6 +1516,9 @@ def _try_retrieve_catalog_recipe(
     constraints: LockedConstraints,
     pantry_names: List[str],
     serves: int,
+    meal_type: Optional[str] = None,
+    day_type: Optional[str] = None,
+    ignore_recent: bool = False,
     seed: Optional[str] = None,
     limit: int = 250,
 ) -> Optional[Tuple[CanonicalRecipe, float, List[MissingIngredient]]]:
@@ -1526,24 +1537,27 @@ def _try_retrieve_catalog_recipe(
     pantry_set = set(pantry_names or [])
 
     # Avoid recent returns (works if recipe_attempts persists recipe_id for catalog entries).
+    # If ignore_recent=True, we intentionally bypass this to ensure we can always
+    # fill a full set of options.
     recent_ids: set[str] = set()
-    try:
-        db = get_db_client()
-        recent = (
-            db.table("recipe_attempts")
-            .select("recipe_id,created_at")
-            .eq("user_id", str(user_id))
-            .order("created_at", desc=True)
-            .limit(20)
-            .execute()
-        )
-        for r in (recent.data or []):
-            if isinstance(r, dict) and r.get("recipe_id"):
-                recent_ids.add(str(r.get("recipe_id")))
-    except Exception:
-        recent_ids = set()
+    if not bool(ignore_recent):
+        try:
+            db = get_db_client()
+            recent = (
+                db.table("recipe_attempts")
+                .select("recipe_id,created_at")
+                .eq("user_id", str(user_id))
+                .order("created_at", desc=True)
+                .limit(20)
+                .execute()
+            )
+            for r in (recent.data or []):
+                if isinstance(r, dict) and r.get("recipe_id"):
+                    recent_ids.add(str(r.get("recipe_id")))
+        except Exception:
+            recent_ids = set()
 
-    candidates: list[Tuple[float, dict[str, Any], float, list[str]]] = []
+    candidates: list[Tuple[float, dict[str, Any], float, list[str], list[str]]] = []
 
     # Cap scan cost.
     scan = items[: max(50, int(limit))]
@@ -1579,7 +1593,60 @@ def _try_retrieve_catalog_recipe(
             score = min(0.55, hits / 4.0) if hits else 0.0
             missing = []
 
-        candidates.append((score, row, score, missing))
+        # Context bonus: lightweight keyword-based signal.
+        # Keep small so pantry coverage remains dominant.
+        name_l = name.lower()
+        bonus = 0.0
+        mt = (meal_type or "").strip().lower()
+        dt = (day_type or "").strip().lower()
+
+        if mt and mt != "any":
+            if mt == "breakfast":
+                if any(k in name_l for k in [
+                    "idli", "dosa", "pongal", "upma", "poha", "paratha", "pancake", "omelet", "omelette", "toast", "porridge",
+                ]):
+                    bonus += 0.12
+            elif mt == "lunch":
+                if any(k in name_l for k in [
+                    "rice", "biryani", "thali", "curry", "dal", "sambar", "rasam", "pulav", "pulao", "salad", "bowl",
+                ]):
+                    bonus += 0.10
+            elif mt == "dinner":
+                if any(k in name_l for k in [
+                    "curry", "gravy", "biryani", "roti", "naan", "korma", "stew", "soup",
+                ]):
+                    bonus += 0.10
+            elif mt == "snack":
+                if any(k in name_l for k in [
+                    "vada", "samosa", "pakora", "bajji", "bond", "chaat", "cutlet", "fritter",
+                ]):
+                    bonus += 0.12
+
+        prep = 0
+        try:
+            prep = int(row.get("prep_time_minutes") or 0)
+        except Exception:
+            prep = 0
+
+        if dt == "weekday":
+            if 0 < prep <= 30:
+                bonus += 0.08
+            elif prep >= 60:
+                bonus -= 0.05
+        elif dt == "weekend":
+            if 0 < prep <= 60:
+                bonus += 0.05
+        elif dt == "holiday":
+            if any(k in name_l for k in [
+                "festival", "special", "feast", "biryani", "halwa", "payasam", "laddu", "sweet", "dessert",
+            ]):
+                bonus += 0.12
+
+        bonus = max(-0.10, min(0.20, bonus))
+        score = max(0.0, min(1.0, float(score) + float(bonus)))
+
+        cov_out = float(cov) if ing_names else float(score)
+        candidates.append((score, row, cov_out, missing, ing_names))
 
     if not candidates:
         return None
@@ -1588,7 +1655,7 @@ def _try_retrieve_catalog_recipe(
     best = float(candidates[0][0])
     top = [c for c in candidates if float(c[0]) >= max(0.01, best - 0.05)]
     pick = rng.choice(top[: min(25, len(top))])
-    _score, row, cov, missing_names = pick
+    _score, row, cov, missing_names, picked_ingredients = pick
 
     rid = str(row.get("recipe_id") or str(uuid4()))
     rcuisine = str(row.get("cuisine") or cuisine or "mixed").strip().lower() or "mixed"
@@ -1606,7 +1673,7 @@ def _try_retrieve_catalog_recipe(
         steps = ["Follow the linked recipe/video instructions."]
 
     ingredients: list[CanonicalIngredient] = []
-    for nm in (ing_names or [])[:12]:
+    for nm in (picked_ingredients or [])[:12]:
         ingredients.append(
             CanonicalIngredient(
                 canonical_name=nm,
@@ -1943,6 +2010,8 @@ async def generate_recipe(
                 constraints=constraints,
                 pantry_names=pantry_names,
                 serves=req.serves,
+                meal_type=req.meal_type,
+                day_type=req.day_type,
                 seed=attempt_id,
             )
 
@@ -2340,24 +2409,38 @@ async def generate_recipe_options(
 
     count = max(1, min(int(req.count or 1), 8))
 
-    # Catalog-only mode (no LLM): return varied catalog picks.
-    if not bool(req.allow_generation):
-        options: list[RecipeGenerateResponse] = []
-        used_ids: set[str] = set()
-        for i in range(int(count)):
+    def _top_up_options_from_catalog(
+        *,
+        options: list[RecipeGenerateResponse],
+        used_ids: set[str],
+        constraints_override: Optional[LockedConstraints] = None,
+        target_count: int,
+        allow_recent: bool = False,
+        max_attempts: int = 80,
+        reason: str = "catalog_topup",
+    ) -> None:
+        tries = 0
+        effective_constraints = constraints_override or constraints
+        while len(options) < int(target_count) and tries < int(max_attempts):
+            tries += 1
             picked = _try_retrieve_catalog_recipe(
                 user_id=str(user_id),
-                constraints=constraints,
+                constraints=effective_constraints,
                 pantry_names=pantry_names,
                 serves=req.serves,
+                meal_type=req.meal_type,
+                day_type=req.day_type,
+                ignore_recent=bool(allow_recent),
                 seed=f"{user_id}:{uuid4()}",
             )
             if not picked:
                 break
             recipe_obj, pantry_cov, missing_items = picked
-            if str(recipe_obj.recipe_id) in used_ids:
+            rid = str(getattr(recipe_obj, "recipe_id", "") or "").strip()
+            if rid and rid in used_ids:
                 continue
-            used_ids.add(str(recipe_obj.recipe_id))
+            if rid:
+                used_ids.add(rid)
             trust = TrustSignals(
                 uses_what_you_have=float(pantry_cov or 0.0) >= preferred_threshold and len(missing_items) == 0,
                 estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
@@ -2367,23 +2450,71 @@ async def generate_recipe_options(
             options.append(
                 RecipeGenerateResponse(
                     recipe=recipe_obj,
-                    locked_constraints=constraints,
+                    locked_constraints=effective_constraints,
                     pantry_coverage=float(pantry_cov or 0.0),
                     missing_ingredients=list(missing_items or []),
                     mode="retrieved",
-                    reason="catalog_match",
+                    reason=str(reason),
                     trust_signals=trust,
                 )
             )
-        if options:
-            target_language = _requested_translation_target(req)
-            i18n_list = await _translate_canonical_recipes_batch_i18n(
-                recipes=[o.recipe for o in options],
-                target_language=target_language,
+
+    # Catalog-only mode (no LLM): return varied catalog picks.
+    if not bool(req.allow_generation):
+        options: list[RecipeGenerateResponse] = []
+        used_ids: set[str] = set()
+        # First pass: respect cuisine (if present) and avoid recent attempts.
+        _top_up_options_from_catalog(
+            options=options,
+            used_ids=used_ids,
+            constraints_override=constraints,
+            target_count=int(count),
+            allow_recent=False,
+            max_attempts=80,
+            reason="catalog_match",
+        )
+
+        # Second pass: relax cuisine matching if we still can't fill.
+        if len(options) < int(count):
+            relaxed = LockedConstraints(
+                cuisine=None,
+                ingredients_allowed=list(constraints.ingredients_allowed or []),
+                max_time_minutes=constraints.max_time_minutes,
+                dietary=list(constraints.dietary or []),
+                techniques_allowed=list(constraints.techniques_allowed or []),
+                use_expiring_items=bool(constraints.use_expiring_items),
+                spice_level=constraints.spice_level,
             )
-            for o, i18n in zip(options, i18n_list):
-                o.i18n = i18n
-            return RecipeGenerateOptionsResponse(options=options)
+            _top_up_options_from_catalog(
+                options=options,
+                used_ids=used_ids,
+                constraints_override=relaxed,
+                target_count=int(count),
+                allow_recent=False,
+                max_attempts=120,
+                reason="catalog_relaxed",
+            )
+
+        # Final pass: allow recent picks (still avoids duplicates within this response).
+        if len(options) < int(count):
+            _top_up_options_from_catalog(
+                options=options,
+                used_ids=used_ids,
+                constraints_override=None,
+                target_count=int(count),
+                allow_recent=True,
+                max_attempts=160,
+                reason="catalog_relaxed_recent",
+            )
+
+        target_language = _requested_translation_target(req)
+        i18n_list = await _translate_canonical_recipes_batch_i18n(
+            recipes=[o.recipe for o in options],
+            target_language=target_language,
+        )
+        for o, i18n in zip(options, i18n_list):
+            o.i18n = i18n
+        return RecipeGenerateOptionsResponse(options=options)
 
     # Prepare generation prompt
     schema = _canonical_recipe_options_json_schema(count=count)
@@ -2443,6 +2574,8 @@ async def generate_recipe_options(
 
     prompt = {
         "request_text": (req.request_text or ""),
+        "meal_type": (req.meal_type or ""),
+        "day_type": (req.day_type or ""),
         "requested_ingredient_hints": requested_hints,
         "today_utc": _now_iso(),
         "locked_constraints": constraints.model_dump(),
@@ -2722,6 +2855,43 @@ async def generate_recipe_options(
         for o, i18n in zip(options, i18n_list):
             o.i18n = i18n
 
+        # Enforce full option_count: backfill any shortfall with catalog picks.
+        if len(options) < int(count):
+            used_ids: set[str] = set()
+            for o in options:
+                rid = str(getattr(o.recipe, "recipe_id", "") or "").strip()
+                if rid:
+                    used_ids.add(rid)
+            _top_up_options_from_catalog(
+                options=options,
+                used_ids=used_ids,
+                constraints_override=constraints,
+                target_count=int(count),
+                allow_recent=False,
+                max_attempts=120,
+                reason="catalog_topup",
+            )
+            if len(options) < int(count):
+                _top_up_options_from_catalog(
+                    options=options,
+                    used_ids=used_ids,
+                    constraints_override=None,
+                    target_count=int(count),
+                    allow_recent=True,
+                    max_attempts=160,
+                    reason="catalog_topup_relaxed",
+                )
+
+        # Re-translate if we topped up.
+        if len(i18n_list) != len(options):
+            target_language = _requested_translation_target(req)
+            i18n_list = await _translate_canonical_recipes_batch_i18n(
+                recipes=[o.recipe for o in options],
+                target_language=target_language,
+            )
+            for o, i18n in zip(options, i18n_list):
+                o.i18n = i18n
+
         return RecipeGenerateOptionsResponse(options=options)
 
     except Exception as e:
@@ -2804,20 +2974,45 @@ async def generate_recipe_options(
         except Exception:
             pass
 
-        return RecipeGenerateOptionsResponse(
-            options=[
-                RecipeGenerateResponse(
-                    recipe=assembled,
-                    locked_constraints=constraints,
-                    pantry_coverage=float(assembled_cov or 0.0),
-                    missing_ingredients=list(assembled_missing or []),
-                    mode="assembled",
-                    reason="fallback",
-                    trust_signals=trust,
-                    i18n=i18n,
-                )
-            ]
+        # Enforce full option_count: include the deterministic assembled fallback, then
+        # backfill with catalog picks so clients always receive a presentable list.
+        fallback_options: list[RecipeGenerateResponse] = [
+            RecipeGenerateResponse(
+                recipe=assembled,
+                locked_constraints=constraints,
+                pantry_coverage=float(assembled_cov or 0.0),
+                missing_ingredients=list(assembled_missing or []),
+                mode="assembled",
+                reason="fallback",
+                trust_signals=trust,
+                i18n=i18n,
+            )
+        ]
+
+        used_ids = {str(getattr(assembled, "recipe_id", "") or "").strip()}
+        _top_up_options_from_catalog(
+            options=fallback_options,
+            used_ids=used_ids,
+            constraints_override=constraints,
+            target_count=int(count),
+            allow_recent=True,
+            max_attempts=200,
+            reason="catalog_fallback",
         )
+
+        # Best-effort translate the final list (assembled already has i18n).
+        try:
+            target_language = _requested_translation_target(req)
+            i18n_list = await _translate_canonical_recipes_batch_i18n(
+                recipes=[o.recipe for o in fallback_options],
+                target_language=target_language,
+            )
+            for o, i18n_obj in zip(fallback_options, i18n_list):
+                o.i18n = i18n_obj
+        except Exception:
+            pass
+
+        return RecipeGenerateOptionsResponse(options=fallback_options)
 
 
 @router.get("/attempts", response_model=RecipeAttemptListResponse)

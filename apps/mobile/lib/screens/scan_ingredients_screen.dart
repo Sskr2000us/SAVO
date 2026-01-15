@@ -10,6 +10,7 @@ import '../services/cook_now_service.dart';
 import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../models/profile_state.dart';
+import '../widgets/cook_context_picker_sheet.dart';
 import 'scanning/guided_scan_screen.dart';
 import 'scanning/barcode_scan_screen.dart';
 import 'scanning/video_capture_screen.dart';
@@ -69,6 +70,28 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
       if (!mounted) return;
       if (!gate.allowed) return;
 
+      final picked = await showCookContextPickerSheet(
+        context,
+        title: 'What are you cooking for?',
+      );
+      if (!mounted) return;
+      final dayType = picked?.dayType ?? inferDayType();
+      final mealType = picked?.mealType ?? inferMealType();
+
+      String contextTitle() {
+        final mt = mealType.isNotEmpty
+            ? (mealType[0].toUpperCase() + mealType.substring(1))
+            : 'Meals';
+        switch (dayType) {
+          case 'holiday':
+            return 'Holiday $mt ideas';
+          case 'weekend':
+            return 'Weekend $mt ideas';
+          default:
+            return '$mt ideas you can cook';
+        }
+      }
+
       final apiClient = Provider.of<ApiClient>(context, listen: false);
       final profileState = Provider.of<ProfileState>(context, listen: false);
       final service = CookNowService();
@@ -78,6 +101,8 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
         profileState: profileState,
         maxOptions: 5,
         avoidRecentRecipes: 3,
+        dayType: dayType,
+        mealType: mealType,
       );
 
       if (!mounted) return;
@@ -89,7 +114,7 @@ class _ScanIngredientsScreenState extends State<ScanIngredientsScreen> {
           builder: (_) => RecipeOptionsScreen(
             recipes: options,
             showIngredientMatch: true,
-            titleOverride: 'Meals you can cook tonight',
+            titleOverride: contextTitle(),
             skipSuggestionSessionGate: true,
           ),
         ),

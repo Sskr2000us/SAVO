@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/planning.dart';
 import '../models/inventory.dart';
@@ -13,9 +15,11 @@ import '../services/api_client.dart';
 import '../services/scanning_service.dart';
 import '../services/cuisine_preference_service.dart';
 import '../services/entitlements_service.dart';
+import '../services/shopping_list_storage.dart';
 import '../widgets/pro_paywall_sheet.dart';
 import '../widgets/savo_network_image.dart';
 import 'cook_now_recipe_detail_screen.dart';
+import 'shopping_list_screen.dart';
 
 class RecipeOptionsScreen extends StatefulWidget {
   final List<Recipe> recipes;
@@ -38,6 +42,7 @@ class RecipeOptionsScreen extends StatefulWidget {
 class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   bool _timerStarted = false;
   final Map<String, Map<String, dynamic>> _matchByRecipeId = {};
+  final Map<String, int> _carouselIndexByRecipeId = {};
 
   bool _recipeShownLogged = false;
 
@@ -75,6 +80,8 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
     'baking soda',
   };
 
+  static const String _supabaseShoppingTable = 'household_shopping_items';
+
   static String _normalizeIngredientName(String input) {
     return input
         .replaceAll('_', ' ')
@@ -93,6 +100,162 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
 
   bool _assumeStaplesForRecipe(String recipeId) {
     return _assumeStaplesOverrideByRecipeId[recipeId] ?? _assumeStaplesGlobal;
+  }
+
+  String? _householdId() {
+    try {
+      final profile = Provider.of<ProfileState>(context, listen: false);
+      final hh = profile.household;
+      final id = hh?['id'];
+      final v = id?.toString().trim();
+      if (v == null || v.isEmpty) return null;
+      return v;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _addMissingToShoppingList({
+    required Recipe recipe,
+    required List<String> missingNames,
+  }) async {
+    final names = missingNames.map((s) => _prettyName(s).trim()).where((s) => s.isNotEmpty).toSet().toList()..sort();
+    if (names.isEmpty) return;
+
+    final addedCount = names.length;
+
+    final incoming = names.map((n) => {'canonical_name': n}).toList();
+    await ShoppingListStorage.mergeAndSaveIncoming(incoming);
+
+    String message = 'Added $addedCount item${addedCount == 1 ? '' : 's'} to shopping list';
+
+    // Best-effort sync: keep remote list from overwriting local cache.
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      final householdId = _householdId();
+      if (session != null && householdId != null) {
+        final now = DateTime.now().toUtc().toIso8601String();
+        final rows = <Map<String, dynamic>>[];
+        for (final item in incoming) {
+          final key = ShoppingListStorage.itemKey(item);
+          if (key.trim().isEmpty) continue;
+          rows.add({
+            'household_id': householdId,
+            'item_key': key,
+            'item_json': item,
+            'checked': false,
+            'updated_at': now,
+          });
+        }
+        if (rows.isNotEmpty) {
+          await Supabase.instance.client.from(_supabaseShoppingTable).upsert(rows);
+          message = 'Added $addedCount item${addedCount == 1 ? '' : 's'} + synced';
+        }
+      }
+    } catch (_) {
+      message = 'Added $addedCount item${addedCount == 1 ? '' : 's'} (sync unavailable)';
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _copyMissingToClipboard({
+    required Recipe recipe,
+    required List<String> missingNames,
+  }) async {
+    final names = missingNames.map((s) => _prettyName(s).trim()).where((s) => s.isNotEmpty).toSet().toList()..sort();
+    if (names.isEmpty) return;
+
+    final title = _prettyName(recipe.getLocalizedName(_preferredLanguageKey()));
+    final lines = <String>['Missing ingredients for $title', ''];
+    for (final n in names) {
+      lines.add('- $n');
+    }
+
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Missing list copied')));
+  }
+
+  Future<void> _showMissingActions({
+    required Recipe recipe,
+    required List<String> missingNames,
+  }) async {
+    final names = missingNames.map((s) => _prettyName(s).trim()).where((s) => s.isNotEmpty).toSet().toList()..sort();
+    if (names.isEmpty) return;
+
+    final count = names.length;
+    final primaryLabel = count == 1 ? 'Add 1 item' : 'Add $count items';
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final title = _prettyName(recipe.getLocalizedName(_preferredLanguageKey()));
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Missing ingredients', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                Text(title, style: theme.textTheme.bodyMedium),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final n in names.take(12))
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(n),
+                        avatar: const Icon(Icons.add_shopping_cart_outlined, size: 16),
+                      ),
+                    if (names.length > 12)
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text('+${names.length - 12} more'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _addMissingToShoppingList(recipe: recipe, missingNames: names);
+                  },
+                  icon: const Icon(Icons.add_shopping_cart_outlined),
+                  label: Text(primaryLabel),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _copyMissingToClipboard(recipe: recipe, missingNames: names);
+                  },
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copy list'),
+                ),
+                const SizedBox(height: 10),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ShoppingListScreen()));
+                  },
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('Open shopping list'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _loadAssumeStaplesPref() async {
@@ -350,10 +513,12 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
         final have = (total - missingForCount).clamp(0, total);
 
         final missingPreviewCandidates = <String>[];
+        final missingNamesNorm = <String>[];
         for (final row in missingList) {
           final raw = _missingRowName(row);
           final norm = _normalizeIngredientName(raw);
           if (norm.isEmpty) continue;
+          missingNamesNorm.add(norm);
           if (assumeStaples && _pantryStaples.contains(norm)) continue;
 
           final display = _prettyName(raw).trim();
@@ -362,7 +527,8 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
         }
 
         // Stabilize ordering: API ordering can vary; sort for consistency.
-        final missingPreview = (missingPreviewCandidates.toSet().toList()..sort()).take(2).toList();
+        final missingDisplay = (missingPreviewCandidates.toSet().toList()..sort()).take(8).toList();
+        final missingPreview = missingDisplay.take(2).toList();
 
         _matchByRecipeId[recipe.recipeId] = {
           'have': have,
@@ -373,6 +539,8 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
               ? (missingStapleNames.toSet().toList()..sort())
               : const <String>[],
           'missing_preview': missingPreview,
+          'missing_display': missingDisplay,
+          'missing_names_norm': (missingNamesNorm.toSet().toList()..sort()),
         };
 
         if (!mounted) return;
@@ -402,6 +570,438 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
     }
 
     return s;
+  }
+
+  String? _absoluteImageUrl(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('/')) return '${Config.apiBaseUrl}$s';
+    return s;
+  }
+
+  List<String> _galleryUrls(Recipe recipe) {
+    final out = <String>[];
+    for (final u in recipe.imageUrls) {
+      final abs = _absoluteImageUrl(u);
+      if (abs != null && abs.isNotEmpty) out.add(abs);
+    }
+
+    if (out.isNotEmpty) return out;
+
+    final fallback = _imageUrl(recipe);
+    if (fallback != null && fallback.trim().isNotEmpty) return [fallback.trim()];
+    return const <String>[];
+  }
+
+  Widget _stackedThumbs(List<String> urls, int selectedIndex) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    if (urls.length < 2) return const SizedBox.shrink();
+
+    final count = urls.length >= 3 ? 3 : 2;
+    final thumbSize = 34.0;
+    final dx = 10.0;
+    final dy = 8.0;
+
+    List<int> idxs() {
+      final out = <int>[];
+      for (var i = 0; i < count; i++) {
+        out.add((selectedIndex + i) % urls.length);
+      }
+      return out;
+    }
+
+    final indices = idxs();
+
+    return SizedBox(
+      width: thumbSize + dx * (count - 1),
+      height: thumbSize + dy * (count - 1),
+      child: Stack(
+        children: [
+          for (var i = count - 1; i >= 0; i--)
+            Positioned(
+              right: dx * i,
+              top: dy * i,
+              child: Container(
+                width: thumbSize,
+                height: thumbSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: cs.surfaceContainerHighest.withAlpha(220),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: cs.onSurface.withAlpha(40),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SavoNetworkImage(
+                    url: urls[indices[i]],
+                    width: thumbSize,
+                    height: thumbSize,
+                    fit: BoxFit.cover,
+                    shape: SavoNetworkImageShape.roundedRect,
+                    borderRadius: BorderRadius.zero,
+                    backgroundColor: cs.surfaceContainerHighest,
+                    placeholderIcon: Icons.restaurant,
+                    errorIcon: Icons.restaurant,
+                    iconColor: cs.onSurfaceVariant,
+                    iconSize: 16,
+                  ),
+                ),
+              ),
+            ),
+          if (urls.length > count)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest.withAlpha(220),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '+${urls.length - count}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _missingChipsSection(Recipe recipe) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    // Prefer match-derived display list (accounts for assume-staples and pantry truth).
+    final m = _matchByRecipeId[recipe.recipeId];
+    final matchMissingCount = (m == null) ? null : (m['missing'] as int?);
+    final rawMatchDisplay = (m == null) ? null : m['missing_display'];
+
+    final backendMissing = recipe.missingIngredientNames
+        .map((s) => _prettyName(s))
+        .where((s) => s.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    final matchDisplay = <String>[];
+    if (rawMatchDisplay is List) {
+      for (final x in rawMatchDisplay) {
+        final s = _prettyName(x.toString()).trim();
+        if (s.isNotEmpty) matchDisplay.add(s);
+      }
+    }
+
+    final names = matchDisplay.isNotEmpty ? matchDisplay : backendMissing;
+    final missingCount = (matchMissingCount != null) ? matchMissingCount : names.length;
+
+    if (missingCount <= 0 || names.isEmpty) return const SizedBox.shrink();
+
+    final visible = names.take(6).toList();
+    final extra = (missingCount - visible.length).clamp(0, 999);
+
+    void openActions() {
+      fireAndForget(_showMissingActions(recipe: recipe, missingNames: names));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.remove_circle_outline, size: 18, color: cs.error),
+            const SizedBox(width: 6),
+            Text(
+              'Missing',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: cs.error,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () {
+                fireAndForget(_addMissingToShoppingList(recipe: recipe, missingNames: names));
+              },
+              icon: Icon(Icons.add_shopping_cart_outlined, size: 16, color: cs.error),
+              label: Text(
+                'Add all',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: cs.error,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                minimumSize: const Size(0, 0),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final n in visible)
+              ActionChip(
+                visualDensity: VisualDensity.compact,
+                backgroundColor: cs.errorContainer,
+                onPressed: openActions,
+                label: Text(
+                  n,
+                  style: theme.textTheme.labelMedium?.copyWith(color: cs.onErrorContainer),
+                ),
+                avatar: Icon(Icons.add_shopping_cart_outlined, size: 16, color: cs.onErrorContainer),
+              ),
+            if (extra > 0)
+              ActionChip(
+                visualDensity: VisualDensity.compact,
+                backgroundColor: cs.surfaceContainerHighest,
+                onPressed: openActions,
+                label: Text(
+                  '+$extra more',
+                  style: theme.textTheme.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Set<String> _missingNamesForRecipe(Recipe recipe) {
+    final missing = <String>{};
+    for (final n in recipe.missingIngredientNames) {
+      final norm = _normalizeIngredientName(n);
+      if (norm.isNotEmpty) missing.add(norm);
+    }
+
+    final m = _matchByRecipeId[recipe.recipeId];
+    final raw = (m == null) ? null : m['missing_names_norm'];
+    if (raw is List) {
+      for (final x in raw) {
+        final norm = _normalizeIngredientName(x.toString());
+        if (norm.isNotEmpty) missing.add(norm);
+      }
+    }
+    return missing;
+  }
+
+  Widget _ingredientChips(Recipe recipe) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    final ingredients = recipe.ingredientsUsed
+        .map((i) => i.canonicalName.replaceAll('_', ' ').trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    if (ingredients.isEmpty) return const SizedBox.shrink();
+
+    final missing = _missingNamesForRecipe(recipe);
+    final m = _matchByRecipeId[recipe.recipeId];
+    final hasEvidence = missing.isNotEmpty || m != null || recipe.pantryCoverage != null;
+    final chips = <Widget>[];
+
+    for (final raw in ingredients.take(6)) {
+      final label = _prettyName(raw);
+      final norm = _normalizeIngredientName(raw);
+      final isMissing = missing.contains(norm);
+
+        final bg = !hasEvidence
+          ? cs.surfaceContainerHighest
+          : isMissing
+            ? cs.errorContainer
+            : cs.tertiaryContainer;
+        final fg = !hasEvidence
+          ? cs.onSurfaceVariant
+          : isMissing
+            ? cs.onErrorContainer
+            : cs.onTertiaryContainer;
+        final icon = !hasEvidence
+          ? Icons.circle_outlined
+          : isMissing
+            ? Icons.add_shopping_cart_outlined
+            : Icons.check_circle_outline;
+
+      chips.add(
+        Chip(
+          visualDensity: VisualDensity.compact,
+          backgroundColor: bg,
+          label: Text(label, style: theme.textTheme.labelMedium?.copyWith(color: fg)),
+          avatar: Icon(icon, size: 16, color: fg),
+        ),
+      );
+    }
+
+    // If we have match data and there are more missing items, show a small summary chip.
+    final missingCount = (m == null) ? null : (m['missing'] as int?);
+    if (missingCount != null && missingCount > 0) {
+      chips.add(
+        Chip(
+          visualDensity: VisualDensity.compact,
+          backgroundColor: cs.surfaceContainerHighest,
+          label: Text(
+            '$missingCount missing',
+            style: theme.textTheme.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          avatar: Icon(Icons.remove_circle_outline, size: 16, color: cs.onSurfaceVariant),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: chips,
+    );
+  }
+
+  Widget _recipeImageHeader({
+    required Recipe recipe,
+    required bool hasVideo,
+    required List<RankedVideo> refs,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    final urls = _galleryUrls(recipe);
+    final selected = _carouselIndexByRecipeId[recipe.recipeId] ?? 0;
+    final safeSelected = (urls.isEmpty) ? 0 : (selected.clamp(0, urls.length - 1));
+    if (_carouselIndexByRecipeId[recipe.recipeId] != safeSelected) {
+      _carouselIndexByRecipeId[recipe.recipeId] = safeSelected;
+    }
+
+    return SizedBox(
+      height: 170,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (urls.isEmpty)
+            Container(
+              color: cs.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: Icon(Icons.restaurant, size: 44, color: cs.onSurfaceVariant),
+            )
+          else
+            PageView.builder(
+              key: PageStorageKey<String>('recipe_carousel_${recipe.recipeId}'),
+              itemCount: urls.length,
+              onPageChanged: (idx) {
+                setState(() {
+                  _carouselIndexByRecipeId[recipe.recipeId] = idx;
+                });
+              },
+              itemBuilder: (_, idx) {
+                return SavoNetworkImage(
+                  url: urls[idx],
+                  width: double.infinity,
+                  height: double.infinity,
+                  fit: BoxFit.cover,
+                  shape: SavoNetworkImageShape.roundedRect,
+                  borderRadius: BorderRadius.zero,
+                  backgroundColor: cs.surfaceContainerHighest,
+                  placeholderIcon: Icons.restaurant,
+                  errorIcon: Icons.restaurant,
+                  iconColor: cs.onSurfaceVariant,
+                  iconSize: 40,
+                );
+              },
+            ),
+          // Contrast overlay (do not block swipes/taps).
+          IgnorePointer(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    cs.onSurface.withAlpha(10),
+                    cs.onSurface.withAlpha(160),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (urls.length > 1)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IgnorePointer(
+                child: _stackedThumbs(urls, safeSelected),
+              ),
+            ),
+          if (urls.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 10,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withAlpha(210),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(urls.length, (i) {
+                      final isActive = i == safeSelected;
+                      return Container(
+                        width: isActive ? 10 : 6,
+                        height: 6,
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        decoration: BoxDecoration(
+                          color: isActive ? cs.primary : cs.onSurfaceVariant.withAlpha(160),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          if (hasVideo)
+            Positioned(
+              top: 8,
+              left: 8,
+              child: Material(
+                color: cs.surfaceContainerHighest.withAlpha(230),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: 'Watch video'
+                      '${refs.first.title.trim().isNotEmpty ? ": ${refs.first.title.trim()}" : ""}',
+                  onPressed: () async {
+                    final vid = refs.first.videoId.trim();
+                    if (vid.isEmpty) return;
+                    final uri = Uri.parse('https://www.youtube.com/watch?v=$vid');
+                    if (await canLaunchUrl(uri)) {
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  icon: Icon(Icons.play_circle_fill, color: cs.onSurfaceVariant),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -586,7 +1186,6 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                 final recipe = options[recipeIndex];
                 final title = _prettyName(recipe.getLocalizedName(lang));
                 final why = _whyItWorks(recipe);
-                final imageUrl = _imageUrl(recipe);
                 final refs = recipe.youtubeReferences;
                 final hasVideo = refs.isNotEmpty;
 
@@ -611,62 +1210,14 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        SizedBox(
-                          height: 150,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                                 SavoNetworkImage(
-                                   url: imageUrl,
-                                   width: double.infinity,
-                                   height: double.infinity,
-                                   fit: BoxFit.cover,
-                                   shape: SavoNetworkImageShape.roundedRect,
-                                   borderRadius: BorderRadius.zero,
-                                   backgroundColor: cs.surfaceContainerHighest,
-                                   placeholderIcon: Icons.restaurant,
-                                   errorIcon: Icons.restaurant,
-                                   iconColor: cs.onSurfaceVariant,
-                                   iconSize: 40,
-                                 ),
-                              if (hasVideo)
-                                Positioned(
-                                  top: 8,
-                                  left: 8,
-                                  child: Material(
-                                    color: cs.surfaceContainerHighest.withAlpha(230),
-                                    shape: const CircleBorder(),
-                                    child: IconButton(
-                                      tooltip: 'Watch video'
-                                          '${refs.first.title.trim().isNotEmpty ? ": ${refs.first.title.trim()}" : ""}',
-                                      onPressed: () async {
-                                        final vid = refs.first.videoId.trim();
-                                        if (vid.isEmpty) return;
-                                        final uri = Uri.parse('https://www.youtube.com/watch?v=$vid');
-                                        if (await canLaunchUrl(uri)) {
-                                          await launchUrl(uri, mode: LaunchMode.externalApplication);
-                                        }
-                                      },
-                                      icon: Icon(Icons.play_circle_fill, color: cs.onSurfaceVariant),
-                                    ),
-                                  ),
-                                ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      cs.onSurface.withAlpha(13),
-                                      cs.onSurface.withAlpha(140),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: 12,
-                                right: 12,
-                                bottom: 12,
+                        Stack(
+                          children: [
+                            _recipeImageHeader(recipe: recipe, hasVideo: hasVideo, refs: refs),
+                            Positioned(
+                              left: 12,
+                              right: 12,
+                              bottom: 12,
+                              child: IgnorePointer(
                                 child: Text(
                                   title,
                                   maxLines: 2,
@@ -677,33 +1228,45 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                                   ),
                                 ),
                               ),
-                              if (showStaplesUi && bestMatchRecipeId != null && recipe.recipeId == bestMatchRecipeId)
-                                Positioned(
-                                  top: 10,
-                                  right: 10,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: cs.surfaceContainerHighest.withAlpha(230),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Text(
-                                      'Best match',
-                                      style: theme.textTheme.labelSmall?.copyWith(
-                                        color: cs.onSurfaceVariant,
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                            ),
+                            if (showStaplesUi && bestMatchRecipeId != null && recipe.recipeId == bestMatchRecipeId)
+                              Positioned(
+                                top: 10,
+                                right: 10,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: cs.surfaceContainerHighest.withAlpha(230),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    'Best match',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: cs.onSurfaceVariant,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
                                 ),
-                            ],
-                          ),
+                              ),
+                          ],
+                        ),
+                        Builder(
+                          builder: (_) {
+                            final section = _missingChipsSection(recipe);
+                            if (section is SizedBox) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                              child: section,
+                            );
+                          },
                         ),
                         Padding(
                           padding: const EdgeInsets.all(12),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              _ingredientChips(recipe),
+                              if (recipe.ingredientsUsed.isNotEmpty) const SizedBox(height: 10),
                               Text(
                                 why,
                                 style: theme.textTheme.bodyMedium,
@@ -902,6 +1465,15 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
   }
 
   String? _imageUrl(Recipe recipe) {
+    if (recipe.imageUrls.isNotEmpty) {
+      final idx = (recipe.recipeId.hashCode).abs() % recipe.imageUrls.length;
+      final raw = recipe.imageUrls[idx].trim();
+      if (raw.isNotEmpty) {
+        if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+        return raw;
+      }
+    }
+
     final raw = (recipe.imageUrl ?? '').trim();
     if (raw.isNotEmpty) {
       if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';

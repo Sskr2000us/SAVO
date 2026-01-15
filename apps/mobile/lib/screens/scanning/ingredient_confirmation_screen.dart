@@ -6,6 +6,7 @@ import '../../services/cook_now_service.dart';
 import '../../services/entitlements_service.dart';
 import '../../models/profile_state.dart';
 import '../../widgets/savo_network_image.dart';
+import '../../widgets/cook_context_picker_sheet.dart';
 import '../../widgets/quantity_picker.dart';
 import '../recipe_options_screen.dart';
 
@@ -307,6 +308,28 @@ class _IngredientConfirmationScreenState
             final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
             if (!mounted) return;
             if (gate.allowed) {
+              final picked = await showCookContextPickerSheet(
+                context,
+                title: 'What are you cooking for?',
+              );
+              if (!mounted) return;
+              final dayType = picked?.dayType ?? inferDayType();
+              final mealType = picked?.mealType ?? inferMealType();
+
+              String contextTitle() {
+                final mt = mealType.isNotEmpty
+                    ? (mealType[0].toUpperCase() + mealType.substring(1))
+                    : 'Meals';
+                switch (dayType) {
+                  case 'holiday':
+                    return 'Holiday $mt ideas';
+                  case 'weekend':
+                    return 'Weekend $mt ideas';
+                  default:
+                    return '$mt ideas you can cook';
+                }
+              }
+
               final apiClient = Provider.of<ApiClient>(context, listen: false);
               final profileState = Provider.of<ProfileState>(context, listen: false);
               final service = CookNowService();
@@ -315,6 +338,8 @@ class _IngredientConfirmationScreenState
                 profileState: profileState,
                 maxOptions: 5,
                 avoidRecentRecipes: 3,
+                dayType: dayType,
+                mealType: mealType,
               );
 
               if (!mounted) return;
@@ -325,7 +350,7 @@ class _IngredientConfirmationScreenState
                     builder: (_) => RecipeOptionsScreen(
                       recipes: options,
                       showIngredientMatch: true,
-                      titleOverride: 'Meals you can cook tonight',
+                      titleOverride: contextTitle(),
                       skipSuggestionSessionGate: true,
                     ),
                   ),

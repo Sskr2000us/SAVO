@@ -145,7 +145,7 @@ class _LandingScreenState extends State<LandingScreen> {
                               textAlign: TextAlign.center,
                             ),
                             Text(
-                              'Scan groceries → get meals you can cook tonight',
+                              'Scan groceries → get 4–5 meal ideas you can cook',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 color: cs.onSurface.withAlpha(220),
                                 height: 1.35,
@@ -163,7 +163,7 @@ class _LandingScreenState extends State<LandingScreen> {
                             ),
                             const SizedBox(height: AppSpacing.md),
                             Text(
-                              'Confirm what you have, then pick a meal in minutes.',
+                              'Confirm what you have, choose Weekday/Weekend/Holiday + Breakfast/Lunch/Dinner, then pick a recipe in minutes.',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                 color: cs.onSurface.withAlpha(190),
                                 height: 1.45,
@@ -255,7 +255,12 @@ class _LandingScreenState extends State<LandingScreen> {
                             ),
                             const SizedBox(height: AppSpacing.xs),
                             Text(
-                              '• Get 3–5 meals you can cook tonight.',
+                              '• Get 4–5 meal ideas that match your moment.',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              '• Always based on your pantry + SAVO’s recipe inventory.',
                               style: theme.textTheme.bodyMedium,
                             ),
                             const SizedBox(height: AppSpacing.md),

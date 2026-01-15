@@ -426,9 +426,23 @@ class Recipe {
     final name = (recipe['recipe_name'] ?? 'Recipe').toString().trim();
     final cuisine = (recipe['cuisine'] ?? '').toString();
     final difficulty = (recipe['difficulty'] ?? 'easy').toString();
-    final imageUrl = (recipe['image_url'] ?? '').toString().trim().isEmpty
+    final imageUrls = <String>[];
+    final rawImageUrls = recipe['image_urls'] ?? recipe['imageUrls'];
+    if (rawImageUrls is List) {
+      for (final x in rawImageUrls) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty) imageUrls.add(s);
+      }
+    }
+
+    var imageUrl = (recipe['image_url'] ?? '').toString().trim().isEmpty
         ? null
         : (recipe['image_url'] ?? '').toString().trim();
+    if ((imageUrl ?? '').trim().isEmpty && imageUrls.isNotEmpty) {
+      imageUrl = imageUrls.first;
+    }
+
+    final rawVideoUrl = (recipe['video_url'] ?? '').toString().trim();
     final sd = (recipe['short_description'] ?? '').toString().trim();
 
     final serving = <String>[];
@@ -557,6 +571,7 @@ class Recipe {
       recipeId: rid,
       recipeName: localizedName,
       imageUrl: imageUrl,
+      imageUrls: imageUrls,
       shortDescription: sd.isEmpty ? null : sd,
       servingSuggestions: serving,
       cuisine: cuisine,
@@ -569,6 +584,7 @@ class Recipe {
       leftoverForecast: const {},
       chefTips: tips,
       culturalContext: cultural,
+      videoUrl: rawVideoUrl.isEmpty ? null : rawVideoUrl,
       pantryCoverage: pantryCoverage,
       missingIngredientNames: missingNames,
       trustSignals: trustSignals,
@@ -607,6 +623,7 @@ class Recipe {
       'recipe_id': recipeId,
       'recipe_name': recipeName,
       if (imageUrl != null) 'image_url': imageUrl,
+      if (imageUrls.isNotEmpty) 'image_urls': imageUrls,
       if (shortDescription != null) 'short_description': shortDescription,
       if (servingSuggestions.isNotEmpty) 'serving_suggestions': servingSuggestions,
       'cuisine': cuisine,

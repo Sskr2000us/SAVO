@@ -24,13 +24,32 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
 
   String _creativity = 'standard';
 
+  String _dayType = 'weekday';
+  String _mealType = 'dinner';
+
   bool _checkingSavedPlan = true;
   bool _hasSavedPlan = false;
 
   @override
   void initState() {
     super.initState();
+    _dayType = _inferDayType();
+    _mealType = _inferMealType();
     _checkSavedPlan();
+  }
+
+  String _inferDayType() {
+    final wd = DateTime.now().weekday;
+    // DateTime: Mon=1 ... Sun=7
+    if (wd == DateTime.saturday || wd == DateTime.sunday) return 'weekend';
+    return 'weekday';
+  }
+
+  String _inferMealType() {
+    final hour = DateTime.now().hour;
+    if (hour < 11) return 'breakfast';
+    if (hour < 16) return 'lunch';
+    return 'dinner';
   }
 
   Future<void> _checkSavedPlan() async {
@@ -131,6 +150,8 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
         maxOptions: 5,
         avoidRecentRecipes: 3,
         creativity: _creativity,
+        mealType: _mealType,
+        dayType: _dayType,
       );
 
       if (!mounted) return;
@@ -253,6 +274,94 @@ class _CookNowEntryScreenState extends State<CookNowEntryScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                Text(
+                  'When are you cooking?',
+                  style: theme.textTheme.titleSmall,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.center,
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Weekday'),
+                        selected: _dayType == 'weekday',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _dayType = 'weekday');
+                              },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Weekend'),
+                        selected: _dayType == 'weekend',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _dayType = 'weekend');
+                              },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Holiday'),
+                        selected: _dayType == 'holiday',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _dayType = 'holiday');
+                              },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.center,
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Breakfast'),
+                        selected: _mealType == 'breakfast',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _mealType = 'breakfast');
+                              },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Lunch'),
+                        selected: _mealType == 'lunch',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _mealType = 'lunch');
+                              },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Dinner'),
+                        selected: _mealType == 'dinner',
+                        onSelected: _generating
+                            ? null
+                            : (v) {
+                                if (!v) return;
+                                setState(() => _mealType = 'dinner');
+                              },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(

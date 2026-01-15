@@ -8,6 +8,7 @@ import '../services/entitlements_service.dart';
 import '../services/metrics_service.dart';
 import '../services/scanning_service.dart';
 import '../models/profile_state.dart';
+import '../widgets/cook_context_picker_sheet.dart';
 import 'recipe_options_screen.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
@@ -236,6 +237,14 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
         final gate = await EntitlementsService.instance.tryConsumeSuggestionSession();
         if (!mounted) return;
         if (gate.allowed) {
+          final picked = await showCookContextPickerSheet(
+            context,
+            title: 'What are you cooking for?',
+          );
+          if (!mounted) return;
+          final dayType = picked?.dayType ?? inferDayType();
+          final mealType = picked?.mealType ?? inferMealType();
+
           final apiClient = Provider.of<ApiClient>(context, listen: false);
           final profileState = Provider.of<ProfileState>(context, listen: false);
           final service = CookNowService();
@@ -245,6 +254,8 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
             profileState: profileState,
             maxOptions: 5,
             avoidRecentRecipes: 3,
+            dayType: dayType,
+            mealType: mealType,
           );
 
           if (!mounted) return;
@@ -255,7 +266,7 @@ class _PantryReviewScreenState extends State<PantryReviewScreen> {
                 builder: (_) => RecipeOptionsScreen(
                   recipes: options,
                   showIngredientMatch: true,
-                  titleOverride: 'Meals you can cook tonight',
+                  titleOverride: formatCookContextTitle(dayType: dayType, mealType: mealType),
                   skipSuggestionSessionGate: true,
                 ),
               ),
