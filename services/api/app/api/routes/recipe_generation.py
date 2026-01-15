@@ -183,56 +183,107 @@ def _pick_option_focus_pairs(
     if len(names) < 2:
         return []
 
-    # Randomize attempt order with a per-request seed.
-    rng = random.Random(str(uuid4()))
-    candidates = list(names)
-    rng.shuffle(candidates)
-
     engine = IngredientCombinationEngine()
+    expiring_set = set([(x or "").strip().lower() for x in (prefer_expiring or []) if str(x or "").strip()])
+    rng = random.Random(str(uuid4()))
+
+    def _cat(name: str):
+        try:
+            prof = engine.get_ingredient_profile(name)
+            return getattr(prof, "category", None)
+        except Exception:
+            return None
+
+    # Score all pairs among our candidate set.
+    candidates = list(names)
+    pair_scores: list[tuple[float, tuple[str, str]]] = []
+
+    for i in range(len(candidates)):
+        for j in range(i + 1, len(candidates)):
+            a = candidates[i]
+            b = candidates[j]
+            analysis = engine.analyze_combination([a, b], profile if isinstance(profile, dict) else {})
+            viable = bool(analysis.get("is_viable"))
+            synergy = float(analysis.get("synergy_score") or 0.0)
+            if not viable and synergy < 0.20:
+                continue
+
+            ca = _cat(a)
+            cb = _cat(b)
+            score = synergy
+
+            # Prefer "main ingredient" categories.
+            try:
+                low_value = {"spice", "herb", "acid", "fat", "sweetener"}
+                if ca is not None and str(getattr(ca, "value", ca)).lower() in low_value:
+                    score -= 0.35
+                if cb is not None and str(getattr(cb, "value", cb)).lower() in low_value:
+                    score -= 0.35
+            except Exception:
+                pass
+
+            # Prefer protein/legume + veg, then veg + starch/grain.
+            def _is(cat, nameset: set[str]) -> bool:
+                if cat is None:
+                    return False
+                v = str(getattr(cat, "value", cat)).lower()
+                return v in nameset
+
+            is_protein_like_a = _is(ca, {"protein", "legume"})
+            is_protein_like_b = _is(cb, {"protein", "legume"})
+            is_veg_a = _is(ca, {"vegetable"})
+            is_veg_b = _is(cb, {"vegetable"})
+            is_starch_like_a = _is(ca, {"starch", "grain"})
+            is_starch_like_b = _is(cb, {"starch", "grain"})
+
+            if (is_protein_like_a and is_veg_b) or (is_protein_like_b and is_veg_a):
+                score += 0.45
+            elif (is_veg_a and is_starch_like_b) or (is_veg_b and is_starch_like_a):
+                score += 0.35
+            elif (is_protein_like_a and is_starch_like_b) or (is_protein_like_b and is_starch_like_a):
+                score += 0.25
+            elif ca is not None and cb is not None and str(getattr(ca, "value", ca)) != str(getattr(cb, "value", cb)):
+                score += 0.12
+
+            # Prefer expiring ingredients as anchors.
+            if a in expiring_set:
+                score += 0.18
+            if b in expiring_set:
+                score += 0.18
+
+            # Tiny jitter to avoid deterministically picking the same pairs.
+            score += rng.random() * 0.03
+            pair_scores.append((score, (a, b)))
+
+    pair_scores.sort(key=lambda t: t[0], reverse=True)
 
     picked: list[tuple[str, str]] = []
-    used: set[str] = set()
+    usage: dict[str, int] = {}
+    max_per_ingredient = 2
 
-    # Try viable pairs first (synergy/balance), but don't overfit.
-    attempts = 0
-    max_attempts = 120
-    while len(picked) < int(count) and attempts < max_attempts:
-        attempts += 1
-        a = rng.choice(candidates)
-        b = rng.choice(candidates)
-        if a == b:
+    for _, (a, b) in pair_scores:
+        if len(picked) >= int(count):
+            break
+        ua = int(usage.get(a, 0))
+        ub = int(usage.get(b, 0))
+        if ua >= max_per_ingredient or ub >= max_per_ingredient:
             continue
-        # Avoid reusing the same main ingredient too often.
-        if a in used and b in used:
-            continue
-
-        analysis = engine.analyze_combination([a, b], profile if isinstance(profile, dict) else {})
-        viable = bool(analysis.get("is_viable"))
-        synergy = float(analysis.get("synergy_score") or 0.0)
-        if not viable and synergy < 0.25:
-            continue
-
         pair = tuple(sorted((a, b)))
         if pair in picked:
             continue
         picked.append(pair)
-        used.update(pair)
+        usage[a] = ua + 1
+        usage[b] = ub + 1
 
-    # If we still don't have enough, fill with distinct random pairs.
+    # If we still don't have enough (e.g., tiny pantry), fill with any remaining distinct pairs.
     if len(picked) < int(count):
-        for i in range(len(candidates)):
+        for _, (a, b) in pair_scores:
             if len(picked) >= int(count):
                 break
-            a = candidates[i]
-            for j in range(i + 1, len(candidates)):
-                if len(picked) >= int(count):
-                    break
-                b = candidates[j]
-                pair = tuple(sorted((a, b)))
-                if pair in picked:
-                    continue
-                picked.append(pair)
-                used.update(pair)
+            pair = tuple(sorted((a, b)))
+            if pair in picked:
+                continue
+            picked.append(pair)
 
     out: list[dict[str, Any]] = []
     for idx, (a, b) in enumerate(picked[: int(count)]):

@@ -21,6 +21,9 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   );
 
   bool _handling = false;
+  int _addedCount = 0;
+  DateTime? _nextScanAllowedAt;
+  final Map<String, DateTime> _recentlyScanned = <String, DateTime>{};
 
   static const List<String> _categoryOptions = [
     'vegetables',
@@ -70,10 +73,34 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
     super.dispose();
   }
 
+  void _finish() {
+    Navigator.pop(context, _addedCount > 0);
+  }
+
+  void _pruneRecentlyScanned() {
+    final now = DateTime.now();
+    final expired = <String>[];
+    _recentlyScanned.forEach((k, v) {
+      if (now.isAfter(v)) expired.add(k);
+    });
+    for (final k in expired) {
+      _recentlyScanned.remove(k);
+    }
+  }
+
   Future<void> _handleBarcode(String raw) async {
     if (_handling) return;
+    final allowAt = _nextScanAllowedAt;
+    if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
+
     final digits = raw.replaceAll(RegExp(r'\D'), '').trim();
     if (digits.isEmpty) return;
+
+    _pruneRecentlyScanned();
+    final until = _recentlyScanned[digits];
+    if (until != null && DateTime.now().isBefore(until)) {
+      return;
+    }
 
     setState(() => _handling = true);
 
@@ -386,8 +413,25 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
 
       if (!mounted) return;
       if (confirm == true) {
-        Navigator.pop(context, true);
+        _recentlyScanned[digits] = DateTime.now().add(const Duration(seconds: 6));
+        setState(() {
+          _addedCount += 1;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Saved. Added $_addedCount item${_addedCount == 1 ? '' : 's'}'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+
+        // Avoid instantly re-triggering if the same barcode stays in view.
+        _nextScanAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
+        setState(() => _handling = false);
       } else {
+        _nextScanAllowedAt = DateTime.now().add(const Duration(milliseconds: 650));
         setState(() => _handling = false);
       }
     } catch (e) {
@@ -395,6 +439,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Barcode scan failed: $e')),
       );
+      _nextScanAllowedAt = DateTime.now().add(const Duration(milliseconds: 900));
       setState(() => _handling = false);
     }
   }
@@ -411,7 +456,16 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Barcode Scan'),
+        leading: IconButton(
+          tooltip: 'Back',
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _finish,
+        ),
         actions: [
+          TextButton(
+            onPressed: _finish,
+            child: const Text('Done'),
+          ),
           IconButton(
             icon: const Icon(Icons.flash_on),
             onPressed: () => _controller.toggleTorch(),
@@ -427,6 +481,9 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
           MobileScanner(
             controller: _controller,
             onDetect: (capture) {
+              final allowAt = _nextScanAllowedAt;
+              if (allowAt != null && DateTime.now().isBefore(allowAt)) return;
+              if (_handling) return;
               final barcodes = capture.barcodes;
               if (barcodes.isEmpty) return;
               final raw = barcodes.first.rawValue;
@@ -450,7 +507,11 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      _handling ? 'Looking up barcode…' : 'Point camera at a barcode',
+                      _handling
+                          ? 'Looking up barcode…'
+                          : (_addedCount > 0
+                              ? 'Point camera at a barcode • Added: $_addedCount'
+                              : 'Point camera at a barcode'),
                       style: const TextStyle(color: Colors.white),
                     ),
                   ),
