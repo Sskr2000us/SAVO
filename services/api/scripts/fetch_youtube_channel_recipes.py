@@ -80,7 +80,27 @@ def _clean_recipe_title(title: str) -> str:
 def _yt_get(client: httpx.Client, endpoint: str, *, params: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{YOUTUBE_API}/{endpoint}"
     r = client.get(url, params=params, headers={"Accept": "application/json"})
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        # Avoid leaking the API key in exception messages.
+        req_url = str(r.request.url)
+        req_url = re.sub(r"([?&]key=)[^&]+", r"\1REDACTED", req_url)
+        detail = ""
+        try:
+            data = r.json()
+            if isinstance(data, dict):
+                err = data.get("error")
+                if isinstance(err, dict):
+                    msg = err.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        detail = f" Details: {msg.strip()}"
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"YouTube API request failed with HTTP {r.status_code} for endpoint '{endpoint}'."
+            f"{detail} URL={req_url}"
+        )
     data = r.json()
     if not isinstance(data, dict):
         raise ValueError(f"Unexpected response from {endpoint}")
@@ -140,6 +160,7 @@ def _fetch_channel_videos(
     api_key: str,
     channel_id: str,
     per_channel_limit: int,
+    order: str,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     page_token: Optional[str] = None
@@ -152,7 +173,7 @@ def _fetch_channel_videos(
                 "part": "snippet",
                 "channelId": channel_id,
                 "type": "video",
-                "order": "date",
+                "order": order,
                 "maxResults": 50,
                 "pageToken": page_token or "",
                 "key": api_key,
@@ -212,6 +233,17 @@ def main() -> int:
         help="Cuisine label to assign to these channel-derived entries",
     )
     parser.add_argument(
+        "--order",
+        default="viewCount",
+        choices=["date", "viewCount", "relevance", "rating", "title"],
+        help="YouTube search order to use per channel (default: viewCount for 'popular')",
+    )
+    parser.add_argument(
+        "--exclude-shorts",
+        action="store_true",
+        help="Drop videos that look like Shorts/non-recipe clips (title-based heuristic)",
+    )
+    parser.add_argument(
         "--api-key",
         default="",
         help="Optional YouTube Data API key. If omitted, uses YOUTUBE_API_KEY from environment/.env.",
@@ -239,6 +271,8 @@ def main() -> int:
     total_limit = max(1, int(args.limit or 1))
     per_channel_limit = max(1, int(args.per_channel_limit or 1))
     cuisine = str(args.cuisine or "Indian").strip() or "Indian"
+    order = str(args.order or "viewCount").strip() or "viewCount"
+    exclude_shorts = bool(args.exclude_shorts)
 
     channels = [str(c).strip() for c in (args.channel or []) if str(c).strip()]
     if not channels:
@@ -255,11 +289,28 @@ def main() -> int:
                 print(f"WARN: could not resolve channel: {ch}")
                 continue
 
-            vids = _fetch_channel_videos(client, api_key=api_key, channel_id=cid, per_channel_limit=per_channel_limit)
+            vids = _fetch_channel_videos(
+                client,
+                api_key=api_key,
+                channel_id=cid,
+                per_channel_limit=per_channel_limit,
+                order=order,
+            )
             for v in vids:
                 vid = str(v.get("video_id") or "").strip()
                 if not vid or vid in seen_video_ids:
                     continue
+
+                title = str(v.get("title") or "").strip().lower()
+                if exclude_shorts:
+                    # Simple best-effort filtering; avoids Shorts and obvious non-recipe content.
+                    if "#short" in title or "shorts" in title:
+                        continue
+                    if "trailer" in title or "promo" in title:
+                        continue
+                    if "live" in title and "cook" not in title and "recipe" not in title:
+                        continue
+
                 seen_video_ids.add(vid)
                 all_vids.append(v)
 

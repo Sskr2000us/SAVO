@@ -33,6 +33,7 @@ import argparse
 import csv
 import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -197,6 +198,13 @@ def _urlencode(value: str) -> str:
     )
 
 
+def _youtube_search_url(*, name_en: str, cuisine: str) -> str:
+    # We don't fetch videos at runtime; this provides a prebuilt link that the
+    # client can open directly.
+    q = _normalize_space(f"{name_en} {cuisine} recipe")
+    return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(q)}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build/validate SAVO recipe catalog")
     parser.add_argument("--in", dest="inputs", action="append", required=True, help="Input JSON file (array of recipes)")
@@ -212,6 +220,11 @@ def main() -> int:
         "--allow-short",
         action="store_true",
         help="Allow outputs smaller than target-count (useful for testing)",
+    )
+    parser.add_argument(
+        "--fill-missing-video-search",
+        action="store_true",
+        help="If a recipe has no video_url, set it to a YouTube search URL for the recipe name.",
     )
 
     args = parser.parse_args()
@@ -271,6 +284,9 @@ def main() -> int:
             vid = by_name or by_id
             if isinstance(vid, str) and vid.strip():
                 recipe["video_url"] = vid.strip()
+
+        if args.fill_missing_video_search and not (recipe.get("video_url") or "").strip():
+            recipe["video_url"] = _youtube_search_url(name_en=name_en, cuisine=cuisine)
 
         if args.add_image_urls:
             recipe["image_urls"] = _build_image_urls(name_en=name_en, cuisine=cuisine, count=3)

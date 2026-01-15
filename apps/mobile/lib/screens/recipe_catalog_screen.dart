@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import '../widgets/savo_network_image.dart';
 import '../widgets/savo_widgets.dart';
 import '../ui/ui_principles.dart';
+import '../config/app_config.dart';
 import 'recipe_detail_screen.dart';
 
 class RecipeCatalogScreen extends StatefulWidget {
@@ -192,9 +193,13 @@ class _RecipeCatalogScreenState extends State<RecipeCatalogScreen> {
   }
 
   String? _thumbFor(Recipe r) {
-    if (r.imageUrls.isNotEmpty) return r.imageUrls.first;
-    if ((r.imageUrl ?? '').trim().isNotEmpty) return r.imageUrl;
-    return null;
+    String? raw;
+    if (r.imageUrls.isNotEmpty) raw = r.imageUrls.first;
+    if (raw == null || raw.trim().isEmpty) raw = r.imageUrl;
+    raw = (raw ?? '').trim();
+    if (raw.isEmpty) return null;
+    if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+    return raw;
   }
 
   @override
