@@ -19,6 +19,8 @@ import json
 import os
 import random
 import re
+from pathlib import Path
+import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple, Literal
 from uuid import UUID, uuid4, uuid5
 
@@ -43,6 +45,76 @@ from app.core.media_storage import to_signed_url
 
 
 router = APIRouter()
+
+
+_CATALOG_CACHE: dict[str, Any] = {
+    "path": None,
+    "mtime": None,
+    "loaded_at": None,
+    "items": None,
+}
+
+
+def _find_catalog_path() -> Path:
+    """Locate ALL_RECIPES_COMPLETE.json by walking up from this file."""
+
+    start = Path(__file__).resolve()
+    cur = start
+    for _ in range(10):
+        candidate = cur.parent / "ALL_RECIPES_COMPLETE.json"
+        if candidate.exists():
+            return candidate
+        cur = cur.parent
+    # Fallback: repo root relative to services/api/app/api/routes/recipe_generation.py
+    return start.parents[5] / "ALL_RECIPES_COMPLETE.json"
+
+
+def _load_catalog_items() -> list[dict[str, Any]]:
+    """Load catalog file with a small in-process cache (best-effort)."""
+
+    path = _find_catalog_path()
+    if not path.exists():
+        return []
+
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+
+    cached_items = _CATALOG_CACHE.get("items")
+    if cached_items is not None and _CATALOG_CACHE.get("path") == str(path) and _CATALOG_CACHE.get("mtime") == mtime:
+        return cached_items
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            return []
+        items: list[dict[str, Any]] = [x for x in data if isinstance(x, dict)]
+        _CATALOG_CACHE.update(
+            {
+                "path": str(path),
+                "mtime": mtime,
+                "loaded_at": datetime.now(timezone.utc).isoformat(),
+                "items": items,
+            }
+        )
+        return items
+    except Exception:
+        return []
+
+
+def _build_image_urls(*, recipe_name: str, cuisine: str, count: int = 3) -> list[str]:
+    name = (recipe_name or "").strip() or "recipe"
+    c = (cuisine or "general").strip() or "general"
+    urls: list[str] = []
+    for seed in range(max(1, int(count))):
+        urls.append(
+            "/recipes/image/proxy"
+            f"?recipe_name={urllib.parse.quote_plus(name)}"
+            f"&cuisine={urllib.parse.quote_plus(c)}"
+            f"&seed={seed}"
+        )
+    return urls
 
 
 # Hard time budget for constrained generation. If exceeded, we fail closed to the
@@ -546,6 +618,7 @@ class CanonicalRecipe(BaseModel):
     recipe_id: str
     recipe_name: str
     image_url: Optional[str] = None
+    image_urls: List[str] = Field(default_factory=list)
     short_description: Optional[str] = None
     cuisine: str
     dietary_tags: List[str]
@@ -1404,6 +1477,170 @@ def _try_retrieve_recipe(
     return recipe, cov, missing_items
 
 
+def _catalog_recipe_name_en(row: dict[str, Any]) -> str:
+    rn = row.get("recipe_name")
+    if isinstance(rn, dict):
+        v = rn.get("en") or next((x for x in rn.values() if isinstance(x, str) and x.strip()), "")
+        return str(v or "").strip()
+    if isinstance(rn, str):
+        return rn.strip()
+    return ""
+
+
+def _catalog_ingredient_names(row: dict[str, Any]) -> list[str]:
+    ing = row.get("ingredients")
+    if not isinstance(ing, list):
+        return []
+    out: list[str] = []
+    for it in ing:
+        if isinstance(it, dict):
+            nm = (it.get("canonical_name") or it.get("name") or it.get("ingredient") or "").strip()
+            if nm:
+                out.append(nm)
+        elif isinstance(it, str) and it.strip():
+            out.append(it.strip())
+    return out
+
+
+def _try_retrieve_catalog_recipe(
+    *,
+    user_id: str,
+    constraints: LockedConstraints,
+    pantry_names: List[str],
+    serves: int,
+    seed: Optional[str] = None,
+    limit: int = 250,
+) -> Optional[Tuple[CanonicalRecipe, float, List[MissingIngredient]]]:
+    """Best-effort retrieval from ALL_RECIPES_COMPLETE.json.
+
+    This is intentionally lightweight: we match by cuisine + pantry coverage and return
+    a randomized pick among the top candidates to reduce repeats.
+    """
+
+    items = _load_catalog_items()
+    if not items:
+        return None
+
+    cuisine = (constraints.cuisine or "").strip().lower()
+    normalizer = get_normalizer()
+    pantry_set = set(pantry_names or [])
+
+    # Avoid recent returns (works if recipe_attempts persists recipe_id for catalog entries).
+    recent_ids: set[str] = set()
+    try:
+        db = get_db_client()
+        recent = (
+            db.table("recipe_attempts")
+            .select("recipe_id,created_at")
+            .eq("user_id", str(user_id))
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+        for r in (recent.data or []):
+            if isinstance(r, dict) and r.get("recipe_id"):
+                recent_ids.add(str(r.get("recipe_id")))
+    except Exception:
+        recent_ids = set()
+
+    candidates: list[Tuple[float, dict[str, Any], float, list[str]]] = []
+
+    # Cap scan cost.
+    scan = items[: max(50, int(limit))]
+    rng = random.Random(seed or str(uuid4()))
+    rng.shuffle(scan)
+
+    for row in scan:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("recipe_id") or "").strip()
+        if not rid or rid in recent_ids:
+            continue
+
+        rc = str(row.get("cuisine") or "").strip().lower()
+        if cuisine and rc and cuisine not in rc:
+            continue
+
+        name = _catalog_recipe_name_en(row)
+        if not name:
+            continue
+
+        raw_ing = _catalog_ingredient_names(row)
+        ing_names = [normalizer.normalize_name(x) for x in raw_ing if isinstance(x, str) and x.strip()]
+
+        if ing_names:
+            cov, missing = _pantry_coverage(pantry_names=pantry_names, ingredient_names=ing_names)
+            score = float(cov)
+        else:
+            # Many video-backed catalog items don't have structured ingredients.
+            # Use a weak signal: title contains pantry items.
+            title = name.lower()
+            hits = sum(1 for p in (list(pantry_set)[:40]) if p and p in title)
+            score = min(0.55, hits / 4.0) if hits else 0.0
+            missing = []
+
+        candidates.append((score, row, score, missing))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    best = float(candidates[0][0])
+    top = [c for c in candidates if float(c[0]) >= max(0.01, best - 0.05)]
+    pick = rng.choice(top[: min(25, len(top))])
+    _score, row, cov, missing_names = pick
+
+    rid = str(row.get("recipe_id") or str(uuid4()))
+    rcuisine = str(row.get("cuisine") or cuisine or "mixed").strip().lower() or "mixed"
+    difficulty = str(row.get("difficulty") or "easy").strip().lower() or "easy"
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = "easy"
+
+    steps: list[str] = []
+    instr = row.get("instructions")
+    if isinstance(instr, list):
+        steps = [str(x).strip() for x in instr if str(x).strip()]
+    elif isinstance(instr, str) and instr.strip():
+        steps = [s.strip() for s in instr.split("\n") if s.strip()]
+    if not steps:
+        steps = ["Follow the linked recipe/video instructions."]
+
+    ingredients: list[CanonicalIngredient] = []
+    for nm in (ing_names or [])[:12]:
+        ingredients.append(
+            CanonicalIngredient(
+                canonical_name=nm,
+                ingredient_id=_stable_ingredient_uuid(nm),
+                quantity=1,
+                unit="pieces",
+                optional=False,
+            )
+        )
+
+    recipe = CanonicalRecipe(
+        recipe_id=rid,
+        recipe_name=_catalog_recipe_name_en(row) or "Recipe",
+        cuisine=rcuisine,
+        dietary_tags=list(constraints.dietary or []),
+        prep_time_minutes=int(row.get("prep_time_minutes") or 30),
+        difficulty=difficulty,
+        ingredients=ingredients,
+        techniques=list(constraints.techniques_allowed or []),
+        steps=steps[:12],
+        serves=int(serves),
+        created_from="retrieved",
+        version="v1",
+    )
+
+    # Ensure rich images for every recipe.
+    recipe.image_urls = _build_image_urls(recipe_name=recipe.recipe_name, cuisine=recipe.cuisine, count=3)
+    if recipe.image_urls and not (recipe.image_url or "").strip():
+        recipe.image_url = recipe.image_urls[0]
+
+    missing_items = [MissingIngredient(canonical_name=m) for m in (missing_names or [])]
+    return recipe, float(cov or 0.0), missing_items
+
+
 def _generated_share_exceeded(*, user_id: str, window_days: int = 7, max_share: float = 0.20) -> bool:
     """Best-effort guard for generated<=20% using recent event_log history."""
     db = get_db_client()
@@ -1691,6 +1928,7 @@ async def generate_recipe(
     # and maximize novelty.
     retrieved = None
     if not force_generation:
+        # 1) DB recipes table (if present)
         retrieved = _try_retrieve_recipe(
             user_id=str(user_id),
             constraints=constraints,
@@ -1698,6 +1936,15 @@ async def generate_recipe(
             serves=req.serves,
             seed=attempt_id,
         )
+        # 2) Global catalog (ALL_RECIPES_COMPLETE.json)
+        if retrieved is None:
+            retrieved = _try_retrieve_catalog_recipe(
+                user_id=str(user_id),
+                constraints=constraints,
+                pantry_names=pantry_names,
+                serves=req.serves,
+                seed=attempt_id,
+            )
 
     assembled, coverage, missing = _assemble_recipe(
         pantry_names=pantry_names,
@@ -1729,6 +1976,15 @@ async def generate_recipe(
         missing_items = list(missing)
         mode = "assembled"
         reason = "pantry_match"
+
+    # Always attach image_urls for UI richness.
+    try:
+        if not getattr(recipe_obj, "image_urls", None):
+            recipe_obj.image_urls = _build_image_urls(recipe_name=recipe_obj.recipe_name, cuisine=recipe_obj.cuisine, count=3)
+        if recipe_obj.image_urls and not (recipe_obj.image_url or "").strip():
+            recipe_obj.image_url = recipe_obj.image_urls[0]
+    except Exception:
+        pass
 
     # Safety validation (hard guardrails)
     ok_safety, safety_violations = validate_recipe_safety(assembled.model_dump(), profile if isinstance(profile, dict) else {})
@@ -2047,19 +2303,24 @@ async def generate_recipe_options(
     req: RecipeGenerateOptionsRequest,
     user_id: str = Depends(get_current_user),
 ):
-    # Load profile + pantry truth
+    # Load profile + pantry truth (or request-provided inventory override).
     try:
         profile = await get_full_profile(str(user_id))
     except Exception:
         profile = {}
 
-    try:
-        pantry = await get_inventory(str(user_id), include_inactive=bool(req.include_inactive_inventory))
-    except Exception:
-        pantry = []
-
-    pantry_names = _extract_pantry_names(pantry if isinstance(pantry, list) else [])
-    expiring = _find_expiring_items(pantry if isinstance(pantry, list) else [])
+    override_names = _extract_inventory_override_names(req)
+    pantry: list[dict[str, Any]] = []
+    if override_names:
+        pantry_names = override_names
+        expiring = []
+    else:
+        try:
+            pantry = await get_inventory(str(user_id), include_inactive=bool(req.include_inactive_inventory))
+        except Exception:
+            pantry = []
+        pantry_names = _extract_pantry_names(pantry if isinstance(pantry, list) else [])
+        expiring = _find_expiring_items(pantry if isinstance(pantry, list) else [])
 
     constraints = _resolve_intent_to_constraints(req)
     constraints.ingredients_allowed = pantry_names
@@ -2077,8 +2338,54 @@ async def generate_recipe_options(
         expiring_names=expiring,
     )
 
-    # Prepare generation prompt
     count = max(1, min(int(req.count or 1), 8))
+
+    # Catalog-only mode (no LLM): return varied catalog picks.
+    if not bool(req.allow_generation):
+        options: list[RecipeGenerateResponse] = []
+        used_ids: set[str] = set()
+        for i in range(int(count)):
+            picked = _try_retrieve_catalog_recipe(
+                user_id=str(user_id),
+                constraints=constraints,
+                pantry_names=pantry_names,
+                serves=req.serves,
+                seed=f"{user_id}:{uuid4()}",
+            )
+            if not picked:
+                break
+            recipe_obj, pantry_cov, missing_items = picked
+            if str(recipe_obj.recipe_id) in used_ids:
+                continue
+            used_ids.add(str(recipe_obj.recipe_id))
+            trust = TrustSignals(
+                uses_what_you_have=float(pantry_cov or 0.0) >= preferred_threshold and len(missing_items) == 0,
+                estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
+                uses_expiring_items=bool(constraints.use_expiring_items and expiring),
+                adjustable_spice_level=True,
+            )
+            options.append(
+                RecipeGenerateResponse(
+                    recipe=recipe_obj,
+                    locked_constraints=constraints,
+                    pantry_coverage=float(pantry_cov or 0.0),
+                    missing_ingredients=list(missing_items or []),
+                    mode="retrieved",
+                    reason="catalog_match",
+                    trust_signals=trust,
+                )
+            )
+        if options:
+            target_language = _requested_translation_target(req)
+            i18n_list = await _translate_canonical_recipes_batch_i18n(
+                recipes=[o.recipe for o in options],
+                target_language=target_language,
+            )
+            for o, i18n in zip(options, i18n_list):
+                o.i18n = i18n
+            return RecipeGenerateOptionsResponse(options=options)
+
+    # Prepare generation prompt
     schema = _canonical_recipe_options_json_schema(count=count)
     try:
         client = get_reasoning_client()
