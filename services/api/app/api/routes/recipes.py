@@ -73,6 +73,39 @@ def _curated_food_image_url(*, recipe_name: str, cuisine: str, seed: int = 0) ->
     return f"{base}?w=1200&h=800&fit=crop&auto=format&fm=jpg&q=80"
 
 
+def _loremflickr_url(*, tags: str, lock: int) -> str:
+    # loremflickr supports comma-separated tags in the URL path.
+    t = (tags or "").strip().strip(",")
+    if not t:
+        t = "food"
+    # Keep tags bounded.
+    if len(t) > 160:
+        t = t[:160].strip(",")
+    l = int(lock or 0)
+    if l < 0:
+        l = 0
+    return f"https://loremflickr.com/1200/800/{t}?lock={l}"
+
+
+def _sanitize_query_to_tags(query: str) -> str:
+    # `build_llm_image_query` returns comma-separated tokens. Keep them URL-path safe.
+    q = (query or "").strip().lower()
+    parts = [p.strip() for p in q.split(",") if p.strip()]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        p = re.sub(r"[^a-z0-9]+", "-", p).strip("-")
+        if not p:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        cleaned.append(p)
+        if len(cleaned) >= 8:
+            break
+    return ",".join(cleaned) or "food"
+
+
 _CATALOG_CACHE: dict[str, Any] = {
     "path": None,
     "mtime": None,
@@ -1138,23 +1171,47 @@ async def proxy_recipe_image(
     if seed > 20:
         seed = 20
 
-    upstream_url = _curated_food_image_url(recipe_name=name, cuisine=cuisine_clean, seed=seed)
+    # Build query terms (LLM best-effort; deterministic fallback when LLM unavailable).
+    query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_clean, ingredients=None)
+    tags = _sanitize_query_to_tags(query)
+
+    # Deterministic lock for loremflickr.
+    lock_key = f"{name}|{cuisine_clean}|{seed}".encode("utf-8", errors="ignore")
+    lock = int(hashlib.sha256(lock_key).hexdigest()[:8], 16) % 100000
+
+    upstream_candidates = [
+        _loremflickr_url(tags=tags, lock=lock),
+        # Last-resort: always-available curated image.
+        _curated_food_image_url(recipe_name=name, cuisine=cuisine_clean, seed=seed),
+    ]
 
     timeout = httpx.Timeout(8.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        try:
-            resp = await client.get(
-                upstream_url,
-                headers={
-                    "Accept": "image/*",
-                    "User-Agent": "SAVO-ImageProxy/1.0",
-                },
-            )
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to fetch upstream image: {e}")
+    def _looks_like_image(resp: httpx.Response) -> bool:
+        ct = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        return ct.startswith("image/") and bool(resp.content)
 
-    if resp.status_code >= 400 or not resp.content:
-        raise HTTPException(status_code=502, detail="Upstream image provider returned an error")
+    resp: httpx.Response | None = None
+    last_err: str | None = None
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        for upstream_url in upstream_candidates:
+            try:
+                r = await client.get(
+                    upstream_url,
+                    headers={
+                        "Accept": "image/*",
+                        "User-Agent": "SAVO-ImageProxy/1.0",
+                    },
+                )
+                if r.status_code < 400 and _looks_like_image(r):
+                    resp = r
+                    break
+                last_err = f"upstream {r.status_code} ({upstream_url})"
+            except Exception as e:
+                last_err = str(e)
+                continue
+
+    if resp is None:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch upstream image: {last_err or 'unknown'}")
 
     content_type = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip() or "image/jpeg"
     headers = {
