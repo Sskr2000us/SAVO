@@ -490,6 +490,27 @@ class RecipeGenerateRequest(BaseModel):
     include_inactive_inventory: bool = Field(default=False)
     use_expiring_items: bool = Field(default=False)
     spice_level: Optional[str] = Field(default=None)
+    # Optional override: provide inventory explicitly (e.g. from a scan/selection flow)
+    # to avoid a DB round-trip and to support "inventory-first" generation.
+    # Supported shapes:
+    # - {"available_ingredients": ["tomato", "onion"]}
+    # - {"items": [{"canonical_name": "tomato"}, ...]}
+    inventory: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional inventory override: {'available_ingredients': [...]} or {'items': [...]}.",
+    )
+    available_ingredients: List[str] = Field(
+        default_factory=list,
+        description="Optional convenience list of ingredient names (same as inventory.available_ingredients).",
+    )
+    allow_generation: bool = Field(
+        default=True,
+        description="If false, never call the LLM; only retrieved/assembled recipes are returned.",
+    )
+    request_text_forces_generation: bool = Field(
+        default=True,
+        description="If true, request_text will prefer LLM generation even if pantry coverage is high.",
+    )
     output_language: Optional[str] = Field(
         default=None,
         description="Preferred output language (BCP-47-ish, e.g. 'en', 'hi', 'te'). Used for best-effort bilingual fields.",
@@ -941,6 +962,41 @@ def _extract_pantry_names(pantry: List[Dict[str, Any]]) -> List[str]:
             continue
         out.append(normalizer.normalize_name(nm))
     # stable order for determinism
+    return sorted({x for x in out if x})
+
+
+def _extract_inventory_override_names(req: RecipeGenerateRequest) -> List[str]:
+    """Extract an explicit inventory list from the request (if provided).
+
+    Returns a normalized, de-duped, sorted list of ingredient canonical names.
+    """
+
+    normalizer = get_normalizer()
+    raw: list[str] = []
+
+    if isinstance(getattr(req, "available_ingredients", None), list) and req.available_ingredients:
+        for x in req.available_ingredients:
+            if isinstance(x, str) and x.strip():
+                raw.append(x.strip())
+
+    inv = getattr(req, "inventory", None)
+    if isinstance(inv, dict):
+        avail = inv.get("available_ingredients")
+        if isinstance(avail, list):
+            for x in avail:
+                if isinstance(x, str) and x.strip():
+                    raw.append(x.strip())
+
+        items = inv.get("items")
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                nm = (it.get("canonical_name") or it.get("display_name") or it.get("name") or "").strip()
+                if nm:
+                    raw.append(nm)
+
+    out = [normalizer.normalize_name(x) for x in raw if isinstance(x, str) and x.strip()]
     return sorted({x for x in out if x})
 
 
@@ -1593,19 +1649,24 @@ async def generate_recipe(
     req: RecipeGenerateRequest,
     user_id: str = Depends(get_current_user),
 ):
-    # Load profile + pantry truth
+    # Load profile + pantry truth (or request-provided inventory override).
     try:
         profile = await get_full_profile(str(user_id))
     except Exception:
         profile = {}
 
-    try:
-        pantry = await get_inventory(str(user_id), include_inactive=bool(req.include_inactive_inventory))
-    except Exception:
-        pantry = []
-
-    pantry_names = _extract_pantry_names(pantry if isinstance(pantry, list) else [])
-    expiring = _find_expiring_items(pantry if isinstance(pantry, list) else [])
+    override_names = _extract_inventory_override_names(req)
+    pantry: list[dict[str, Any]] = []
+    if override_names:
+        pantry_names = override_names
+        expiring = []
+    else:
+        try:
+            pantry = await get_inventory(str(user_id), include_inactive=bool(req.include_inactive_inventory))
+        except Exception:
+            pantry = []
+        pantry_names = _extract_pantry_names(pantry if isinstance(pantry, list) else [])
+        expiring = _find_expiring_items(pantry if isinstance(pantry, list) else [])
 
     constraints = _resolve_intent_to_constraints(req)
     constraints.ingredients_allowed = pantry_names
@@ -1681,10 +1742,17 @@ async def generate_recipe(
     ok_safety, safety_violations = validate_recipe_safety(recipe_obj.model_dump(), profile if isinstance(profile, dict) else {})
     safety_hint = " ".join(safety_violations)[:500] if not ok_safety else ""
 
-    # If the user explicitly asked for something (request_text), prefer generating a fresh recipe.
-    # Deterministic retrieval/assembly tends to feel repetitive even with good pantry coverage.
+    # If request_text_forces_generation is enabled, a free-form request prefers a fresh recipe.
     has_request_text = bool((req.request_text or "").strip())
-    needs_generation = force_generation or has_request_text or (pantry_cov < preferred_threshold) or (not ok_safety)
+    needs_generation = (
+        force_generation
+        or (has_request_text and bool(req.request_text_forces_generation))
+        or (pantry_cov < preferred_threshold)
+        or (not ok_safety)
+    )
+
+    if not bool(req.allow_generation):
+        needs_generation = False
 
     if needs_generation:
         # Enforce distribution target best-effort (generated <= 20%).
