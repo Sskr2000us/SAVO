@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import asyncio
+import json
 import os
 import random
 import re
@@ -37,6 +38,7 @@ from app.core.safety_constraints import (
 from app.core.llm_client import get_reasoning_client
 from app.core.llm_utils import generate_json_with_retries
 from app.core.cultural_intelligence import build_cultural_intelligence_prompt
+from app.core.ingredient_combinations import IngredientCombinationEngine
 
 
 router = APIRouter()
@@ -92,6 +94,156 @@ def _pick_cultural_focus_ingredients(*, pantry_names: list[str], expiring: list[
         _add(n)
 
     return chosen[:8]
+
+
+def _best_effort_recent_recipe_avoid_list(*, user_id: str, limit: int = 18) -> Dict[str, List[str]]:
+    """Return a small list of recent recipe names/ids to avoid repeating.
+
+    Uses `recipe_attempts` as best-effort memory. Never raises.
+    """
+
+    try:
+        db = get_db_client()
+        res = (
+            db.table("recipe_attempts")
+            .select("recipe_id,recipe")
+            .eq("user_id", str(user_id))
+            .order("created_at", desc=True)
+            .limit(min(int(limit), 40))
+            .execute()
+        )
+        rows = res.data or []
+    except Exception:
+        rows = []
+
+    names: list[str] = []
+    ids: list[str] = []
+    seen_names: set[str] = set()
+    seen_ids: set[str] = set()
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rid = (r.get("recipe_id") or "").strip()
+        if rid and rid not in seen_ids:
+            seen_ids.add(rid)
+            ids.append(rid)
+
+        rec = r.get("recipe")
+        if isinstance(rec, dict):
+            nm = (rec.get("recipe_name") or rec.get("name") or "").strip().lower()
+            if nm and nm not in seen_names:
+                seen_names.add(nm)
+                names.append(nm)
+
+        if len(names) >= int(limit) and len(ids) >= int(limit):
+            break
+
+    return {"recipe_names": names[: int(limit)], "recipe_ids": ids[: int(limit)]}
+
+
+def _pick_option_focus_pairs(
+    *,
+    pantry_context: list[dict[str, Any]],
+    profile: dict[str, Any],
+    count: int,
+    prefer_expiring: list[str],
+) -> list[dict[str, Any]]:
+    """Pick per-option "main ingredient" pairs.
+
+    Goal: ensure the LLM has concrete anchors so it doesn't keep producing the
+    same generic dish. Best-effort; never raises.
+    """
+
+    # Start from pantry_context because it's already sorted by expiry/quantity.
+    names: list[str] = []
+    ids_by_name: dict[str, str] = {}
+    for row in pantry_context or []:
+        if not isinstance(row, dict):
+            continue
+        nm = (row.get("canonical_name") or "").strip().lower()
+        if not nm:
+            continue
+        if nm in ids_by_name:
+            continue
+        names.append(nm)
+        ids_by_name[nm] = str(row.get("ingredient_id") or _stable_ingredient_uuid(nm))
+        if len(names) >= 28:
+            break
+
+    # If pantry_context is empty, we fall back to prefer_expiring (names only).
+    if not names:
+        for n in (prefer_expiring or [])[:20]:
+            nm = (n or "").strip().lower()
+            if not nm or nm in ids_by_name:
+                continue
+            names.append(nm)
+            ids_by_name[nm] = _stable_ingredient_uuid(nm)
+
+    if len(names) < 2:
+        return []
+
+    # Randomize attempt order with a per-request seed.
+    rng = random.Random(str(uuid4()))
+    candidates = list(names)
+    rng.shuffle(candidates)
+
+    engine = IngredientCombinationEngine()
+
+    picked: list[tuple[str, str]] = []
+    used: set[str] = set()
+
+    # Try viable pairs first (synergy/balance), but don't overfit.
+    attempts = 0
+    max_attempts = 120
+    while len(picked) < int(count) and attempts < max_attempts:
+        attempts += 1
+        a = rng.choice(candidates)
+        b = rng.choice(candidates)
+        if a == b:
+            continue
+        # Avoid reusing the same main ingredient too often.
+        if a in used and b in used:
+            continue
+
+        analysis = engine.analyze_combination([a, b], profile if isinstance(profile, dict) else {})
+        viable = bool(analysis.get("is_viable"))
+        synergy = float(analysis.get("synergy_score") or 0.0)
+        if not viable and synergy < 0.25:
+            continue
+
+        pair = tuple(sorted((a, b)))
+        if pair in picked:
+            continue
+        picked.append(pair)
+        used.update(pair)
+
+    # If we still don't have enough, fill with distinct random pairs.
+    if len(picked) < int(count):
+        for i in range(len(candidates)):
+            if len(picked) >= int(count):
+                break
+            a = candidates[i]
+            for j in range(i + 1, len(candidates)):
+                if len(picked) >= int(count):
+                    break
+                b = candidates[j]
+                pair = tuple(sorted((a, b)))
+                if pair in picked:
+                    continue
+                picked.append(pair)
+                used.update(pair)
+
+    out: list[dict[str, Any]] = []
+    for idx, (a, b) in enumerate(picked[: int(count)]):
+        out.append(
+            {
+                "option_index": idx + 1,
+                "main_ingredients": [a, b],
+                "main_ingredient_ids": [ids_by_name.get(a) or _stable_ingredient_uuid(a), ids_by_name.get(b) or _stable_ingredient_uuid(b)],
+            }
+        )
+    return out
 
 
 def _now_iso() -> str:
@@ -1334,6 +1486,13 @@ async def generate_recipe(
             prefer_expiring_items=bool(constraints.use_expiring_items),
             expiring_names=expiring,
         )
+        recent_avoid = _best_effort_recent_recipe_avoid_list(user_id=str(user_id), limit=12)
+        focus_pair = _pick_option_focus_pairs(
+            pantry_context=pantry_context,
+            profile=profile if isinstance(profile, dict) else {},
+            count=1,
+            prefer_expiring=expiring,
+        )
         pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
         safety_constraints_text = {
             "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
@@ -1348,6 +1507,8 @@ async def generate_recipe(
         ).strip()
 
         prompt = {
+            "request_text": (req.request_text or ""),
+            "today_utc": _now_iso(),
             "locked_constraints": constraints.model_dump(),
             "family_profile": family_profile_compact,
             "safety_constraints": safety_constraints_text,
@@ -1356,6 +1517,8 @@ async def generate_recipe(
             "pantry_image_signals": pantry_image_signals,
             "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
             "expiring_items": expiring,
+            "avoid_recent": recent_avoid,
+            "main_ingredient_focus": (focus_pair[0] if isinstance(focus_pair, list) and focus_pair else None),
             "preferred_pantry_coverage_threshold": preferred_threshold,
             "serves": int(req.serves),
             "creative_intent": bool(force_generation),
@@ -1393,22 +1556,26 @@ async def generate_recipe(
                                 "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
                                 "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
                                 "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
+                                "If main_ingredient_focus is provided, you MUST treat those main_ingredients as the centerpiece (both must appear as non-optional ingredients). "
+                                "You MUST avoid repeating any recipe_names or recipe_ids listed in avoid_recent. "
                                 "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
                                 "Prefer a specific named dish style appropriate to the cuisine (including sub-region if relevant). "
                                 f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
                                 "Return JSON only that matches the schema." 
                             ),
                         },
-                        {"role": "user", "content": str(prompt)},
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                     ],
                     schema=schema,
                     # For creative requests, prioritize speed. If generation fails,
                     # we fail closed to assembled.
-                    max_attempts=2,
+                    max_attempts=3,
                     repair_hint="constrained recipe json",
                     mode_hint="recipe",
+                    temperature=0.85 if force_generation else 0.70,
                     # Encourage novelty while schema + validators keep structure/safety tight.
-                    presence_penalty=0.4 if force_generation else None,
+                    presence_penalty=0.5 if force_generation else 0.2,
+                    frequency_penalty=0.10 if force_generation else 0.05,
                 ),
                 timeout=budget_seconds,
             )
@@ -1603,6 +1770,13 @@ async def generate_recipe_options(
         prefer_expiring_items=bool(constraints.use_expiring_items),
         expiring_names=expiring,
     )
+    recent_avoid = _best_effort_recent_recipe_avoid_list(user_id=str(user_id), limit=14)
+    option_focus = _pick_option_focus_pairs(
+        pantry_context=pantry_context,
+        profile=profile if isinstance(profile, dict) else {},
+        count=int(count),
+        prefer_expiring=expiring,
+    )
     pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
     safety_constraints_text = {
         "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
@@ -1617,6 +1791,8 @@ async def generate_recipe_options(
     ).strip()
 
     prompt = {
+        "request_text": (req.request_text or ""),
+        "today_utc": _now_iso(),
         "locked_constraints": constraints.model_dump(),
         "family_profile": family_profile_compact,
         "safety_constraints": safety_constraints_text,
@@ -1625,9 +1801,11 @@ async def generate_recipe_options(
         "pantry_image_signals": pantry_image_signals,
         "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
         "expiring_items": expiring,
+        "avoid_recent": recent_avoid,
         "preferred_pantry_coverage_threshold": preferred_threshold,
         "serves": int(req.serves),
         "creative_intent": bool(force_generation),
+        "option_focus_pairs": option_focus,
         "cultural_focus_ingredients": focus_ingredients,
         "option_count": int(count),
         "diversity_rules": [
@@ -1636,6 +1814,9 @@ async def generate_recipe_options(
             "vary_dish_type_and_primary_technique_across_options",
             "avoid_generic_names_like_pantry_bowl",
             "keep_each_recipe_compact_ingredients<=12_steps<=7",
+            "use_option_focus_pairs_in_order_as_main_ingredients",
+            "each_option_must_use_both_main_ingredients_as_non_optional",
+            "do_not_repeat_any_recipe_in_avoid_recent",
         ],
         "hard_constraints": [
             "only_pantry_available_ingredients_or_explicitly_marked_missing",
@@ -1688,6 +1869,9 @@ async def generate_recipe_options(
                             "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
                             "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
                             "Return a DIVERSE set of options; do not repeat the same dish with minor variations. "
+                            "If option_focus_pairs is provided, you MUST return recipes in the SAME order as option_focus_pairs and "
+                            "treat each pair as the MAIN ingredients (must be present as non-optional ingredients). "
+                            "You MUST avoid repeating any recipe_names or recipe_ids listed in avoid_recent. "
                             "Keep each option compact: steps <= 6, ingredient list <= 10. "
                             "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
                             "Return BETWEEN 3 and option_count recipes if possible; do not fail the whole response if you cannot reach option_count. "
@@ -1695,13 +1879,15 @@ async def generate_recipe_options(
                             "Return JSON only that matches the schema."
                         ),
                     },
-                    {"role": "user", "content": str(prompt)},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 schema=schema,
                 max_attempts=2,
                 repair_hint="constrained recipe options json",
                 mode_hint="recipe",
+                temperature=0.85 if force_generation else 0.70,
                 presence_penalty=0.5 if force_generation else 0.2,
+                frequency_penalty=0.15 if force_generation else 0.05,
             ),
             timeout=budget_seconds,
         )
@@ -1712,8 +1898,10 @@ async def generate_recipe_options(
 
         options: list[RecipeGenerateResponse] = []
         seen_names: set[str] = set()
+        recent_names = set((recent_avoid.get("recipe_names") or [])) if isinstance(recent_avoid, dict) else set()
+        recent_ids = set((recent_avoid.get("recipe_ids") or [])) if isinstance(recent_avoid, dict) else set()
 
-        for item in raw_recipes:
+        for idx, item in enumerate(raw_recipes):
             if not isinstance(item, dict):
                 continue
 
@@ -1738,6 +1926,10 @@ async def generate_recipe_options(
             nm = (recipe_obj.recipe_name or "").strip().lower()
             if not nm or nm in seen_names:
                 continue
+            if nm in recent_names:
+                continue
+            if str(recipe_obj.recipe_id or "").strip() in recent_ids:
+                continue
             seen_names.add(nm)
 
             ing_ids: List[str] = []
@@ -1747,6 +1939,18 @@ async def generate_recipe_options(
                         ing_ids.append(str(it.get("ingredient_id")))
             except Exception:
                 ing_ids = []
+
+            # Enforce the 2-item "main ingredient" focus when we have a blueprint.
+            if isinstance(option_focus, list) and idx < len(option_focus):
+                focus = option_focus[idx]
+                if isinstance(focus, dict):
+                    focus_ids = focus.get("main_ingredient_ids")
+                    if isinstance(focus_ids, list) and len(focus_ids) >= 2:
+                        focus_ids_s = [str(x) for x in focus_ids if str(x).strip()]
+                        if focus_ids_s:
+                            matches = len(set(ing_ids) & set(focus_ids_s))
+                            if matches < 2:
+                                continue
 
             pantry_cov, missing_items = _pantry_coverage_by_id(
                 pantry_id_to_name=pantry_id_to_name,
