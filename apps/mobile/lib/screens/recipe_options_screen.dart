@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/planning.dart';
+import '../models/youtube.dart';
 import '../models/inventory.dart';
 import '../models/profile_state.dart';
 import '../config/app_config.dart';
