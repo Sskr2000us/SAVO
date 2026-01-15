@@ -1492,8 +1492,10 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
 
     final name = recipe.getLocalizedName(_preferredLanguageKey()).trim();
     if (name.isEmpty) return null;
-    final encoded = Uri.encodeComponent(name);
-    return 'https://source.unsplash.com/featured/?food,$encoded';
+    final cuisine = recipe.cuisine.trim().isEmpty ? 'general' : recipe.cuisine.trim();
+    final url =
+        '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+    return '${Config.apiBaseUrl}$url';
   }
 }
 

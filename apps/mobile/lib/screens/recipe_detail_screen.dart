@@ -190,8 +190,10 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     final name = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
     if (name.isEmpty) return null;
-    final encoded = Uri.encodeComponent(name);
-    return 'https://source.unsplash.com/featured/?food,$encoded';
+    final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+    final url =
+        '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+    return '${Config.apiBaseUrl}$url';
   }
 
   String? _bestEffortRecipeImageUrlVariant(int seed) {
@@ -219,10 +221,14 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       // ignore
     }
 
-    // Unsplash supports sig to vary the random image.
+    // Legacy Unsplash Source URLs are unreliable; prefer our proxy for variants.
     if (base.contains('source.unsplash.com')) {
-      final joiner = base.contains('?') ? '&' : '?';
-      return '$base${joiner}sig=$seed';
+      final name = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
+      if (name.isEmpty) return base;
+      final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+      final url =
+          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}&seed=$seed';
+      return '${Config.apiBaseUrl}$url';
     }
 
     return base;

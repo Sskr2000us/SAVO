@@ -72,8 +72,10 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
 
     final name = widget.recipe.getLocalizedName(_preferredLanguageKey(context)).trim();
     if (name.isEmpty) return null;
-    final encoded = Uri.encodeComponent(name);
-    return 'https://source.unsplash.com/featured/?food,$encoded';
+    final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+    final url =
+      '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+    return '${Config.apiBaseUrl}$url';
   }
 
   static String _normalizeIngredientName(String input) {

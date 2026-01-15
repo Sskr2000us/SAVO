@@ -719,22 +719,15 @@ class _RecipeCardState extends State<_RecipeCard> {
     final fromPlan = _absoluteImageUrl(widget.recipe.imageUrl);
     if (fromPlan != null) return fromPlan;
 
-    // Flutter web: avoid Unsplash CORS by using our backend proxy.
-    if (kIsWeb) {
-      final name = _sanitizeTitle(widget.recipe.getLocalizedName(_preferredLanguageKey())).trim();
-      if (name.isEmpty) return null;
-      final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
-      final url =
-          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
-      return '${Config.apiBaseUrl}$url';
-    }
-
+    // Use our backend proxy everywhere (web avoids CORS; mobile avoids unreliable Unsplash Source).
     final name = _sanitizeTitle(widget.recipe.getLocalizedName(_preferredLanguageKey())).trim();
     if (name.isEmpty) {
-      return 'https://source.unsplash.com/featured/?food';
+      return '${Config.apiBaseUrl}/recipes/image/proxy?recipe_name=food&cuisine=general';
     }
-    final encoded = Uri.encodeComponent(name);
-    return 'https://source.unsplash.com/featured/?food,$encoded';
+    final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+    final url =
+        '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+    return '${Config.apiBaseUrl}$url';
   }
 
   @override
