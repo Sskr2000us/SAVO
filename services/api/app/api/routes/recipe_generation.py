@@ -1790,7 +1790,36 @@ def _assemble_recipe(
 
     missing_items = [MissingIngredient(canonical_name=m) for m in missing]
 
-    recipe_name = f"{cuisine.title()} Pantry Bowl" if cuisine != "mixed" else "Pantry Bowl"
+    def _pretty_title(v: str) -> str:
+        return (
+            (v or "")
+            .replace("_", " ")
+            .replace("-", " ")
+            .strip()
+            .title()
+        )
+
+    # Pick 1-2 headline ingredients for a non-generic title.
+    boring = {
+        "salt",
+        "pepper",
+        "black pepper",
+        "oil",
+        "olive oil",
+        "olive_oil",
+        "butter",
+        "water",
+        "sugar",
+        "flour",
+    }
+    headline_pool = [c for c in chosen if c and c.strip().lower() not in boring]
+    if len(headline_pool) < 2:
+        headline_pool = list(chosen)
+
+    head = [_pretty_title(x) for x in headline_pool[:2] if _pretty_title(x)]
+    head_text = " & ".join(head) if head else "Skillet"
+    cuisine_prefix = (cuisine.title() + " ") if cuisine and cuisine != "mixed" else ""
+    recipe_name = f"Quick {cuisine_prefix}{head_text} Skillet".strip()
     steps = [
         "Prep ingredients (wash, chop as needed).",
         "Saute aromatics in a pan with oil until fragrant.",
@@ -1804,7 +1833,7 @@ def _assemble_recipe(
         recipe_id=str(uuid4()),
         recipe_name=recipe_name,
         short_description=(
-            f"A quick {cuisine} pantry recipe built around what you already have. "
+            f"A quick, weeknight-friendly {cuisine_prefix.strip() or 'home-style'} skillet centered on {head_text}. "
             "Taste and adjust seasoning as you go."
         ),
         cuisine=cuisine,
@@ -1907,6 +1936,91 @@ def _canonical_recipe_options_json_schema(*, count: int) -> Dict[str, Any]:
             }
         },
     }
+
+
+_GENERIC_RECIPE_NAME_RE = re.compile(
+    r"\b(pantry\s*(bowl|recipe|meal)|test\s*recipe|sample\s*recipe)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _is_placeholder_text(value: str) -> bool:
+    v = (value or "").strip().lower()
+    if not v:
+        return True
+    if v in {"n/a", "na", "none", "null", "todo", "tbd"}:
+        return True
+    if "lorem ipsum" in v:
+        return True
+    return False
+
+
+def _is_meaningful_recipe_dict(recipe: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Heuristic quality gate to keep returned recipes meaningful."""
+
+    reasons: List[str] = []
+
+    created_from = (recipe.get("created_from") or "").strip().lower()
+    name = (recipe.get("recipe_name") or "").strip()
+
+    if _is_placeholder_text(name):
+        reasons.append("missing_name")
+    else:
+        if _GENERIC_RECIPE_NAME_RE.search(name):
+            reasons.append("generic_name")
+        if len(name) < 3:
+            reasons.append("name_too_short")
+
+    ingredients = recipe.get("ingredients")
+    if not isinstance(ingredients, list):
+        reasons.append("invalid_ingredients")
+        ingredients = []
+
+    usable_ingredients = 0
+    for it in ingredients:
+        if not isinstance(it, dict):
+            continue
+        cn = (it.get("canonical_name") or "").strip()
+        if _is_placeholder_text(cn):
+            continue
+        usable_ingredients += 1
+
+    if usable_ingredients < 3:
+        reasons.append("too_few_ingredients")
+
+    steps = recipe.get("steps")
+    if not isinstance(steps, list):
+        reasons.append("invalid_steps")
+        steps = []
+
+    usable_steps = 0
+    for s in steps:
+        if not isinstance(s, str):
+            continue
+        st = s.strip()
+        if _is_placeholder_text(st):
+            continue
+        if len(st) < 12:
+            continue
+        usable_steps += 1
+
+    if usable_steps < 3:
+        reasons.append("too_few_steps")
+
+    sd = (recipe.get("short_description") or "").strip()
+    if created_from in {"generated", "retrieved"}:
+        if _is_placeholder_text(sd) or len(sd) < 30:
+            reasons.append("weak_short_description")
+
+    if created_from in {"generated", "retrieved"}:
+        tips = recipe.get("chef_tips")
+        sugg = recipe.get("serving_suggestions")
+        if not isinstance(tips, list) or len([t for t in tips if isinstance(t, str) and t.strip()]) < 1:
+            reasons.append("missing_chef_tips")
+        if not isinstance(sugg, list) or len([t for t in sugg if isinstance(t, str) and t.strip()]) < 1:
+            reasons.append("missing_serving_suggestions")
+
+    return (len(reasons) == 0), reasons
 
 
 def _validate_against_constraints(
@@ -2032,7 +2146,8 @@ async def generate_recipe(
         r_recipe, r_cov, r_missing = retrieved
         # Validate safety before selecting.
         ok_r, _ = validate_recipe_safety(r_recipe.model_dump(), profile if isinstance(profile, dict) else {})
-        if ok_r:
+        ok_meaningful, _ = _is_meaningful_recipe_dict(r_recipe.model_dump())
+        if ok_r and ok_meaningful:
             recipe_obj = r_recipe
             pantry_cov = float(r_cov)
             missing_items = list(r_missing)
@@ -2436,6 +2551,12 @@ async def generate_recipe_options(
             if not picked:
                 break
             recipe_obj, pantry_cov, missing_items = picked
+            try:
+                ok_meaningful, _ = _is_meaningful_recipe_dict(recipe_obj.model_dump())
+            except Exception:
+                ok_meaningful = True
+            if not ok_meaningful:
+                continue
             rid = str(getattr(recipe_obj, "recipe_id", "") or "").strip()
             if rid and rid in used_ids:
                 continue
@@ -2710,6 +2831,10 @@ async def generate_recipe_options(
                 "version": (item.get("version") or "v1"),
                 "created_from": "generated",
             }
+
+            ok_meaningful, _ = _is_meaningful_recipe_dict(normalized)
+            if not ok_meaningful:
+                continue
             recipe_obj = CanonicalRecipe(**normalized)
 
             # Best-effort recipe image derived from pantry item images.
