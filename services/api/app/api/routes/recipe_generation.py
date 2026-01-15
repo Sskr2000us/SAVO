@@ -917,6 +917,10 @@ async def _translate_canonical_recipes_batch_i18n(
 class RecipeGenerateOptionsResponse(BaseModel):
     success: bool = True
     options: List[RecipeGenerateResponse] = Field(default_factory=list)
+    # Debug-only counters to explain why some candidates were filtered out.
+    # Additive fields; safe for clients that ignore unknown keys.
+    quality_rejections_total: int = 0
+    quality_rejections: Dict[str, int] = Field(default_factory=dict)
 
 
 class RecipeAttemptRecord(BaseModel):
@@ -2524,6 +2528,16 @@ async def generate_recipe_options(
 
     count = max(1, min(int(req.count or 1), 8))
 
+    quality_rejections: dict[str, int] = {}
+    quality_rejections_total = 0
+
+    def _record_quality_rejection(reasons: List[str]) -> None:
+        nonlocal quality_rejections_total
+        quality_rejections_total += 1
+        for r in (reasons or []):
+            k = (r or "").strip() or "unknown"
+            quality_rejections[k] = int(quality_rejections.get(k, 0)) + 1
+
     def _top_up_options_from_catalog(
         *,
         options: list[RecipeGenerateResponse],
@@ -2552,11 +2566,13 @@ async def generate_recipe_options(
                 break
             recipe_obj, pantry_cov, missing_items = picked
             try:
-                ok_meaningful, _ = _is_meaningful_recipe_dict(recipe_obj.model_dump())
+                ok_meaningful, reasons = _is_meaningful_recipe_dict(recipe_obj.model_dump())
+                if not ok_meaningful:
+                    _record_quality_rejection(reasons)
+                    continue
             except Exception:
-                ok_meaningful = True
-            if not ok_meaningful:
-                continue
+                # Best-effort only; don't fail top-up.
+                pass
             rid = str(getattr(recipe_obj, "recipe_id", "") or "").strip()
             if rid and rid in used_ids:
                 continue
@@ -2635,7 +2651,11 @@ async def generate_recipe_options(
         )
         for o, i18n in zip(options, i18n_list):
             o.i18n = i18n
-        return RecipeGenerateOptionsResponse(options=options)
+        return RecipeGenerateOptionsResponse(
+            options=options,
+            quality_rejections_total=int(quality_rejections_total),
+            quality_rejections=dict(quality_rejections),
+        )
 
     # Prepare generation prompt
     schema = _canonical_recipe_options_json_schema(count=count)
@@ -2832,8 +2852,9 @@ async def generate_recipe_options(
                 "created_from": "generated",
             }
 
-            ok_meaningful, _ = _is_meaningful_recipe_dict(normalized)
+            ok_meaningful, reasons = _is_meaningful_recipe_dict(normalized)
             if not ok_meaningful:
+                _record_quality_rejection(reasons)
                 continue
             recipe_obj = CanonicalRecipe(**normalized)
 
@@ -3017,7 +3038,11 @@ async def generate_recipe_options(
             for o, i18n in zip(options, i18n_list):
                 o.i18n = i18n
 
-        return RecipeGenerateOptionsResponse(options=options)
+        return RecipeGenerateOptionsResponse(
+            options=options,
+            quality_rejections_total=int(quality_rejections_total),
+            quality_rejections=dict(quality_rejections),
+        )
 
     except Exception as e:
         try:
@@ -3137,7 +3162,11 @@ async def generate_recipe_options(
         except Exception:
             pass
 
-        return RecipeGenerateOptionsResponse(options=fallback_options)
+        return RecipeGenerateOptionsResponse(
+            options=fallback_options,
+            quality_rejections_total=int(quality_rejections_total),
+            quality_rejections=dict(quality_rejections),
+        )
 
 
 @router.get("/attempts", response_model=RecipeAttemptListResponse)
