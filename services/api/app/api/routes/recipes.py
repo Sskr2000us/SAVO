@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 import html as _html
 from pathlib import Path
+import hashlib
 
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
@@ -28,6 +29,48 @@ from app.core.recipe_images import build_llm_image_query
 
 router = APIRouter()
 public_router = APIRouter()
+
+
+# NOTE: As of early 2026, `source.unsplash.com` is intermittently returning 503.
+# We keep recipe images reliable by picking from a curated, stable set of
+# `images.unsplash.com` food photos and varying via a deterministic hash.
+_CURATED_FOOD_IMAGE_URLS: list[str] = [
+    # These are stable Unsplash CDN photo URLs (no API key required).
+    # We only store the base URL and add crop/size params at runtime.
+    "https://images.unsplash.com/photo-1540189549336-e6e99c3679fe",
+    "https://images.unsplash.com/photo-1543353071-873f17a7a088",
+    "https://images.unsplash.com/photo-1529042410759-befb1204b468",
+    "https://images.unsplash.com/photo-1499028344343-cd173ffc68a9",
+    "https://images.unsplash.com/photo-1546069901-ba9599a7e63c",
+    "https://images.unsplash.com/photo-1504674900247-0877df9cc836",
+    "https://images.unsplash.com/photo-1504754524776-8f4f37790ca0",
+    "https://images.unsplash.com/photo-1473093226795-af9932fe5856",
+    "https://images.unsplash.com/photo-1506368249639-73a05d6f6488",
+    "https://images.unsplash.com/photo-1525351484163-7529414344d8",
+    "https://images.unsplash.com/photo-1511690743698-d9d85f2fbf38",
+    "https://images.unsplash.com/photo-1551218808-94e220e084d2",
+    "https://images.unsplash.com/photo-1555939594-58d7cb561ad1",
+    "https://images.unsplash.com/photo-1478145046317-39f10e56b5e9",
+    "https://images.unsplash.com/photo-1467003909585-2f8a72700288",
+    "https://images.unsplash.com/photo-1523986371872-9d3ba2e2f642",
+    "https://images.unsplash.com/photo-1506086679525-9b8850b2f6de",
+    "https://images.unsplash.com/photo-1504674900247-0877df9cc836",
+    "https://images.unsplash.com/photo-1542838132-92c53300491e",
+    "https://images.unsplash.com/photo-1606914501449-5a96b6ce24ca",
+]
+
+
+def _curated_food_image_url(*, recipe_name: str, cuisine: str, seed: int = 0) -> str:
+    name = (recipe_name or "").strip().lower()
+    c = (cuisine or "general").strip().lower()
+    s = int(seed or 0)
+    key = f"{name}|{c}|{s}".encode("utf-8", errors="ignore")
+    h = hashlib.sha256(key).hexdigest()
+    idx = int(h[:12], 16) % len(_CURATED_FOOD_IMAGE_URLS)
+
+    base = _CURATED_FOOD_IMAGE_URLS[idx]
+    # Crop/optimize for card use.
+    return f"{base}?w=1200&h=800&fit=crop&auto=format&fm=jpg&q=80"
 
 
 _CATALOG_CACHE: dict[str, Any] = {
@@ -1040,18 +1083,9 @@ async def get_recipe_image(req: RecipeImageRequest):
     - DALL-E 3: $0.04/image, OpenAI API (best quality, custom generated)
     """
     try:
-        # Use Unsplash Source API (no key required for basic usage)
-        # Format: https://source.unsplash.com/featured/?food,pasta,italian
-        #
-        # Per product requirement, the *query* should come from LLM reasoning when available.
-        query = await build_llm_image_query(
-            recipe_name=req.recipe_name,
-            cuisine=req.cuisine,
-            ingredients=None,
-        )
-
-        # Unsplash featured random image (1200x800)
-        image_url = f"https://source.unsplash.com/1200x800/?{query}"
+        # Keep this endpoint reliable: use a deterministic curated CDN image.
+        # (The proxy endpoint returns bytes; this endpoint returns a URL string.)
+        image_url = _curated_food_image_url(recipe_name=req.recipe_name, cuisine=req.cuisine, seed=0)
         
         # Alternative: Use Unsplash API for consistent images
         # This requires an access key but gives better control
@@ -1063,8 +1097,8 @@ async def get_recipe_image(req: RecipeImageRequest):
         return RecipeImageResponse(
             recipe_name=req.recipe_name,
             image_url=image_url,
-            source="llm+unsplash",
-            image_query=query,
+            source="curated_unsplash",
+            image_query=None,
         )
         
     except Exception as e:
@@ -1084,8 +1118,8 @@ async def proxy_recipe_image(
 ):
     """CORS-safe recipe image bytes.
 
-    Flutter web often fetches images via XHR/canvas and can hit CORS issues with Unsplash.
-    This endpoint fetches the upstream image server-side and returns the bytes from our domain.
+    This endpoint fetches a deterministic, curated image from `images.unsplash.com`
+    and returns the bytes from our domain.
     """
     name = (recipe_name or "").strip()
     if not name:
@@ -1104,14 +1138,18 @@ async def proxy_recipe_image(
     if seed > 20:
         seed = 20
 
-    query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_clean, ingredients=None)
-    # Unsplash supports `sig` to vary the random image.
-    upstream_url = f"https://source.unsplash.com/1200x800/?{query}&sig={seed}"
+    upstream_url = _curated_food_image_url(recipe_name=name, cuisine=cuisine_clean, seed=seed)
 
     timeout = httpx.Timeout(8.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         try:
-            resp = await client.get(upstream_url, headers={"Accept": "image/*"})
+            resp = await client.get(
+                upstream_url,
+                headers={
+                    "Accept": "image/*",
+                    "User-Agent": "SAVO-ImageProxy/1.0",
+                },
+            )
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to fetch upstream image: {e}")
 
