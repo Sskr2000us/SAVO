@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import html as _html
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
@@ -27,6 +28,147 @@ from app.core.recipe_images import build_llm_image_query
 
 router = APIRouter()
 public_router = APIRouter()
+
+
+_CATALOG_CACHE: dict[str, Any] = {
+    "path": None,
+    "mtime": None,
+    "loaded_at": None,
+    "items": None,
+}
+
+
+def _find_catalog_path() -> Path:
+    """Locate ALL_RECIPES_COMPLETE.json by walking up from this file."""
+
+    start = Path(__file__).resolve()
+    cur = start
+    for _ in range(10):
+        candidate = cur.parent / "ALL_RECIPES_COMPLETE.json"
+        if candidate.exists():
+            return candidate
+        cur = cur.parent
+    # Fallback: repo root relative to services/api/app/api/routes/recipes.py
+    fallback = start.parents[5] / "ALL_RECIPES_COMPLETE.json"
+    return fallback
+
+
+def _load_catalog_items() -> list[dict[str, Any]]:
+    """Load the repo-root catalog file with a small in-process cache."""
+
+    path = _find_catalog_path()
+    if not path.exists():
+        return []
+
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+
+    cached_path = _CATALOG_CACHE.get("path")
+    cached_mtime = _CATALOG_CACHE.get("mtime")
+    cached_items = _CATALOG_CACHE.get("items")
+
+    if cached_items is not None and cached_path == str(path) and cached_mtime == mtime:
+        return cached_items
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for row in data:
+            if isinstance(row, dict):
+                items.append(row)
+        _CATALOG_CACHE.update(
+            {
+                "path": str(path),
+                "mtime": mtime,
+                "loaded_at": datetime.now(timezone.utc).isoformat(),
+                "items": items,
+            }
+        )
+        return items
+    except Exception:
+        # Don't raise for catalog browsing; keep other recipe endpoints healthy.
+        return []
+
+
+def _catalog_text(row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    rn = row.get("recipe_name")
+    if isinstance(rn, dict):
+        parts.extend([str(v) for v in rn.values() if v is not None])
+    elif rn is not None:
+        parts.append(str(rn))
+
+    for key in ("cuisine", "difficulty", "cooking_method"):
+        if row.get(key) is not None:
+            parts.append(str(row.get(key)))
+
+    return " ".join(parts).lower()
+
+
+@router.get("/catalog")
+async def get_recipe_catalog(
+    limit: int = 30,
+    offset: int = 0,
+    q: str = "",
+    cuisine: str = "",
+):
+    """Browse the global recipe catalog (from ALL_RECIPES_COMPLETE.json).
+
+    This is meant for discovery/browsing. Results are best-effort and do not
+    require authentication.
+    """
+
+    limit = max(1, min(int(limit or 30), 100))
+    offset = max(0, int(offset or 0))
+
+    q_norm = (q or "").strip().lower()
+    cuisine_norm = (cuisine or "").strip().lower()
+
+    items = _load_catalog_items()
+    filtered: list[dict[str, Any]]
+    if not q_norm and not cuisine_norm:
+        filtered = items
+    else:
+        filtered = []
+        for row in items:
+            if cuisine_norm:
+                c = (row.get("cuisine") or "").strip().lower()
+                if c != cuisine_norm:
+                    continue
+            if q_norm:
+                if q_norm not in _catalog_text(row):
+                    continue
+            filtered.append(row)
+
+    total = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    return {
+        "success": True,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + limit) < total,
+        "items": page,
+    }
+
+
+@router.get("/catalog/cuisines")
+async def get_recipe_catalog_cuisines():
+    """Return a sorted list of cuisines present in the global catalog."""
+
+    items = _load_catalog_items()
+    cuisines: set[str] = set()
+    for row in items:
+        c = (row.get("cuisine") or "").strip()
+        if c:
+            cuisines.add(c)
+    return {"success": True, "cuisines": sorted(cuisines, key=lambda s: s.lower())}
 
 
 class SaveRecipeRequest(BaseModel):
@@ -943,6 +1085,7 @@ async def get_recipe_image_by_name(recipe_name: str, cuisine: str = "general"):
 async def proxy_recipe_image(
     recipe_name: str,
     cuisine: str = "general",
+    seed: int = 0,
 ):
     """CORS-safe recipe image bytes.
 
@@ -960,8 +1103,15 @@ async def proxy_recipe_image(
     if len(cuisine_clean) > 60:
         cuisine_clean = cuisine_clean[:60]
 
+    seed = int(seed or 0)
+    if seed < 0:
+        seed = 0
+    if seed > 20:
+        seed = 20
+
     query = await build_llm_image_query(recipe_name=name, cuisine=cuisine_clean, ingredients=None)
-    upstream_url = f"https://source.unsplash.com/1200x800/?{query}"
+    # Unsplash supports `sig` to vary the random image.
+    upstream_url = f"https://source.unsplash.com/1200x800/?{query}&sig={seed}"
 
     timeout = httpx.Timeout(8.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:

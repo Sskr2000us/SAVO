@@ -93,6 +93,14 @@ class YouTubeSearchRequest(BaseModel):
     recipe_name: str = Field(..., description="Recipe name to search for")
     cuisine: str = Field(default="", description="Cuisine type (optional)")
     max_results: int = Field(default=5, ge=1, le=10, description="Max videos to return")
+    preferred_channels: list[str] | None = Field(
+        default=None,
+        description="Optional list of preferred channel name tokens (case-insensitive substring match).",
+    )
+    require_preferred_channels: bool = Field(
+        default=False,
+        description="If true, only return results from preferred_channels (otherwise we prefer them but may fall back).",
+    )
 
 
 class YouTubeSearchResponse(BaseModel):
@@ -182,6 +190,23 @@ async def search_youtube(req: YouTubeSearchRequest):
                     break
 
         candidates = list(candidates_by_id.values())
+
+        preferred = [str(x).strip().lower() for x in (req.preferred_channels or []) if str(x).strip()]
+        preferred = [p for p in preferred if p]
+        if preferred:
+            def _is_preferred(c: dict) -> bool:
+                ch = str(c.get("channel") or "").strip().lower()
+                if not ch:
+                    return False
+                return any(p in ch for p in preferred)
+
+            preferred_hits = [c for c in candidates if _is_preferred(c)]
+            if req.require_preferred_channels:
+                candidates = preferred_hits
+            elif preferred_hits:
+                # Keep preferred first; fill remainder with non-preferred.
+                non_pref = [c for c in candidates if not _is_preferred(c)]
+                candidates = preferred_hits + non_pref
 
         # Fuzzy sort: promote videos whose titles contain more of the recipe tokens.
         primary_query = queries[0]

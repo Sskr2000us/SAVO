@@ -25,4 +25,13 @@ class Config {
   
   // Development mode flag
   static const bool isDevelopment = bool.fromEnvironment('DEV', defaultValue: false);
+
+  // Preferred YouTube cooking channels (best-effort; used to bias /youtube/search).
+  // These are matched as case-insensitive substrings against YouTube's channelTitle.
+  static const List<String> preferredYouTubeChannels = [
+    'india recipes tamil',
+    'gomathis kitchen',
+    'home cooking show',
+    'vahrehvah',
+  ];
 }

@@ -19,6 +19,7 @@ import 'package:share_plus/share_plus.dart';
 import '../services/recipe_share_service.dart';
 import '../widgets/savo_network_image.dart';
 import '../config/app_config.dart';
+import '../widgets/savo_widgets.dart';
 
 enum _RecipeLanguageMode { english, bilingual }
 
@@ -186,6 +187,56 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     if (name.isEmpty) return null;
     final encoded = Uri.encodeComponent(name);
     return 'https://source.unsplash.com/featured/?food,$encoded';
+  }
+
+  String? _bestEffortRecipeImageUrlVariant(int seed) {
+    // Prefer curated URLs if present.
+    if (widget.recipe.imageUrls.isNotEmpty) {
+      final idx = seed % widget.recipe.imageUrls.length;
+      final raw = widget.recipe.imageUrls[idx].trim();
+      if (raw.isEmpty) return null;
+      if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+      return raw;
+    }
+
+    final base = (_bestEffortRecipeImageUrl() ?? '').trim();
+    if (base.isEmpty) return null;
+
+    // If this is our proxy endpoint, append `seed`.
+    try {
+      final uri = Uri.parse(base);
+      if (uri.path.contains('/recipes/image/proxy')) {
+        final qp = Map<String, String>.from(uri.queryParameters);
+        qp['seed'] = seed.toString();
+        return uri.replace(queryParameters: qp).toString();
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    // Unsplash supports sig to vary the random image.
+    if (base.contains('source.unsplash.com')) {
+      final joiner = base.contains('?') ? '&' : '?';
+      return '$base${joiner}sig=$seed';
+    }
+
+    return base;
+  }
+
+  Future<void> _launchVideoUrl(String url) async {
+    final cleaned = url.trim();
+    if (cleaned.isEmpty) return;
+    final uri = Uri.tryParse(cleaned);
+    if (uri == null) return;
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open video: $cleaned')),
+      );
+    }
   }
 
   Future<void> _shareRecipe() async {
@@ -657,6 +708,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         'recipe_name': recipeNameQuery,
         'cuisine': widget.recipe.cuisine,
         'max_results': 5,
+        'preferred_channels': Config.preferredYouTubeChannels,
+        'require_preferred_channels': false,
       });
 
       print('🎥 Search response: $searchResponse');
@@ -1000,28 +1053,45 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Hero image
-          Card(
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: SizedBox(
-              height: 180,
-              child: SavoNetworkImage(
-                url: _bestEffortRecipeImageUrl(),
-                width: double.infinity,
-                height: double.infinity,
-                fit: BoxFit.cover,
-                shape: SavoNetworkImageShape.roundedRect,
-                borderRadius: BorderRadius.circular(12),
-                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                placeholderIcon: Icons.restaurant,
-                errorIcon: Icons.restaurant,
-                iconColor: Theme.of(context).colorScheme.onSurfaceVariant,
-                iconSize: 44,
-              ),
-            ),
+          // Hero carousel (3 images)
+          SavoCarousel(
+            height: 200,
+            items: List.generate(3, (i) {
+              return Card(
+                clipBehavior: Clip.antiAlias,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: SizedBox(
+                  height: 200,
+                  child: SavoNetworkImage(
+                    url: _bestEffortRecipeImageUrlVariant(i),
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: BoxFit.cover,
+                    shape: SavoNetworkImageShape.roundedRect,
+                    borderRadius: BorderRadius.circular(12),
+                    backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    placeholderIcon: Icons.restaurant,
+                    errorIcon: Icons.restaurant,
+                    iconColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                    iconSize: 44,
+                  ),
+                ),
+              );
+            }),
           ),
           const SizedBox(height: 16),
+
+          if ((widget.recipe.videoUrl ?? '').trim().isNotEmpty) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _launchVideoUrl(widget.recipe.videoUrl!),
+                icon: const Icon(Icons.play_circle_fill),
+                label: const Text('Watch video'),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
 
           // Header with badges
           Wrap(

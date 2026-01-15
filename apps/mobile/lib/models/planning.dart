@@ -118,6 +118,7 @@ class Recipe {
   final String recipeId;
   final Map<String, String> recipeName;
   final String? imageUrl;
+  final List<String> imageUrls;
   final String? shortDescription;
   final List<String> servingSuggestions;
   final String cuisine;
@@ -135,6 +136,9 @@ class Recipe {
   final Map<String, dynamic>? dietaryInformation;
   final List<RankedVideo> youtubeReferences;
 
+  // Optional curated media
+  final String? videoUrl;
+
   // Backend trust metadata (optional; present for /recipes/generate)
   final double? pantryCoverage;
   final List<String> missingIngredientNames;
@@ -144,6 +148,7 @@ class Recipe {
     required this.recipeId,
     required this.recipeName,
     this.imageUrl,
+    this.imageUrls = const [],
     this.shortDescription,
     this.servingSuggestions = const [],
     required this.cuisine,
@@ -160,12 +165,44 @@ class Recipe {
     this.culturalContext,
     this.dietaryInformation,
     this.youtubeReferences = const [],
+    this.videoUrl,
     this.pantryCoverage,
     this.missingIngredientNames = const [],
     this.trustSignals,
   });
 
   factory Recipe.fromJson(Map<String, dynamic> json) {
+    final recipeNameMap = <String, String>{'en': ''};
+    final rawName = json['recipe_name'] ?? json['recipeName'];
+    if (rawName is Map) {
+      try {
+        final m = Map<String, dynamic>.from(rawName);
+        for (final entry in m.entries) {
+          final k = entry.key.toString().trim();
+          final v = entry.value?.toString().trim() ?? '';
+          if (k.isNotEmpty && v.isNotEmpty) {
+            recipeNameMap[k] = v;
+          }
+        }
+      } catch (_) {
+        // Best-effort only.
+      }
+    } else {
+      final s = rawName?.toString().trim() ?? '';
+      if (s.isNotEmpty) recipeNameMap['en'] = s;
+    }
+
+    final urls = <String>[];
+    final rawImageUrls = json['image_urls'] ?? json['imageUrls'];
+    if (rawImageUrls is List) {
+      for (final x in rawImageUrls) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty) urls.add(s);
+      }
+    }
+
+    final rawVideoUrl = (json['video_url'] ?? json['videoUrl'] ?? '').toString().trim();
+
     final refs = <RankedVideo>[];
     final rawRefs = json['youtube_references'];
     if (rawRefs is List) {
@@ -239,31 +276,128 @@ class Recipe {
       }
     }
 
+    // --- Catalog compatibility (ALL_RECIPES_COMPLETE.json) ---
+    // The global catalog entries may use:
+    // - ingredients: [{name, measure, ...}]
+    // - instructions: ["step 1", "step 2", ...]
+    // - total_time_minutes/prep_time_minutes/cook_time_minutes
+    // The rest of the app expects:
+    // - ingredients_used: [{canonical_name, amount, unit, ...}]
+    // - steps: [{step, instruction, time_minutes, ...}]
+    List<RecipeIngredient> _parseIngredientsUsed() {
+      final out = <RecipeIngredient>[];
+
+      final raw = json['ingredients_used'];
+      if (raw is List) {
+        for (final i in raw) {
+          if (i is Map) {
+            out.add(RecipeIngredient.fromJson(Map<String, dynamic>.from(i)));
+          }
+        }
+        if (out.isNotEmpty) return out;
+      }
+
+      final rawCatalog = json['ingredients'];
+      if (rawCatalog is List) {
+        for (final it in rawCatalog) {
+          if (it is! Map) continue;
+          final m = Map<String, dynamic>.from(it);
+          final name = (m['canonical_name'] ?? m['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final unit = (m['unit'] ?? m['measure'] ?? '').toString().trim();
+          out.add(
+            RecipeIngredient(
+              inventoryId: (m['inventory_id'] ?? m['ingredient_id'] ?? '').toString(),
+              canonicalName: name,
+              amount: (m['amount'] is num) ? (m['amount'] as num).toDouble() : 1.0,
+              unit: unit,
+              amountDisplay: (m['amount_display'] ?? m['measure'] ?? '').toString().trim().isEmpty
+                  ? null
+                  : (m['amount_display'] ?? m['measure']).toString().trim(),
+              notes: (m['notes'] ?? '').toString().trim().isEmpty ? null : (m['notes'] ?? '').toString().trim(),
+            ),
+          );
+        }
+      }
+
+      return out;
+    }
+
+    List<RecipeStep> _parseSteps() {
+      final out = <RecipeStep>[];
+
+      final raw = json['steps'];
+      if (raw is List) {
+        for (final s in raw) {
+          if (s is Map) {
+            out.add(RecipeStep.fromJson(Map<String, dynamic>.from(s)));
+          }
+        }
+        if (out.isNotEmpty) return out;
+      }
+
+      final rawCatalog = json['instructions'];
+      if (rawCatalog is List) {
+        var i = 0;
+        for (final row in rawCatalog) {
+          final line = row.toString().trim();
+          if (line.isEmpty) continue;
+          i += 1;
+          out.add(RecipeStep(step: i, instruction: {'en': line}, timeMinutes: 0));
+        }
+      }
+
+      if (out.isEmpty) {
+        out.add(RecipeStep(step: 1, instruction: {'en': 'Follow the recipe steps.'}, timeMinutes: 0));
+      }
+
+      return out;
+    }
+
+    EstimatedTimes _parseEstimatedTimes() {
+      final raw = json['estimated_times'];
+      if (raw is Map) {
+        return EstimatedTimes.fromJson(Map<String, dynamic>.from(raw));
+      }
+
+      int prep = 0;
+      int cook = 0;
+      int total = 0;
+      final rawPrep = json['prep_time_minutes'];
+      final rawCook = json['cook_time_minutes'];
+      final rawTotal = json['total_time_minutes'];
+      if (rawPrep is num) prep = rawPrep.toInt();
+      if (rawCook is num) cook = rawCook.toInt();
+      if (rawTotal is num) total = rawTotal.toInt();
+      if (total == 0 && (prep > 0 || cook > 0)) total = prep + cook;
+
+      return EstimatedTimes.fromJson({
+        'prep_minutes': prep,
+        'cook_minutes': cook,
+        'total_minutes': total,
+      });
+    }
+
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
-      recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
+      recipeName: recipeNameMap,
       imageUrl: (json['image_url'] ?? '').toString().trim().isEmpty
           ? null
           : (json['image_url'] ?? '').toString().trim(),
+      imageUrls: urls,
       shortDescription: sd.isEmpty ? null : sd,
       servingSuggestions: serving,
       cuisine: json['cuisine'] ?? '',
       difficulty: json['difficulty'] ?? 'easy',
-      estimatedTimes: EstimatedTimes.fromJson(json['estimated_times'] ?? {}),
-      cookingMethod: json['cooking_method'] ?? '',
-      ingredientsUsed: (json['ingredients_used'] as List?)
-              ?.map((i) => RecipeIngredient.fromJson(i))
-              .toList() ??
-          [],
+        estimatedTimes: _parseEstimatedTimes(),
+        cookingMethod: (json['cooking_method'] ?? json['cookingMethod'] ?? '').toString(),
+        ingredientsUsed: _parseIngredientsUsed(),
       newIngredientsOptional: (json['new_ingredients_optional'] as List?)
               ?.whereType<Map>()
               .map((i) => NewIngredientOptional.fromJson(Map<String, dynamic>.from(i)))
               .toList() ??
           const [],
-      steps: (json['steps'] as List?)
-              ?.map((s) => RecipeStep.fromJson(s))
-              .toList() ??
-          [],
+        steps: _parseSteps(),
       nutritionPerServing: json['nutrition_per_serving'] ?? {},
       healthBenefits: (json['health_benefits'] as List?)
               ?.map((b) => Map<String, String>.from(b as Map))
@@ -273,6 +407,7 @@ class Recipe {
       culturalContext: cultural,
       dietaryInformation: dietary,
       youtubeReferences: refs,
+      videoUrl: rawVideoUrl.isEmpty ? null : rawVideoUrl,
       pantryCoverage: pantryCoverage,
       missingIngredientNames: missingNames,
       trustSignals: trustSignals,

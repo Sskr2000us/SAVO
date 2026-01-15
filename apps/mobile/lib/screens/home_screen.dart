@@ -20,6 +20,7 @@ import 'pantry_update_entry_screen.dart';
 import 'account_settings_screen.dart';
 import 'onboarding/onboarding_coordinator.dart';
 import 'recipe_detail_screen.dart';
+import 'recipe_catalog_screen.dart';
 import '../models/inventory.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -290,6 +291,16 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('SAVO'),
         actions: [
+          IconButton(
+            tooltip: 'Browse recipes',
+            icon: const Icon(Icons.menu_book_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                AppMotion.createRoute(const RecipeCatalogScreen()),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'User profile',
             icon: const Icon(Icons.person_outline),
