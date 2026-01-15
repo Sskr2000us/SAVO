@@ -1074,11 +1074,6 @@ async def get_recipe_image(req: RecipeImageRequest):
         )
 
 
-@router.get("/image/{recipe_name}")
-async def get_recipe_image_by_name(recipe_name: str, cuisine: str = "general"):
-    """Get recipe image by name (GET endpoint for convenience)"""
-    req = RecipeImageRequest(recipe_name=recipe_name, cuisine=cuisine)
-    return await get_recipe_image(req)
 
 
 @router.get("/image/proxy")
@@ -1130,3 +1125,14 @@ async def proxy_recipe_image(
     }
 
     return Response(content=resp.content, media_type=content_type, headers=headers)
+
+
+@router.get("/image/{recipe_name}")
+async def get_recipe_image_by_name(recipe_name: str, cuisine: str = "general"):
+    """Get recipe image by name (GET endpoint for convenience).
+
+    Note: Keep this route *after* /image/proxy so that the static proxy endpoint
+    is not shadowed by this dynamic path.
+    """
+    req = RecipeImageRequest(recipe_name=recipe_name, cuisine=cuisine)
+    return await get_recipe_image(req)

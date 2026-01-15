@@ -62,7 +62,12 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _loadYouTubeVideos();
+    // If the recipe already has a curated video URL, don't do an expensive
+    // YouTube search/rank on open.
+    final curated = (widget.recipe.videoUrl ?? '').trim();
+    if (curated.isEmpty) {
+      _loadYouTubeVideos();
+    }
     fireAndForget(_loadSpicePref());
     _baseServings = (widget.baseServings != null && widget.baseServings! > 0)
         ? widget.baseServings!
@@ -686,6 +691,17 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   }
 
   Future<void> _loadYouTubeVideos() async {
+    // Skip if a curated URL is already provided.
+    if ((widget.recipe.videoUrl ?? '').trim().isNotEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _rankedVideos = null;
+        _loadingVideos = false;
+        _videoError = null;
+      });
+      return;
+    }
+
     setState(() {
       _loadingVideos = true;
       _videoError = null;
