@@ -205,6 +205,34 @@ def _youtube_search_url(*, name_en: str, cuisine: str) -> str:
     return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(q)}"
 
 
+def _parse_target_cuisine_counts(values: Optional[List[str]]) -> Dict[str, int]:
+    """Parse repeated args like: --target-cuisine-count Tamil=600 --target-cuisine-count Indian=400."""
+
+    out: Dict[str, int] = {}
+    if not values:
+        return out
+
+    for raw in values:
+        s = _normalize_space(str(raw or ""))
+        if not s:
+            continue
+        if "=" not in s:
+            raise ValueError(f"Invalid --target-cuisine-count value: {raw!r} (expected Cuisine=Number)")
+        cuisine, count = s.split("=", 1)
+        cuisine = _slug(cuisine)
+        try:
+            n = int(count.strip())
+        except Exception as e:
+            raise ValueError(f"Invalid --target-cuisine-count value: {raw!r} (count must be int)") from e
+        if not cuisine:
+            raise ValueError(f"Invalid --target-cuisine-count value: {raw!r} (empty cuisine)")
+        if n < 0:
+            raise ValueError(f"Invalid --target-cuisine-count value: {raw!r} (count must be >= 0)")
+        out[cuisine] = out.get(cuisine, 0) + n
+
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build/validate SAVO recipe catalog")
     parser.add_argument("--in", dest="inputs", action="append", required=True, help="Input JSON file (array of recipes)")
@@ -226,12 +254,27 @@ def main() -> int:
         action="store_true",
         help="If a recipe has no video_url, set it to a YouTube search URL for the recipe name.",
     )
+    parser.add_argument(
+        "--target-cuisine-count",
+        action="append",
+        default=None,
+        help="Optional quota like Tamil=600. Can be provided multiple times.",
+    )
 
     args = parser.parse_args()
 
     target_count = int(args.target_count or 0)
     if target_count <= 0:
         raise ValueError("--target-count must be > 0")
+
+    target_cuisine_counts = _parse_target_cuisine_counts(args.target_cuisine_count)
+    if target_cuisine_counts:
+        total_quota = sum(target_cuisine_counts.values())
+        if total_quota > target_count:
+            raise ValueError(
+                "Sum of --target-cuisine-count quotas exceeds --target-count: "
+                f"{total_quota} > {target_count}"
+            )
 
     recipes_in: List[Dict[str, Any]] = []
     for p in args.inputs:
@@ -250,34 +293,30 @@ def main() -> int:
     seen: set[Tuple[str, str]] = set()
     out: List[Dict[str, Any]] = []
 
-    for recipe in recipes_in:
+    def _maybe_add(recipe: Dict[str, Any]) -> bool:
         if not isinstance(recipe, dict):
-            continue
+            return False
 
         _ensure_recipe_name_object(recipe)
         cuisine = _cuisine(recipe)
         name_en = _name_en(recipe)
 
         if not name_en:
-            # Skip invalid entries rather than generating garbage.
-            continue
+            return False
 
         recipe.setdefault("cuisine", cuisine)
         recipe["cuisine"] = cuisine
 
-        # Ensure recipe_id exists and is stable-ish.
         rid = str(recipe.get("recipe_id") or "").strip()
         if not rid:
             rid = _stable_recipe_id(name_en=name_en, cuisine=cuisine)
             recipe["recipe_id"] = rid
 
-        # De-dupe by name+cuisine.
         key = _dedupe_key(recipe)
         if key in seen:
-            continue
+            return False
         seen.add(key)
 
-        # Optional attachments.
         if video_map:
             by_name = video_map.get((_slug(name_en), _slug(cuisine)))
             by_id = video_map.get((f"__id__:{rid}", ""))
@@ -292,8 +331,41 @@ def main() -> int:
             recipe["image_urls"] = _build_image_urls(name_en=name_en, cuisine=cuisine, count=3)
 
         out.append(recipe)
+        return True
+
+    # Pass 1: satisfy cuisine quotas first (if configured).
+    remaining_quota = dict(target_cuisine_counts)
+    if remaining_quota:
+        for recipe in recipes_in:
+            if len(out) >= target_count:
+                break
+            if not isinstance(recipe, dict):
+                continue
+
+            c = _slug(_cuisine(recipe))
+            need = remaining_quota.get(c, 0)
+            if need <= 0:
+                continue
+
+            if _maybe_add(recipe):
+                remaining_quota[c] = need - 1
+
+    # Pass 2: fill the remainder with anything.
+    for recipe in recipes_in:
         if len(out) >= target_count:
             break
+        if not isinstance(recipe, dict):
+            continue
+        _maybe_add(recipe)
+
+    if target_cuisine_counts:
+        missing = {k: v for k, v in remaining_quota.items() if v > 0}
+        if missing:
+            raise SystemExit(
+                "Could not satisfy --target-cuisine-count quotas. Missing: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(missing.items()))
+                + ". Add more source inputs for those cuisines and re-run."
+            )
 
     if not args.allow_short and len(out) < target_count:
         raise SystemExit(
