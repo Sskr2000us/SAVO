@@ -27,6 +27,40 @@ from app.middleware.auth import get_current_user
 logger = logging.getLogger(__name__)
 
 
+def _decorate_items_with_signed_image_urls(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert stored storage refs to signed URLs for client rendering.
+
+    Inventory rows store stable refs like "<bucket>/<path>"; the mobile UI needs https URLs.
+    """
+
+    if not items:
+        return items
+
+    try:
+        from app.core.media_storage import to_signed_url
+
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            raw = (it.get("image_url") or "").strip()
+            if not raw:
+                continue
+            # 24h signed URLs are a good default for list views.
+            it["image_url"] = to_signed_url(raw, expires_in=60 * 60 * 24) or raw
+    except Exception:
+        # Best-effort only; never break inventory reads.
+        return items
+
+    return items
+
+
+def _decorate_item_with_signed_image_url(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not item or not isinstance(item, dict):
+        return item
+    _decorate_items_with_signed_image_urls([item])
+    return item
+
+
 async def _log_inventory_event(
     user_id: str,
     item: Dict[str, Any],
@@ -216,6 +250,8 @@ async def list_inventory(
                 include_low_stock_only=low_stock_only,
                 include_inactive=include_inactive,
             )
+
+        items = _decorate_items_with_signed_image_urls(items)
         
         return {
             "count": len(items),
@@ -245,6 +281,8 @@ async def add_item(
             item_data["expiry_date"] = item_data["expiry_date"].isoformat()
         
         created_item = await add_inventory_item(user_id, item_data)
+
+        created_item = _decorate_item_with_signed_image_url(created_item)
         
         return {
             "success": True,
@@ -292,6 +330,8 @@ async def update_item(
             item_data["expiry_date"] = item_data["expiry_date"].isoformat()
         
         updated_item = await update_inventory_item(item_id, item_data)
+
+        updated_item = _decorate_item_with_signed_image_url(updated_item)
 
         # Best-effort event log
         if before_item:
@@ -426,6 +466,8 @@ async def get_low_stock_alerts(
     """
     try:
         items = await get_low_stock_items(user_id)
+
+        items = _decorate_items_with_signed_image_urls(items)
         
         return {
             "alert_count": len(items),
@@ -457,6 +499,8 @@ async def get_expiring_alerts(
             )
         
         items = await get_expiring_items(user_id, days)
+
+        items = _decorate_items_with_signed_image_urls(items)
         
         return {
             "alert_count": len(items),
@@ -482,6 +526,10 @@ async def get_inventory_summary(
         all_items = await get_inventory(user_id)
         low_stock = await get_low_stock_items(user_id)
         expiring = await get_expiring_items(user_id, days=3)
+
+        all_items = _decorate_items_with_signed_image_urls(all_items)
+        low_stock = _decorate_items_with_signed_image_urls(low_stock)
+        expiring = _decorate_items_with_signed_image_urls(expiring)
         
         # Calculate category breakdown
         categories = {}

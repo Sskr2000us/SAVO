@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
+import '../widgets/savo_network_image.dart';
 
 class BarcodeScanScreen extends StatefulWidget {
   const BarcodeScanScreen({super.key});
@@ -154,6 +155,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
 
           // Image is mandatory. Prefer product image from lookup; otherwise require a user photo upload.
           String? chosenImageUrl = imageUrl.isNotEmpty ? imageUrl : null;
+          String? chosenImageRef;
           bool uploadingImage = false;
           bool saving = false;
 
@@ -163,23 +165,17 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
 
               Widget imageWidget;
               if (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) {
-                imageWidget = ClipRRect(
+                imageWidget = SavoNetworkImage(
+                  url: chosenImageUrl,
+                  width: double.infinity,
+                  height: 140,
+                  fit: BoxFit.cover,
+                  shape: SavoNetworkImageShape.roundedRect,
                   borderRadius: BorderRadius.circular(12),
-                  child: Image.network(
-                    chosenImageUrl!,
-                    height: 140,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) {
-                      return Container(
-                        height: 140,
-                        width: double.infinity,
-                        color: Colors.grey.shade200,
-                        alignment: Alignment.center,
-                        child: const Text('Image unavailable'),
-                      );
-                    },
-                  ),
+                  backgroundColor: Colors.grey.shade200,
+                  placeholderIcon: Icons.image_outlined,
+                  errorIcon: Icons.broken_image_outlined,
+                  iconColor: Colors.black38,
                 );
               } else {
                 imageWidget = Container(
@@ -213,6 +209,15 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       imageWidget,
+                      if (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          imageUrl.isNotEmpty
+                              ? 'Using barcode product image (you can replace it).'
+                              : 'Using your package photo.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
                         onPressed: uploadingImage
@@ -239,12 +244,14 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                                   );
 
                                   final url = (uploadRes['image_url'] ?? '').toString().trim();
+                                  final ref = (uploadRes['image_ref'] ?? '').toString().trim();
                                   if (url.isEmpty) {
                                     throw Exception('Upload succeeded but image_url missing');
                                   }
 
                                   setDialogState(() {
                                     chosenImageUrl = url;
+                                    chosenImageRef = ref.isNotEmpty ? ref : null;
                                     uploadingImage = false;
                                   });
                                 } catch (e) {
@@ -262,7 +269,13 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                                 child: CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.photo_camera_outlined),
-                        label: Text(uploadingImage ? 'Uploading…' : 'Capture package photo'),
+                        label: Text(
+                          uploadingImage
+                              ? 'Uploading…'
+                              : (chosenImageUrl != null && chosenImageUrl!.trim().isNotEmpty)
+                                  ? 'Replace photo'
+                                  : 'Capture package photo',
+                        ),
                       ),
                       const SizedBox(height: 12),
                       TextField(
@@ -381,7 +394,10 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                       'barcode': digits,
                       'product_name': productName.isNotEmpty ? productName : null,
                       'brand': brand.isNotEmpty ? brand : null,
-                      'image_url': chosenImageUrl,
+                      // Prefer storing a stable storage ref (image_ref) when available.
+                      'image_url': (chosenImageRef != null && chosenImageRef!.trim().isNotEmpty)
+                          ? chosenImageRef
+                          : chosenImageUrl,
                       'package_size_text': packageSizeText.isNotEmpty ? packageSizeText : null,
                     });
 

@@ -118,6 +118,8 @@ class Recipe {
   final String recipeId;
   final Map<String, String> recipeName;
   final String? imageUrl;
+  final String? shortDescription;
+  final List<String> servingSuggestions;
   final String cuisine;
   final String difficulty;
   final EstimatedTimes estimatedTimes;
@@ -142,6 +144,8 @@ class Recipe {
     required this.recipeId,
     required this.recipeName,
     this.imageUrl,
+    this.shortDescription,
+    this.servingSuggestions = const [],
     required this.cuisine,
     required this.difficulty,
     required this.estimatedTimes,
@@ -224,12 +228,25 @@ class Recipe {
       trustSignals = Map<String, dynamic>.from(rawTrust);
     }
 
+    final sd = (json['short_description'] ?? '').toString().trim();
+
+    final serving = <String>[];
+    final rawServing = json['serving_suggestions'];
+    if (rawServing is List) {
+      for (final x in rawServing) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty) serving.add(s);
+      }
+    }
+
     return Recipe(
       recipeId: json['recipe_id'] ?? '',
       recipeName: Map<String, String>.from(json['recipe_name'] ?? {'en': ''}),
       imageUrl: (json['image_url'] ?? '').toString().trim().isEmpty
           ? null
           : (json['image_url'] ?? '').toString().trim(),
+      shortDescription: sd.isEmpty ? null : sd,
+      servingSuggestions: serving,
       cuisine: json['cuisine'] ?? '',
       difficulty: json['difficulty'] ?? 'easy',
       estimatedTimes: EstimatedTimes.fromJson(json['estimated_times'] ?? {}),
@@ -274,6 +291,19 @@ class Recipe {
     final name = (recipe['recipe_name'] ?? 'Recipe').toString().trim();
     final cuisine = (recipe['cuisine'] ?? '').toString();
     final difficulty = (recipe['difficulty'] ?? 'easy').toString();
+    final imageUrl = (recipe['image_url'] ?? '').toString().trim().isEmpty
+        ? null
+        : (recipe['image_url'] ?? '').toString().trim();
+    final sd = (recipe['short_description'] ?? '').toString().trim();
+
+    final serving = <String>[];
+    final rawServing = recipe['serving_suggestions'];
+    if (rawServing is List) {
+      for (final x in rawServing) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty) serving.add(s);
+      }
+    }
     final prep = (recipe['prep_time_minutes'] is num) ? (recipe['prep_time_minutes'] as num).toInt() : 0;
     final techniques = (recipe['techniques'] is List)
         ? (recipe['techniques'] as List).map((x) => x.toString()).where((s) => s.trim().isNotEmpty).toList()
@@ -314,6 +344,22 @@ class Recipe {
     }
     if (steps.isEmpty) {
       steps.add(RecipeStep(step: 1, instruction: {'en': 'Follow the recipe steps.'}, timeMinutes: 0));
+    }
+
+    // Optional richer fields (best-effort)
+    final tips = <String>[];
+    final rawTips = recipe['chef_tips'];
+    if (rawTips is List) {
+      for (final t in rawTips) {
+        final s = t.toString().trim();
+        if (s.isNotEmpty) tips.add(s);
+      }
+    }
+
+    Map<String, dynamic>? cultural;
+    final rawCultural = recipe['cultural_context'];
+    if (rawCultural is Map) {
+      cultural = Map<String, dynamic>.from(rawCultural);
     }
 
     // Best-effort bilingual hydration (if backend provided i18n fields)
@@ -375,6 +421,9 @@ class Recipe {
     return Recipe(
       recipeId: rid,
       recipeName: localizedName,
+      imageUrl: imageUrl,
+      shortDescription: sd.isEmpty ? null : sd,
+      servingSuggestions: serving,
       cuisine: cuisine,
       difficulty: difficulty,
       estimatedTimes: EstimatedTimes(prepMinutes: prep, cookMinutes: 0, totalMinutes: prep),
@@ -383,6 +432,8 @@ class Recipe {
       steps: steps,
       nutritionPerServing: const {},
       leftoverForecast: const {},
+      chefTips: tips,
+      culturalContext: cultural,
       pantryCoverage: pantryCoverage,
       missingIngredientNames: missingNames,
       trustSignals: trustSignals,
@@ -421,6 +472,8 @@ class Recipe {
       'recipe_id': recipeId,
       'recipe_name': recipeName,
       if (imageUrl != null) 'image_url': imageUrl,
+      if (shortDescription != null) 'short_description': shortDescription,
+      if (servingSuggestions.isNotEmpty) 'serving_suggestions': servingSuggestions,
       'cuisine': cuisine,
       'difficulty': difficulty,
       'estimated_times': estimatedTimes.toJson(),

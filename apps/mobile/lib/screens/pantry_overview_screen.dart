@@ -8,6 +8,7 @@ import '../services/api_client.dart';
 import '../services/waste_analytics_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/ui_principles.dart';
+import '../widgets/savo_network_image.dart';
 
 String _prettyPantryToken(String raw) {
   final s = raw.trim().replaceAll('_', ' ');
@@ -39,41 +40,16 @@ class _PantryThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = (imageUrl ?? '').trim();
-    if (url.isEmpty) {
-      return Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: missingRequired ? Colors.red.shade400 : Colors.grey.shade300),
-        ),
-        alignment: Alignment.center,
-        child: const Icon(Icons.photo_outlined, size: 18, color: Colors.grey),
-      );
-    }
 
-    return ClipRRect(
+    return SavoNetworkImageThumb.roundedRect(
+      url: url,
+      size: 44,
       borderRadius: BorderRadius.circular(10),
-      child: Image.network(
-        url,
-        width: 44,
-        height: 44,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) {
-          return Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.broken_image_outlined, size: 18, color: Colors.grey),
-          );
-        },
-      ),
+      backgroundColor: Colors.grey.shade100,
+      border: Border.all(color: missingRequired ? Colors.red.shade400 : Colors.grey.shade300),
+      placeholderIcon: Icons.photo_outlined,
+      errorIcon: Icons.broken_image_outlined,
+      iconColor: Colors.grey,
     );
   }
 }
@@ -250,12 +226,14 @@ class _PantryOverviewScreenState extends State<PantryOverviewScreen> {
       );
 
       final url = (uploadRes['image_url'] ?? '').toString().trim();
-      if (url.isEmpty) {
-        throw Exception('Upload succeeded but image_url missing');
+      final ref = (uploadRes['image_ref'] ?? '').toString().trim();
+      if (url.isEmpty && ref.isEmpty) {
+        throw Exception('Upload succeeded but image_ref/image_url missing');
       }
 
       await apiClient.patch('/inventory-db/items/${item.inventoryId}', {
-        'image_url': url,
+        // Persist stable ref so the backend can re-sign for list views.
+        'image_url': ref.isNotEmpty ? ref : url,
       });
 
       if (!mounted) return;

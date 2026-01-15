@@ -14,6 +14,7 @@ import '../models/planning.dart';
 import '../models/profile_state.dart';
 import '../models/cuisine.dart';
 import '../config/app_config.dart';
+import '../widgets/savo_network_image.dart';
 import 'recipe_detail_screen.dart';
 import 'cook_mode_screen.dart';
 import 'shopping_list_screen.dart';
@@ -911,20 +912,19 @@ class _RecipeCardState extends State<_RecipeCard> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (_coverImageUrl != null)
-                      Image.network(
-                        _coverImageUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          color: cs.surfaceVariant,
-                          child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
-                        ),
-                      )
-                    else
-                      Container(
-                        color: cs.surfaceVariant,
-                        child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
-                      ),
+                    SavoNetworkImage(
+                      url: _coverImageUrl,
+                      width: double.infinity,
+                      height: double.infinity,
+                      fit: BoxFit.cover,
+                      shape: SavoNetworkImageShape.roundedRect,
+                      borderRadius: BorderRadius.zero,
+                      backgroundColor: cs.surfaceVariant,
+                      placeholderIcon: Icons.restaurant,
+                      errorIcon: Icons.restaurant,
+                      iconColor: cs.onSurfaceVariant,
+                      iconSize: 40,
+                    ),
                     Positioned(
                       top: 6,
                       right: 6,

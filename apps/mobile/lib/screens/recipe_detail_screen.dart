@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +17,8 @@ import 'cook_mode_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/recipe_share_service.dart';
+import '../widgets/savo_network_image.dart';
+import '../config/app_config.dart';
 
 enum _RecipeLanguageMode { english, bilingual }
 
@@ -161,6 +164,28 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     } catch (_) {
       // Best-effort.
     }
+  }
+
+  String? _bestEffortRecipeImageUrl() {
+    final raw = (widget.recipe.imageUrl ?? '').trim();
+    if (raw.isNotEmpty) {
+      if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+      return raw;
+    }
+
+    if (kIsWeb) {
+      final name = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
+      if (name.isEmpty) return null;
+      final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+      final url =
+          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+      return '${Config.apiBaseUrl}$url';
+    }
+
+    final name = widget.recipe.getLocalizedName(_recipeLanguageCode).trim();
+    if (name.isEmpty) return null;
+    final encoded = Uri.encodeComponent(name);
+    return 'https://source.unsplash.com/featured/?food,$encoded';
   }
 
   Future<void> _shareRecipe() async {
@@ -408,6 +433,21 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
     buffer.writeln('**Servings:** $_targetServings');
     buffer.writeln('');
+
+    final sd = (recipe.shortDescription ?? '').trim();
+    if (sd.isNotEmpty) {
+      buffer.writeln('> $sd');
+      buffer.writeln('');
+    }
+
+    if (recipe.servingSuggestions.isNotEmpty) {
+      buffer.writeln('### Serving Suggestions');
+      for (final s in recipe.servingSuggestions) {
+        final line = s.trim();
+        if (line.isNotEmpty) buffer.writeln('- $line');
+      }
+      buffer.writeln('');
+    }
 
     buffer.writeln('### Ingredients');
     if (recipe.ingredientsUsed.isEmpty) {
@@ -960,6 +1000,29 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Hero image
+          Card(
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: SizedBox(
+              height: 180,
+              child: SavoNetworkImage(
+                url: _bestEffortRecipeImageUrl(),
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+                shape: SavoNetworkImageShape.roundedRect,
+                borderRadius: BorderRadius.circular(12),
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                placeholderIcon: Icons.restaurant,
+                errorIcon: Icons.restaurant,
+                iconColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                iconSize: 44,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
           // Header with badges
           Wrap(
             spacing: 8,
@@ -1615,14 +1678,20 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          Image.network(
-                            video.thumbnailUrl,
+                          SavoNetworkImage(
+                            url: video.thumbnailUrl,
+                            width: double.infinity,
+                            height: double.infinity,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
-                              color: Colors.grey[300],
-                              child: const Icon(Icons.play_circle_outline, size: 40),
-                            ),
+                            shape: SavoNetworkImageShape.roundedRect,
+                            borderRadius: BorderRadius.circular(8),
+                            backgroundColor: Colors.grey[300],
+                            placeholderIcon: Icons.play_circle_outline,
+                            errorIcon: Icons.play_circle_outline,
+                            iconColor: Colors.black45,
+                            iconSize: 40,
                           ),
+
                           Center(
                             child: Container(
                               padding: const EdgeInsets.all(8),

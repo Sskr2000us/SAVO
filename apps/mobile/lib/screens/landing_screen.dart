@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 import '../services/entitlements_service.dart';
 import '../widgets/pro_paywall_sheet.dart';
+import '../widgets/savo_network_image.dart';
 import 'onboarding/login_screen.dart';
 import 'pantry_update_entry_screen.dart';
 
@@ -99,10 +100,15 @@ class _LandingScreenState extends State<LandingScreen> {
                             theme.scaffoldBackgroundColor.withAlpha(140),
                             BlendMode.srcATop,
                           ),
-                          child: Image.network(
-                            'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200',
+                          child: SavoNetworkImage(
+                            url: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200',
+                            width: double.infinity,
+                            height: double.infinity,
                             fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                            shape: SavoNetworkImageShape.roundedRect,
+                            backgroundColor: Colors.transparent,
+                            placeholder: const SizedBox.shrink(),
+                            error: const SizedBox.shrink(),
                           ),
                         ),
                       ),
@@ -365,15 +371,18 @@ class _FeatureCard extends StatelessWidget {
           ),
           if (imageUrl != null && imageUrl!.trim().isNotEmpty) ...[
             const SizedBox(width: AppSpacing.lg),
-            ClipRRect(
+            SavoNetworkImage(
+              url: imageUrl,
+              width: 72,
+              height: 72,
+              fit: BoxFit.cover,
+              shape: SavoNetworkImageShape.roundedRect,
               borderRadius: BorderRadius.circular(AppRadius.md),
-              child: Image.network(
-                imageUrl!,
-                width: 72,
-                height: 72,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
-              ),
+              backgroundColor: cs.surfaceVariant,
+              placeholderIcon: Icons.image_outlined,
+              errorIcon: Icons.broken_image_outlined,
+              iconColor: cs.onSurfaceVariant,
+              iconSize: 22,
             ),
           ],
         ],

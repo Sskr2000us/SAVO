@@ -7,6 +7,7 @@ import '../ui/ui_principles.dart';
 import '../services/api_client.dart';
 import '../models/inventory.dart';
 import '../models/profile_state.dart';
+import '../widgets/savo_network_image.dart';
 import '../widgets/quantity_picker.dart';
 import 'scan_ingredients_screen.dart';
 import 'pantry/manual_entry_screen.dart';
@@ -36,9 +37,14 @@ class _InventoryThumb extends StatelessWidget {
 
     return CircleAvatar(
       backgroundColor: Colors.grey.shade200,
-      backgroundImage: NetworkImage(url),
-      onBackgroundImageError: (_, __) {},
-      child: const SizedBox.shrink(),
+      child: SavoNetworkImageThumb.circle(
+        url: url,
+        size: 40,
+        backgroundColor: Colors.grey.shade200,
+        placeholderIcon: Icons.image_outlined,
+        errorIcon: Icons.broken_image_outlined,
+        iconColor: Colors.black38,
+      ),
     );
   }
 }
@@ -1309,21 +1315,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
       builder: (context) {
         return AlertDialog(
           title: const Text('Item image'),
-          content: ClipRRect(
+          content: SavoNetworkImage(
+            url: url,
+            width: 300,
+            height: 200,
+            fit: BoxFit.cover,
+            shape: SavoNetworkImageShape.roundedRect,
             borderRadius: BorderRadius.circular(12),
-            child: Image.network(
-              url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) {
-                return Container(
-                  height: 200,
-                  width: 300,
-                  color: Colors.grey.shade100,
-                  alignment: Alignment.center,
-                  child: const Text('Image unavailable'),
-                );
-              },
-            ),
+            backgroundColor: Colors.grey.shade100,
+            placeholderIcon: Icons.image_outlined,
+            errorIcon: Icons.broken_image_outlined,
+            iconColor: Colors.black38,
+            iconSize: 36,
           ),
           actions: [
             TextButton(
@@ -1365,12 +1368,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
         fieldName: 'image',
       );
       final url = (uploadRes['image_url'] ?? '').toString().trim();
-      if (url.isEmpty) {
-        throw Exception('Upload succeeded but image_url missing');
+      final ref = (uploadRes['image_ref'] ?? '').toString().trim();
+      if (url.isEmpty && ref.isEmpty) {
+        throw Exception('Upload succeeded but image_ref/image_url missing');
       }
 
       await apiClient.patch('/inventory-db/items/${item.inventoryId}', {
-        'image_url': url,
+        // Persist stable ref so the backend can re-sign for list views.
+        'image_url': ref.isNotEmpty ? ref : url,
       });
 
       if (!mounted) return;

@@ -14,6 +14,7 @@ import '../services/scanning_service.dart';
 import '../services/cuisine_preference_service.dart';
 import '../services/entitlements_service.dart';
 import '../widgets/pro_paywall_sheet.dart';
+import '../widgets/savo_network_image.dart';
 import 'cook_now_recipe_detail_screen.dart';
 
 class RecipeOptionsScreen extends StatefulWidget {
@@ -615,20 +616,19 @@ class _RecipeOptionsScreenState extends State<RecipeOptionsScreen> {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              if (imageUrl != null)
-                                Image.network(
-                                  imageUrl,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(
-                                    color: cs.surfaceContainerHighest,
-                                    child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
-                                  ),
-                                )
-                              else
-                                Container(
-                                  color: cs.surfaceContainerHighest,
-                                  child: Icon(Icons.restaurant, color: cs.onSurfaceVariant, size: 40),
-                                ),
+                                 SavoNetworkImage(
+                                   url: imageUrl,
+                                   width: double.infinity,
+                                   height: double.infinity,
+                                   fit: BoxFit.cover,
+                                   shape: SavoNetworkImageShape.roundedRect,
+                                   borderRadius: BorderRadius.zero,
+                                   backgroundColor: cs.surfaceContainerHighest,
+                                   placeholderIcon: Icons.restaurant,
+                                   errorIcon: Icons.restaurant,
+                                   iconColor: cs.onSurfaceVariant,
+                                   iconSize: 40,
+                                 ),
                               if (hasVideo)
                                 Positioned(
                                   top: 8,

@@ -5,6 +5,7 @@ import '../../services/api_client.dart';
 import '../../services/cook_now_service.dart';
 import '../../services/entitlements_service.dart';
 import '../../models/profile_state.dart';
+import '../../widgets/savo_network_image.dart';
 import '../../widgets/quantity_picker.dart';
 import '../recipe_options_screen.dart';
 
@@ -63,27 +64,15 @@ class _IngredientThumb extends StatelessWidget {
       );
     }
 
-    return ClipRRect(
+    return SavoNetworkImageThumb.roundedRect(
+      url: url,
+      size: 44,
       borderRadius: BorderRadius.circular(10),
-      child: Image.network(
-        url,
-        width: 44,
-        height: 44,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) {
-          return Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.broken_image_outlined, size: 18, color: Colors.grey),
-          );
-        },
-      ),
+      backgroundColor: Colors.grey.shade100,
+      border: Border.all(color: Colors.grey.shade300),
+      placeholderIcon: Icons.photo_outlined,
+      errorIcon: Icons.broken_image_outlined,
+      iconColor: Colors.grey,
     );
   }
 }
@@ -173,7 +162,9 @@ class _IngredientConfirmationScreenState
         _suggestedUnits[detectedId] = u;
 
         // Low-confidence quantities must be explicitly confirmed/edited.
-        final needsConfirm = (quantityConfidence == null) || (quantityConfidence < _lowQuantityConfidenceThreshold);
+
+        final needsConfirm = (quantityConfidence == null) ||
+            (quantityConfidence < _lowQuantityConfidenceThreshold);
         _quantityConfirmed[detectedId] = !needsConfirm;
       } else {
         // Default values
@@ -199,7 +190,15 @@ class _IngredientConfirmationScreenState
 
     // Only gate when we had an auto-detected quantity.
     final suggestedQty = _suggestedQuantities[detectedId];
-    return suggestedQty != null;
+    if (suggestedQty == null) return false;
+
+    final qcRaw = ingredient['quantity_confidence'];
+    final double? quantityConfidence = (qcRaw is num)
+        ? qcRaw.toDouble().clamp(0.0, 1.0)
+        : double.tryParse(qcRaw?.toString() ?? '');
+    final needsConfirm = (quantityConfidence == null) ||
+        (quantityConfidence < _lowQuantityConfidenceThreshold);
+    return needsConfirm;
   }
 
   bool _hasUnconfirmedLowConfidenceQuantities() {

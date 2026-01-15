@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import 'savo_network_image.dart';
 
 /// Custom card with SAVO design tokens
 class SavoCard extends StatelessWidget {
@@ -84,16 +85,18 @@ class RecipeCard extends StatelessWidget {
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(AppRadius.md),
                 ),
-                child: imageUrl != null
-                    ? Image.network(
-                        imageUrl!,
-                        height: 180,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) =>
-                            _buildPlaceholder(),
-                      )
-                    : _buildPlaceholder(),
+                child: SavoNetworkImage(
+                  url: imageUrl,
+                  width: double.infinity,
+                  height: 180,
+                  fit: BoxFit.cover,
+                  shape: SavoNetworkImageShape.roundedRect,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(AppRadius.md),
+                  ),
+                  placeholder: _buildPlaceholder(),
+                  error: _buildPlaceholder(),
+                ),
               ),
 
               // Content
@@ -432,11 +435,16 @@ class _HeroCardState extends State<HeroCard>
                 Positioned.fill(
                   child: Opacity(
                     opacity: 0.3,
-                    child: Image.network(
-                      widget.imageUrl!,
+                    child: SavoNetworkImage(
+                      url: widget.imageUrl,
+                      width: double.infinity,
+                      height: double.infinity,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox(),
+                      shape: SavoNetworkImageShape.roundedRect,
+                      borderRadius: BorderRadius.circular(AppRadius.lg),
+                      backgroundColor: Colors.transparent,
+                      placeholder: const SizedBox.shrink(),
+                      error: const SizedBox.shrink(),
                     ),
                   ),
                 ),

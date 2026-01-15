@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,6 +14,8 @@ import '../services/entitlements_service.dart';
 import '../services/upsell_service.dart';
 import '../services/weekly_cook_streak_service.dart';
 import '../widgets/pro_paywall_sheet.dart';
+import '../widgets/savo_network_image.dart';
+import '../config/app_config.dart';
 import 'cook_mode_screen.dart';
 import 'party_setup_screen.dart';
 import 'planning_results_screen.dart';
@@ -50,6 +53,28 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
     'baking powder',
     'baking soda',
   };
+
+  String? _bestEffortRecipeImageUrl(BuildContext context) {
+    final raw = (widget.recipe.imageUrl ?? '').trim();
+    if (raw.isNotEmpty) {
+      if (raw.startsWith('/')) return '${Config.apiBaseUrl}$raw';
+      return raw;
+    }
+
+    if (kIsWeb) {
+      final name = widget.recipe.getLocalizedName(_preferredLanguageKey(context)).trim();
+      if (name.isEmpty) return null;
+      final cuisine = widget.recipe.cuisine.trim().isEmpty ? 'general' : widget.recipe.cuisine.trim();
+      final url =
+          '/recipes/image/proxy?recipe_name=${Uri.encodeComponent(name)}&cuisine=${Uri.encodeComponent(cuisine)}';
+      return '${Config.apiBaseUrl}$url';
+    }
+
+    final name = widget.recipe.getLocalizedName(_preferredLanguageKey(context)).trim();
+    if (name.isEmpty) return null;
+    final encoded = Uri.encodeComponent(name);
+    return 'https://source.unsplash.com/featured/?food,$encoded';
+  }
 
   static String _normalizeIngredientName(String input) {
     return input
@@ -709,6 +734,64 @@ class _CookNowRecipeDetailScreenState extends State<CookNowRecipeDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              height: 170,
+              child: SavoNetworkImage(
+                url: _bestEffortRecipeImageUrl(context),
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+                shape: SavoNetworkImageShape.roundedRect,
+                borderRadius: BorderRadius.circular(12),
+                backgroundColor: cs.surfaceContainerHighest,
+                placeholderIcon: Icons.restaurant,
+                errorIcon: Icons.restaurant,
+                iconColor: cs.onSurfaceVariant,
+                iconSize: 44,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          if ((recipe.shortDescription ?? '').trim().isNotEmpty) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  (recipe.shortDescription ?? '').trim(),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          if (recipe.servingSuggestions.isNotEmpty) ...[
+            _SectionTitle(text: 'Serving Suggestions', color: cs.primary),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: recipe.servingSuggestions
+                      .map((s) => s.trim())
+                      .where((s) => s.isNotEmpty)
+                      .map(
+                        (s) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Text('• $s', style: theme.textTheme.bodyMedium),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),

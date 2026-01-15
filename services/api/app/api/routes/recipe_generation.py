@@ -39,6 +39,7 @@ from app.core.llm_client import get_reasoning_client
 from app.core.llm_utils import generate_json_with_retries
 from app.core.cultural_intelligence import build_cultural_intelligence_prompt
 from app.core.ingredient_combinations import IngredientCombinationEngine
+from app.core.media_storage import to_signed_url
 
 
 router = APIRouter()
@@ -118,8 +119,10 @@ def _best_effort_recent_recipe_avoid_list(*, user_id: str, limit: int = 18) -> D
 
     names: list[str] = []
     ids: list[str] = []
+    fingerprints: list[str] = []
     seen_names: set[str] = set()
     seen_ids: set[str] = set()
+    seen_fps: set[str] = set()
 
     for r in rows:
         if not isinstance(r, dict):
@@ -136,10 +139,166 @@ def _best_effort_recent_recipe_avoid_list(*, user_id: str, limit: int = 18) -> D
                 seen_names.add(nm)
                 names.append(nm)
 
+            fp = _recipe_fingerprint_from_recipe_dict(rec)
+            if fp and fp not in seen_fps:
+                seen_fps.add(fp)
+                fingerprints.append(fp)
+
         if len(names) >= int(limit) and len(ids) >= int(limit):
             break
 
-    return {"recipe_names": names[: int(limit)], "recipe_ids": ids[: int(limit)]}
+    return {
+        "recipe_names": names[: int(limit)],
+        "recipe_ids": ids[: int(limit)],
+        "recipe_fingerprints": fingerprints[: int(limit)],
+    }
+
+
+def _recipe_fingerprint_from_recipe_dict(recipe: Dict[str, Any]) -> str:
+    """Best-effort stable signature used for anti-repeat.
+
+    Intentionally coarse: cuisine + top non-optional ingredients + techniques.
+    """
+
+    if not isinstance(recipe, dict):
+        return ""
+
+    cuisine = str(recipe.get("cuisine") or "mixed").strip().lower() or "mixed"
+
+    techniques_in = recipe.get("techniques") or []
+    techniques: list[str] = []
+    if isinstance(techniques_in, list):
+        for t in techniques_in:
+            s = str(t or "").strip().lower()
+            if s and s not in techniques:
+                techniques.append(s)
+    techniques = sorted(techniques)[:3]
+
+    mains: list[str] = []
+    ing_in = recipe.get("ingredients") or []
+    if isinstance(ing_in, list):
+        for it in ing_in:
+            if not isinstance(it, dict):
+                continue
+            if bool(it.get("optional")):
+                continue
+            nm = str(it.get("canonical_name") or "").strip().lower()
+            if not nm:
+                continue
+            if nm not in mains:
+                mains.append(nm)
+            if len(mains) >= 4:
+                break
+    mains = sorted(mains)[:4]
+
+    return f"{cuisine}|{','.join(techniques)}|{','.join(mains)}"
+
+
+def _extract_request_ingredient_hints(
+    request_text: str | None,
+    pantry_names: list[str],
+    *,
+    limit: int = 4,
+) -> list[str]:
+    """Extract pantry ingredient mentions from request_text.
+
+    Pantry names are normalized (often snake_case). We normalize request_text into a
+    snake-ish token stream to allow matching "olive oil" -> "olive_oil".
+    """
+
+    text = (request_text or "").strip().lower()
+    if not text:
+        return []
+
+    # Normalize free text into a token stream that supports underscore matching.
+    token_stream = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if not token_stream:
+        return []
+
+    hits_with_pos: list[tuple[int, str]] = []
+    for nm in (pantry_names or [])[:250]:
+        key = str(nm or "").strip().lower()
+        if not key:
+            continue
+        # Match on underscore boundaries to reduce false positives.
+        m = re.search(rf"(^|_){re.escape(key)}(_|$)", token_stream)
+        if not m:
+            continue
+        hits_with_pos.append((int(m.start()), key))
+
+    hits_with_pos.sort(key=lambda t: t[0])
+    out: list[str] = []
+    for _, h in hits_with_pos:
+        if h in out:
+            continue
+        out.append(h)
+        if len(out) >= int(limit):
+            break
+    return out
+
+
+def _best_effort_recipe_image_url(
+    *,
+    pantry: list[dict[str, Any]],
+    recipe: "CanonicalRecipe",
+) -> Optional[str]:
+    """Pick a representative image URL for a recipe from the user's pantry.
+
+    Inventory items generally have image_url/image_ref pointing at Supabase Storage.
+    We return a signed URL so the client can display it immediately.
+    """
+
+    if not isinstance(pantry, list):
+        return None
+
+    try:
+        normalizer = get_normalizer()
+    except Exception:
+        normalizer = None
+
+    id_to_image: dict[str, str] = {}
+    for it in pantry:
+        if not isinstance(it, dict):
+            continue
+
+        nm = (it.get("canonical_name") or it.get("name") or "").strip()
+        if not nm:
+            continue
+
+        canon = normalizer.normalize_name(nm) if normalizer is not None else nm.strip().lower()
+        iid = _stable_ingredient_uuid(canon)
+
+        raw = it.get("image_ref") or it.get("image_url") or it.get("image")
+        raw_s = str(raw or "").strip()
+        if not raw_s:
+            continue
+
+        signed = to_signed_url(raw_s, expires_in=3600) or raw_s
+        signed_s = str(signed or "").strip()
+        if signed_s:
+            id_to_image[iid] = signed_s
+
+    if not id_to_image:
+        return None
+
+    try:
+        # Prefer the first non-optional ingredient with an image.
+        for ing in (recipe.ingredients or []):
+            if bool(getattr(ing, "optional", False)):
+                continue
+            iid = str(getattr(ing, "ingredient_id", "")).strip()
+            if iid and id_to_image.get(iid):
+                return id_to_image[iid]
+
+        # Otherwise any ingredient image.
+        for ing in (recipe.ingredients or []):
+            iid = str(getattr(ing, "ingredient_id", "")).strip()
+            if iid and id_to_image.get(iid):
+                return id_to_image[iid]
+    except Exception:
+        return None
+
+    return None
 
 
 def _pick_option_focus_pairs(
@@ -365,6 +524,8 @@ class CanonicalIngredient(BaseModel):
 class CanonicalRecipe(BaseModel):
     recipe_id: str
     recipe_name: str
+    image_url: Optional[str] = None
+    short_description: Optional[str] = None
     cuisine: str
     dietary_tags: List[str]
     prep_time_minutes: int
@@ -373,6 +534,9 @@ class CanonicalRecipe(BaseModel):
     techniques: List[str]
     steps: List[str]
     serves: int
+    chef_tips: List[str] = Field(default_factory=list)
+    serving_suggestions: List[str] = Field(default_factory=list)
+    cultural_context: Optional[Dict[str, Any]] = None
     created_from: str
     version: str = "v1"
 
@@ -1279,6 +1443,10 @@ def _assemble_recipe(
     recipe = CanonicalRecipe(
         recipe_id=str(uuid4()),
         recipe_name=recipe_name,
+        short_description=(
+            f"A quick {cuisine} pantry recipe built around what you already have. "
+            "Taste and adjust seasoning as you go."
+        ),
         cuisine=cuisine,
         dietary_tags=list(constraints.dietary or []),
         prep_time_minutes=int(prep_time),
@@ -1287,6 +1455,14 @@ def _assemble_recipe(
         techniques=techniques,
         steps=steps,
         serves=int(serves),
+        chef_tips=[
+            "Prep everything before you start cooking for best results.",
+            "Add salt gradually and balance with a little acid at the end.",
+        ],
+        serving_suggestions=["Serve hot with a squeeze of lemon/lime if it fits the cuisine."],
+        cultural_context={
+            "note": "Deterministic fallback recipe; generate mode provides richer cultural grounding.",
+        },
         created_from="assembled",
         version="v1",
     )
@@ -1314,6 +1490,8 @@ def _canonical_recipe_json_schema() -> Dict[str, Any]:
         "properties": {
             "recipe_id": {"type": "string"},
             "recipe_name": {"type": "string"},
+            "image_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "short_description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "cuisine": {"type": "string"},
             "dietary_tags": {"type": "array", "items": {"type": "string"}},
             "prep_time_minutes": {"type": "number"},
@@ -1336,6 +1514,14 @@ def _canonical_recipe_json_schema() -> Dict[str, Any]:
             "techniques": {"type": "array", "items": {"type": "string"}},
             "steps": {"type": "array", "items": {"type": "string"}},
             "serves": {"type": "number"},
+            "chef_tips": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "serving_suggestions": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "cultural_context": {
+                "anyOf": [
+                    {"type": "object", "additionalProperties": True},
+                    {"type": "null"},
+                ]
+            },
             "created_from": {"type": "string", "enum": ["retrieved", "assembled", "generated"]},
             "version": {"type": "string"},
         },
@@ -1538,12 +1724,24 @@ async def generate_recipe(
             expiring_names=expiring,
         )
         recent_avoid = _best_effort_recent_recipe_avoid_list(user_id=str(user_id), limit=12)
+
+        requested_hints = _extract_request_ingredient_hints(req.request_text, pantry_names, limit=4)
         focus_pair = _pick_option_focus_pairs(
             pantry_context=pantry_context,
             profile=profile if isinstance(profile, dict) else {},
             count=1,
             prefer_expiring=expiring,
         )
+        # If the user mentions ingredients explicitly, honor them as the main focus.
+        if len(requested_hints) >= 2:
+            a, b = requested_hints[0], requested_hints[1]
+            focus_pair = [
+                {
+                    "option_index": 1,
+                    "main_ingredients": [a, b],
+                    "main_ingredient_ids": [_stable_ingredient_uuid(a), _stable_ingredient_uuid(b)],
+                }
+            ]
         pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
         safety_constraints_text = {
             "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
@@ -1559,6 +1757,7 @@ async def generate_recipe(
 
         prompt = {
             "request_text": (req.request_text or ""),
+            "requested_ingredient_hints": requested_hints,
             "today_utc": _now_iso(),
             "locked_constraints": constraints.model_dump(),
             "family_profile": family_profile_compact,
@@ -1581,6 +1780,7 @@ async def generate_recipe(
                 "max_cooking_time_must_be_respected",
                 "llm_never_decides_constraints_only_fills_structure",
                 "ingredient_id_must_come_from_allowed_or_missing_lists_only",
+                "include_short_description_chef_tips_serving_suggestions_cultural_context",
             ],
             "safety_hint": safety_hint,
         }
@@ -1608,9 +1808,12 @@ async def generate_recipe(
                                 "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
                                 "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
                                 "If main_ingredient_focus is provided, you MUST treat those main_ingredients as the centerpiece (both must appear as non-optional ingredients). "
-                                "You MUST avoid repeating any recipe_names or recipe_ids listed in avoid_recent. "
-                                "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
-                                "Prefer a specific named dish style appropriate to the cuisine (including sub-region if relevant). "
+                                "You MUST avoid repeating any recipe_names, recipe_ids, or recipe_fingerprints listed in avoid_recent. "
+                                "Recipe_fingerprints represent the combination of cuisine + technique + main ingredients; do NOT repeat those patterns. "
+                                "Recipe_name MUST be a specific, culturally grounded dish name (not generic like 'Pantry Bowl'). "
+                                "Steps MUST be written in English (translation is handled separately). "
+                                "You MUST include: short_description, chef_tips (3-6), serving_suggestions (2-5), and cultural_context (origin + why_native + serving_note). "
+                                "If creative_intent is true, prioritize culturally authentic, regionally-native dishes with correct flavor logic (spice base, fat, acid, aromatics) for the cuisine. "
                                 f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
                                 "Return JSON only that matches the schema." 
                             ),
@@ -1687,6 +1890,17 @@ async def generate_recipe(
             recipe_obj = assembled
             pantry_cov = float(coverage)
             missing_items = list(missing)
+
+    # Best-effort recipe image derived from pantry item images.
+    try:
+        img = _best_effort_recipe_image_url(
+            pantry=pantry if isinstance(pantry, list) else [],
+            recipe=recipe_obj,
+        )
+        if img and str(img).strip():
+            recipe_obj.image_url = str(img).strip()
+    except Exception:
+        pass
 
     # Emit mode selection event
     emit_event(
@@ -1822,12 +2036,23 @@ async def generate_recipe_options(
         expiring_names=expiring,
     )
     recent_avoid = _best_effort_recent_recipe_avoid_list(user_id=str(user_id), limit=14)
+
+    requested_hints = _extract_request_ingredient_hints(req.request_text, pantry_names, limit=4)
     option_focus = _pick_option_focus_pairs(
         pantry_context=pantry_context,
         profile=profile if isinstance(profile, dict) else {},
         count=int(count),
         prefer_expiring=expiring,
     )
+    # If the user mentions ingredients, force the first option to center them.
+    if len(requested_hints) >= 2:
+        a, b = requested_hints[0], requested_hints[1]
+        forced = {
+            "option_index": 1,
+            "main_ingredients": [a, b],
+            "main_ingredient_ids": [_stable_ingredient_uuid(a), _stable_ingredient_uuid(b)],
+        }
+        option_focus = [forced] + [x for x in (option_focus or []) if isinstance(x, dict)][: max(0, int(count) - 1)]
     pantry_image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
     safety_constraints_text = {
         "allergens": build_allergen_constraints(profile if isinstance(profile, dict) else {}),
@@ -1843,6 +2068,7 @@ async def generate_recipe_options(
 
     prompt = {
         "request_text": (req.request_text or ""),
+        "requested_ingredient_hints": requested_hints,
         "today_utc": _now_iso(),
         "locked_constraints": constraints.model_dump(),
         "family_profile": family_profile_compact,
@@ -1876,6 +2102,7 @@ async def generate_recipe_options(
             "max_cooking_time_must_be_respected",
             "llm_never_decides_constraints_only_fills_structure",
             "ingredient_id_must_come_from_allowed_or_missing_lists_only",
+            "include_short_description_chef_tips_serving_suggestions_cultural_context",
         ],
         "safety_hint": "",
     }
@@ -1922,7 +2149,9 @@ async def generate_recipe_options(
                             "Return a DIVERSE set of options; do not repeat the same dish with minor variations. "
                             "If option_focus_pairs is provided, you MUST return recipes in the SAME order as option_focus_pairs and "
                             "treat each pair as the MAIN ingredients (must be present as non-optional ingredients). "
-                            "You MUST avoid repeating any recipe_names or recipe_ids listed in avoid_recent. "
+                            "You MUST avoid repeating any recipe_names, recipe_ids, or recipe_fingerprints listed in avoid_recent. "
+                            "Steps MUST be written in English (translation is handled separately). "
+                            "You MUST include: short_description, chef_tips (3-6), serving_suggestions (2-5), and cultural_context (origin + why_native + serving_note). "
                             "Keep each option compact: steps <= 6, ingredient list <= 10. "
                             "If creative_intent is true, prioritize culturally authentic, regionally-native dishes and avoid generic names (e.g., 'Pantry Bowl'). "
                             "Return BETWEEN 3 and option_count recipes if possible; do not fail the whole response if you cannot reach option_count. "
@@ -1949,8 +2178,10 @@ async def generate_recipe_options(
 
         options: list[RecipeGenerateResponse] = []
         seen_names: set[str] = set()
+        seen_fps: set[str] = set()
         recent_names = set((recent_avoid.get("recipe_names") or [])) if isinstance(recent_avoid, dict) else set()
         recent_ids = set((recent_avoid.get("recipe_ids") or [])) if isinstance(recent_avoid, dict) else set()
+        recent_fps = set((recent_avoid.get("recipe_fingerprints") or [])) if isinstance(recent_avoid, dict) else set()
 
         for idx, item in enumerate(raw_recipes):
             if not isinstance(item, dict):
@@ -1972,6 +2203,25 @@ async def generate_recipe_options(
                 "created_from": "generated",
             }
             recipe_obj = CanonicalRecipe(**normalized)
+
+            # Best-effort recipe image derived from pantry item images.
+            try:
+                img = _best_effort_recipe_image_url(
+                    pantry=pantry if isinstance(pantry, list) else [],
+                    recipe=recipe_obj,
+                )
+                if img and str(img).strip():
+                    recipe_obj.image_url = str(img).strip()
+            except Exception:
+                pass
+
+            fp = _recipe_fingerprint_from_recipe_dict(normalized)
+            if fp:
+                if fp in seen_fps:
+                    continue
+                if fp in recent_fps:
+                    continue
+                seen_fps.add(fp)
 
             # Basic dedupe by name
             nm = (recipe_obj.recipe_name or "").strip().lower()
@@ -2168,6 +2418,16 @@ async def generate_recipe_options(
             target_language=target_language,
             include_steps=True,
         )
+
+        try:
+            img = _best_effort_recipe_image_url(
+                pantry=pantry if isinstance(pantry, list) else [],
+                recipe=assembled,
+            )
+            if img and str(img).strip():
+                assembled.image_url = str(img).strip()
+        except Exception:
+            pass
 
         return RecipeGenerateOptionsResponse(
             options=[

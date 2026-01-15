@@ -888,6 +888,46 @@ class _CookModeScreenState extends State<CookModeScreen> {
                   ),
                   const SizedBox(height: 16),
 
+                  if (widget.recipe.servingSuggestions.isNotEmpty) ...[
+                    Card(
+                      child: ExpansionTile(
+                        leading: Icon(Icons.restaurant_menu, color: cs.secondary),
+                        title: Text(
+                          'Serving Suggestions',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: widget.recipe.servingSuggestions
+                                  .map(
+                                    (s) => Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Icon(
+                                            Icons.arrow_right,
+                                            size: 18,
+                                            color: cs.secondary,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Expanded(child: Text(s)),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
                   // Step instruction
                   Expanded(
                     child: Card(
