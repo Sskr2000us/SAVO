@@ -495,24 +495,41 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
             left: 16,
             right: 16,
             bottom: 16,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.65),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.qr_code_scanner, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _handling
-                          ? 'Looking up barcode…'
-                          : (_addedCount > 0
-                              ? 'Point camera at a barcode • Added: $_addedCount'
-                              : 'Point camera at a barcode'),
-                      style: const TextStyle(color: Colors.white),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.65),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.qr_code_scanner, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _handling
+                                ? 'Looking up barcode…'
+                                : (_addedCount > 0
+                                    ? 'Point camera at a barcode • Added: $_addedCount'
+                                    : 'Point camera at a barcode'),
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 48,
+                    child: FilledButton(
+                      onPressed: _finish,
+                      child: const Text('Finish scanning'),
                     ),
                   ),
                 ],
