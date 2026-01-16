@@ -613,13 +613,13 @@ class RecipeGenerateRequest(BaseModel):
         ),
     )
     min_inventory_match: float = Field(
-        default=0.60,
+        default=0.75,
         ge=0.0,
         le=1.0,
         description="Minimum required pantry match ratio (0-1), after ignoring staples/spices.",
     )
     max_missing_ingredients: int = Field(
-        default=2,
+        default=1,
         ge=0,
         le=25,
         description="Maximum allowed missing ingredients (after ignoring staples/spices).",
