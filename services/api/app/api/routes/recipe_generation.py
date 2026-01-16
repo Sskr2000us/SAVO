@@ -604,6 +604,33 @@ class RecipeGenerateRequest(BaseModel):
         description="Optional creativity level. 'high' forces LLM generation for more native/innovative recipes.",
     )
 
+    # Inventory enforcement (strict mode)
+    enforce_inventory_match: bool = Field(
+        default=True,
+        description=(
+            "If true, candidates must meet inventory overlap thresholds (after ignoring staples/spices). "
+            "When pantry is empty, enforcement is automatically disabled."
+        ),
+    )
+    min_inventory_match: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Minimum required pantry match ratio (0-1), after ignoring staples/spices.",
+    )
+    max_missing_ingredients: int = Field(
+        default=2,
+        ge=0,
+        le=25,
+        description="Maximum allowed missing ingredients (after ignoring staples/spices).",
+    )
+    min_scored_ingredients: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Minimum number of non-staple ingredients required to score a recipe.",
+    )
+
 
 class RecipeGenerateOptionsRequest(RecipeGenerateRequest):
     count: int = Field(
@@ -921,6 +948,9 @@ class RecipeGenerateOptionsResponse(BaseModel):
     # Additive fields; safe for clients that ignore unknown keys.
     quality_rejections_total: int = 0
     quality_rejections: Dict[str, int] = Field(default_factory=dict)
+    inventory_rejections_total: int = 0
+    inventory_rejections: Dict[str, int] = Field(default_factory=dict)
+    inventory_thresholds: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RecipeAttemptRecord(BaseModel):
@@ -1343,6 +1373,187 @@ def _pantry_coverage(*, pantry_names: List[str], ingredient_names: List[str]) ->
     return float(covered) / float(len(required)), missing
 
 
+_STAPLE_OR_SPICE_TOKENS: set[str] = {
+    "salt",
+    "pepper",
+    "black_pepper",
+    "water",
+    "oil",
+    "olive_oil",
+    "vegetable_oil",
+    "coconut_oil",
+    "ghee",
+    "butter",
+    "sugar",
+    "flour",
+    "wheat",
+    "cumin",
+    "coriander",
+    "turmeric",
+    "paprika",
+    "chili",
+    "chilli",
+    "garam_masala",
+    "curry_powder",
+    "onion_powder",
+    "garlic_powder",
+}
+
+
+def _is_staple_or_spice(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if not n:
+        return True
+    n = n.replace(" ", "_").replace("-", "_")
+    if n in _STAPLE_OR_SPICE_TOKENS:
+        return True
+    if n.endswith("_masala") or n.endswith("_powder"):
+        return True
+    return False
+
+
+def _canonicalize_for_match(name: str) -> str:
+    """Best-effort canonicalization for inventory matching.
+
+    This is intentionally small/safe: it only collapses obvious variants
+    that commonly appear in scans/catalogs.
+    """
+
+    n = (name or "").strip().lower()
+    if not n:
+        return ""
+    n = n.replace(" ", "_").replace("-", "_")
+
+    # Collapse rice variants to a single "rice" token.
+    if n in {"basmati", "basmati_rice", "boiled_rice", "brown_rice", "jasmine_rice", "long_grain_rice"}:
+        return "rice"
+    if n.endswith("_rice") and n != "rice":
+        return "rice"
+
+    # Common US/UK pepper naming.
+    if n == "capsicum":
+        return "bell_pepper"
+
+    return n
+
+
+def _resolve_inventory_enforcement(
+    req: "RecipeGenerateRequest",
+    pantry_names: List[str],
+) -> Tuple[bool, float, int, int, Dict[str, Any]]:
+    """Resolve effective enforcement config.
+
+    Returns: (enabled, min_match, max_missing, min_scored_ingredients, thresholds_dict)
+
+    If pantry has no non-staple items, enforcement is disabled.
+    """
+
+    enabled = bool(getattr(req, "enforce_inventory_match", True))
+    min_match = float(getattr(req, "min_inventory_match", 0.60) or 0.0)
+    max_missing = int(getattr(req, "max_missing_ingredients", 2) or 0)
+    min_scored = int(getattr(req, "min_scored_ingredients", 3) or 1)
+
+    # If pantry is empty/unscorable, disable enforcement.
+    try:
+        normalizer = get_normalizer()
+        pantry_norm = [
+            _canonicalize_for_match(normalizer.normalize_name(x))
+            for x in (pantry_names or [])
+            if isinstance(x, str) and x.strip()
+        ]
+        pantry_scored = [p for p in pantry_norm if p and (not _is_staple_or_spice(p))]
+    except Exception:
+        pantry_scored = []
+
+    if not pantry_scored:
+        enabled = False
+        min_scored = 1
+    else:
+        # Don’t require more scored ingredients than we have available.
+        min_scored = max(1, min(int(min_scored), len(pantry_scored)))
+
+    thresholds = {
+        "enabled": bool(enabled),
+        "min_inventory_match": float(min_match),
+        "max_missing_ingredients": int(max_missing),
+        "min_scored_ingredients": int(min_scored),
+    }
+    return enabled, float(min_match), int(max_missing), int(min_scored), thresholds
+
+
+def _inventory_match_stats(
+    *,
+    pantry_names: List[str],
+    ingredient_names: List[str],
+    min_scored_ingredients: int,
+) -> Tuple[bool, float, List[str], int, int]:
+    """Compute pantry match ratio + missing list.
+
+    Returns: (scorable, match_ratio, missing_names, scored_total, scored_matched)
+    """
+
+    normalizer = get_normalizer()
+    pantry = [
+        _canonicalize_for_match(normalizer.normalize_name(x))
+        for x in (pantry_names or [])
+        if isinstance(x, str) and x.strip()
+    ]
+    pantry_set = set(pantry)
+
+    scored: list[str] = []
+    for raw in (ingredient_names or []):
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        nm = _canonicalize_for_match(normalizer.normalize_name(raw))
+        if not nm:
+            continue
+        if _is_staple_or_spice(nm):
+            continue
+        if nm not in scored:
+            scored.append(nm)
+
+    if len(scored) < int(min_scored_ingredients or 1):
+        return False, 0.0, [], len(scored), 0
+
+    missing = [nm for nm in scored if nm not in pantry_set]
+    matched = len(scored) - len(missing)
+    ratio = float(matched) / float(len(scored)) if scored else 0.0
+    return True, ratio, missing, len(scored), matched
+
+
+def _enforce_inventory_match_for_recipe(
+    *,
+    enabled: bool,
+    min_match: float,
+    max_missing: int,
+    min_scored_ingredients: int,
+    pantry_names: List[str],
+    ingredient_names: List[str],
+) -> Tuple[bool, List[str], float, List[str]]:
+    """Return (ok, rejection_reasons, match_ratio, missing_names)."""
+
+    if not enabled:
+        return True, [], 0.0, []
+
+    scorable, ratio, missing, scored_total, _matched = _inventory_match_stats(
+        pantry_names=pantry_names,
+        ingredient_names=ingredient_names,
+        min_scored_ingredients=min_scored_ingredients,
+    )
+
+    reasons: list[str] = []
+    if not scorable:
+        reasons.append("inventory_unscorable")
+        return False, reasons, float(ratio or 0.0), list(missing)
+
+    if float(ratio) < float(min_match):
+        reasons.append("inventory_match_low")
+    if int(len(missing)) > int(max_missing):
+        reasons.append("inventory_missing_too_many")
+
+    return (len(reasons) == 0), reasons, float(ratio), list(missing)
+
+
 def _pantry_coverage_by_id(
     *,
     pantry_id_to_name: Dict[str, str],
@@ -1751,115 +1962,273 @@ def _assemble_recipe(
     serves: int,
     expiring_names: List[str],
 ) -> Tuple[CanonicalRecipe, float, List[MissingIngredient]]:
-    # Deterministic assembly: pick a small set of pantry ingredients and build a simple recipe.
+    # Deterministic (fail-closed) assembly: create a *realistic* pantry-based recipe.
+    # Goal: avoid returning "junk" generic recipes when retrieval/generation can't find a good match.
     normalizer = get_normalizer()
 
+    pantry_norm = [normalizer.normalize_name(x) for x in (pantry_names or []) if isinstance(x, str) and x.strip()]
+    pantry_set = set(pantry_norm)
+
     # Prefer expiring items when requested.
-    pool = list(pantry_names)
+    pool = list(pantry_norm)
     if constraints.use_expiring_items and expiring_names:
-        pool = list(expiring_names) + [p for p in pantry_names if p not in set(expiring_names)]
+        exp_norm = [normalizer.normalize_name(x) for x in (expiring_names or []) if isinstance(x, str) and x.strip()]
+        exp_set = set(exp_norm)
+        pool = list(exp_norm) + [p for p in pantry_norm if p not in exp_set]
 
-    chosen = pool[:6]
-    if constraints.cuisine == "italian":
-        base = ["olive_oil", "garlic", "tomato"]
-        for b in base:
-            if b in pantry_names and b not in chosen:
-                chosen.insert(0, b)
-        chosen = chosen[:6]
+    # Small, stable ingredient subset.
+    chosen = [x for x in pool if x][:8]
 
-    if constraints.cuisine == "indian":
-        base = ["onion", "tomato"]
-        for b in base:
-            if b in pantry_names and b not in chosen:
-                chosen.insert(0, b)
-        chosen = chosen[:6]
+    cuisine = (constraints.cuisine or "mixed").strip().lower() or "mixed"
+    max_time = int(constraints.max_time_minutes or 30)
+    prep_time = min(max_time, 35)
 
-    cuisine = constraints.cuisine or "mixed"
-    max_time = constraints.max_time_minutes or 30
-    prep_time = min(max_time, 30)
-
-    ingredients = [
-        CanonicalIngredient(
-            canonical_name=nm,
-            ingredient_id=_stable_ingredient_uuid(nm),
-            quantity=1,
-            unit="pieces",
-            optional=False,
-        )
-        for nm in chosen
-    ]
-
-    # Pantry coverage is computed against chosen ingredients (should be 100%).
-    coverage, missing = _pantry_coverage(pantry_names=pantry_names, ingredient_names=chosen)
-
-    missing_items = [MissingIngredient(canonical_name=m) for m in missing]
-
-    def _pretty_title(v: str) -> str:
-        return (
-            (v or "")
-            .replace("_", " ")
-            .replace("-", " ")
-            .strip()
-            .title()
-        )
-
-    # Pick 1-2 headline ingredients for a non-generic title.
-    boring = {
+    protein = {
+        "chicken",
+        "beef",
+        "pork",
+        "lamb",
+        "fish",
+        "salmon",
+        "tuna",
+        "shrimp",
+        "eggs",
+        "egg",
+        "paneer",
+        "tofu",
+        "tempeh",
+        "chickpeas",
+        "lentils",
+        "beans",
+    }
+    veggies = {
+        "onion",
+        "tomato",
+        "garlic",
+        "ginger",
+        "carrot",
+        "bell_pepper",
+        "capsicum",
+        "peas",
+        "spinach",
+        "potato",
+        "cabbage",
+        "cauliflower",
+        "broccoli",
+    }
+    spices = {
         "salt",
         "pepper",
-        "black pepper",
+        "black_pepper",
+        "cumin",
+        "turmeric",
+        "coriander",
+        "chili",
+        "chilli",
+        "garam_masala",
+        "curry_powder",
         "oil",
-        "olive oil",
         "olive_oil",
+        "ghee",
         "butter",
-        "water",
-        "sugar",
-        "flour",
     }
-    headline_pool = [c for c in chosen if c and c.strip().lower() not in boring]
-    if len(headline_pool) < 2:
-        headline_pool = list(chosen)
 
-    head = [_pretty_title(x) for x in headline_pool[:2] if _pretty_title(x)]
-    head_text = " & ".join(head) if head else "Skillet"
-    cuisine_prefix = (cuisine.title() + " ") if cuisine and cuisine != "mixed" else ""
-    recipe_name = f"Quick {cuisine_prefix}{head_text} Skillet".strip()
-    steps = [
-        "Prep ingredients (wash, chop as needed).",
-        "Saute aromatics in a pan with oil until fragrant.",
-        "Add remaining ingredients and cook until tender.",
-        "Season to taste and serve warm.",
+    def _is_rice(nm: str) -> bool:
+        n = (nm or "").strip().lower()
+        return ("rice" in n) or (n in {"basmati", "basmati_rice", "boiled_rice"})
+
+    def _cat(nm: str) -> str:
+        n = (nm or "").strip().lower()
+        if _is_rice(n) or n in {"pasta", "noodles", "flour", "wheat"}:
+            return "carb"
+        if n in protein:
+            return "protein"
+        if n in veggies:
+            return "veg"
+        if n in spices:
+            return "spice"
+        return "other"
+
+    def _pretty_title(v: str) -> str:
+        return (v or "").replace("_", " ").replace("-", " ").strip().title()
+
+    def _default_unit(nm: str) -> str:
+        n = (nm or "").strip().lower()
+        if _is_rice(n):
+            return "cups"
+        if n in protein:
+            return "g"
+        if n in {"milk", "yogurt", "cream"}:
+            return "cups"
+        if n in spices:
+            return "tsp"
+        return "pieces"
+
+    # Choose a headline pair that isn't "rice + rice".
+    by_cat: dict[str, list[str]] = {"protein": [], "veg": [], "carb": [], "other": []}
+    for nm in chosen:
+        c = _cat(nm)
+        if c in by_cat:
+            by_cat[c].append(nm)
+        else:
+            by_cat["other"].append(nm)
+
+    headline: list[str] = []
+    if by_cat["protein"] and by_cat["carb"]:
+        headline = [by_cat["protein"][0], by_cat["carb"][0]]
+    elif by_cat["veg"] and by_cat["carb"]:
+        headline = [by_cat["veg"][0], by_cat["carb"][0]]
+    else:
+        # Fallback: just pick the first two distinct categories if possible.
+        seen_cats: set[str] = set()
+        for nm in chosen:
+            c = _cat(nm)
+            if c in {"spice"}:
+                continue
+            if c not in seen_cats:
+                headline.append(nm)
+                seen_cats.add(c)
+            if len(headline) >= 2:
+                break
+        if len(headline) < 2:
+            headline = chosen[:2]
+
+    # Build a more realistic recipe for common patterns.
+    has_chicken = "chicken" in pantry_set
+    has_carrot = "carrot" in pantry_set
+    has_onion = "onion" in pantry_set
+    has_tomato = "tomato" in pantry_set
+    has_rice = any(_is_rice(x) for x in pantry_set)
+
+    techniques = list(constraints.techniques_allowed or [])
+    if not techniques:
+        techniques = ["saute", "simmer"]
+
+    # Default: keep only pantry items in the ingredient list.
+    ingredients: list[CanonicalIngredient] = []
+    for nm in chosen[:10]:
+        ingredients.append(
+            CanonicalIngredient(
+                canonical_name=nm,
+                ingredient_id=_stable_ingredient_uuid(nm),
+                quantity=1,
+                unit=_default_unit(nm),
+                optional=False,
+            )
+        )
+
+    # Pantry coverage is computed against chosen ingredients (should be ~100%).
+    coverage, missing = _pantry_coverage(pantry_names=pantry_norm, ingredient_names=[i.canonical_name for i in ingredients])
+    missing_items = [MissingIngredient(canonical_name=m) for m in missing]
+
+    recipe_name = "Quick Pantry Recipe"
+    steps: list[str] = [
+        "Prep your ingredients (wash/chop as needed).",
+        "Cook until done, seasoning to taste.",
     ]
+    short_description = "A quick pantry-based meal using what you have."
+    chef_tips = [
+        "Taste as you cook and adjust salt/spice gradually.",
+        "If something starts sticking, add a splash of water and lower the heat.",
+    ]
+    serving_suggestions = ["Serve hot."]
 
-    techniques = constraints.techniques_allowed or ["saute"]
+    # Indian pantry-friendly rice dish (covers the screenshot case well).
+    if cuisine == "indian" and has_rice and (has_chicken or by_cat["veg"]):
+        rice_name = next((x for x in pantry_set if _is_rice(x)), "rice")
+        if has_chicken:
+            recipe_name = "Quick Chicken Pulao"
+            if has_carrot:
+                recipe_name = "Quick Chicken & Carrot Pulao"
+            short_description = "A one-pot Indian-style rice dish that makes the most of your pantry ingredients."
+            steps = [
+                "Rinse rice until the water runs mostly clear. Set aside.",
+                "Heat oil in a pot. If you have onion/garlic/ginger, sauté until fragrant.",
+                "Add chicken and cook until it turns opaque on the outside.",
+                "Add carrots/other veggies (if you have them) and cook 2–3 minutes.",
+                "Stir in any spices you have (cumin/turmeric/pepper). Add rice and mix well.",
+                "Add water, bring to a boil, then cover and simmer on low until rice is tender and chicken is cooked through.",
+                "Rest covered 5 minutes, fluff, and serve.",
+            ]
+            techniques = ["saute", "simmer"]
+        else:
+            recipe_name = "Quick Veg Pulao"
+            if has_carrot:
+                recipe_name = "Quick Carrot Pulao"
+            short_description = "A simple, pantry-first Indian rice dish with vegetables."
+            steps = [
+                "Rinse rice and set aside.",
+                "Heat oil in a pot. If you have onion, sauté until soft.",
+                "Add vegetables (carrot/peas/capsicum) and cook 2–3 minutes.",
+                "Stir in any spices you have (cumin/turmeric/pepper). Add rice and mix well.",
+                "Add water, bring to a boil, then cover and simmer on low until the rice is tender.",
+                "Rest 5 minutes, fluff, and serve.",
+            ]
+            techniques = ["saute", "simmer"]
+
+        chef_tips = [
+            "Keep the heat low once covered to prevent burning.",
+            "If you have tomato, add it before the rice for extra flavor.",
+            "If you have yogurt/lemon, serve on the side for balance.",
+        ]
+        serving_suggestions = [
+            "Serve with yogurt or a squeeze of lemon if available.",
+            "Add a simple salad (onion/tomato) if you have it.",
+        ]
+
+        # Prefer protein/carb/veg in the ingredient list ordering.
+        preferred_order: list[str] = []
+        for nm in ["chicken", "carrot", "onion", "tomato", rice_name]:
+            if nm in pantry_set and nm in [i.canonical_name for i in ingredients]:
+                preferred_order.append(nm)
+        remaining = [i.canonical_name for i in ingredients if i.canonical_name not in set(preferred_order)]
+        ordered_names = preferred_order + remaining
+        ingredients = [
+            CanonicalIngredient(
+                canonical_name=nm,
+                ingredient_id=_stable_ingredient_uuid(nm),
+                quantity=1,
+                unit=_default_unit(nm),
+                optional=False,
+            )
+            for nm in ordered_names
+        ]
+
+    else:
+        # Generic-but-less-junky fallback name: prefer a diverse headline pair.
+        head = [_pretty_title(x) for x in headline if _pretty_title(x)]
+        head_text = " & ".join(head) if head else "Pantry"
+        cuisine_prefix = (cuisine.title() + " ") if cuisine and cuisine != "mixed" else ""
+        recipe_name = f"Quick {cuisine_prefix}{head_text}".strip()
+        short_description = f"A quick {cuisine_prefix.strip() or 'home-style'} meal built from your pantry ingredients."
+        steps = [
+            "Prep ingredients (wash, chop as needed).",
+            "Heat a pan with oil; sauté any aromatics you have until fragrant.",
+            "Add proteins first (if any), then vegetables; cook until done.",
+            "If using rice/pasta, cook or simmer until tender. Season to taste and serve.",
+        ]
 
     recipe = CanonicalRecipe(
         recipe_id=str(uuid4()),
         recipe_name=recipe_name,
-        short_description=(
-            f"A quick, weeknight-friendly {cuisine_prefix.strip() or 'home-style'} skillet centered on {head_text}. "
-            "Taste and adjust seasoning as you go."
-        ),
+        short_description=short_description,
         cuisine=cuisine,
         dietary_tags=list(constraints.dietary or []),
         prep_time_minutes=int(prep_time),
         difficulty="easy",
         ingredients=ingredients,
         techniques=techniques,
-        steps=steps,
+        steps=steps[:12],
         serves=int(serves),
-        chef_tips=[
-            "Prep everything before you start cooking for best results.",
-            "Add salt gradually and balance with a little acid at the end.",
-        ],
-        serving_suggestions=["Serve hot with a squeeze of lemon/lime if it fits the cuisine."],
+        chef_tips=chef_tips,
+        serving_suggestions=serving_suggestions,
         cultural_context={
-            "note": "Deterministic fallback recipe; generate mode provides richer cultural grounding.",
+            "note": "Deterministic fallback recipe built strictly from the provided pantry ingredients.",
         },
         created_from="assembled",
         version="v1",
     )
-    return recipe, coverage, missing_items
+    return recipe, float(coverage or 0.0), missing_items
 
 
 def _canonical_recipe_json_schema() -> Dict[str, Any]:
@@ -2108,6 +2477,11 @@ async def generate_recipe(
 
     preferred_threshold = 0.70
 
+    inv_enabled, inv_min_match, inv_max_missing, inv_min_scored, inv_thresholds = _resolve_inventory_enforcement(
+        req,
+        pantry_names,
+    )
+
     # Try retrieved first.
     # Optimization: for explicit creative/native requests we skip retrieval to reduce latency
     # and maximize novelty.
@@ -2152,11 +2526,28 @@ async def generate_recipe(
         ok_r, _ = validate_recipe_safety(r_recipe.model_dump(), profile if isinstance(profile, dict) else {})
         ok_meaningful, _ = _is_meaningful_recipe_dict(r_recipe.model_dump())
         if ok_r and ok_meaningful:
-            recipe_obj = r_recipe
-            pantry_cov = float(r_cov)
-            missing_items = list(r_missing)
-            mode = "retrieved"
-            reason = "pantry_match"
+            cand_ing = [
+                str(getattr(i, "canonical_name", "") or "").strip()
+                for i in (getattr(r_recipe, "ingredients", None) or [])
+                if not bool(getattr(i, "optional", False))
+            ]
+            ok_inv, inv_reasons, inv_ratio, inv_missing = _enforce_inventory_match_for_recipe(
+                enabled=inv_enabled,
+                min_match=inv_min_match,
+                max_missing=inv_max_missing,
+                min_scored_ingredients=inv_min_scored,
+                pantry_names=pantry_names,
+                ingredient_names=cand_ing,
+            )
+            if ok_inv:
+                recipe_obj = r_recipe
+                pantry_cov = float(inv_ratio if inv_enabled else r_cov)
+                if inv_enabled:
+                    missing_items = [MissingIngredient(canonical_name=m) for m in (inv_missing or [])]
+                else:
+                    missing_items = list(r_missing)
+                mode = "retrieved"
+                reason = "pantry_match"
 
     if recipe_obj is None:
         recipe_obj = assembled
@@ -2364,18 +2755,41 @@ async def generate_recipe(
 
             # Pantry coverage for generated recipes is computed by stable ingredient_id mapping.
             ing_ids: List[str] = []
+            ing_names: List[str] = []
             try:
                 for it in (generated.get("ingredients") or []):
                     if isinstance(it, dict) and it.get("ingredient_id"):
+                        if bool(it.get("optional")):
+                            continue
                         ing_ids.append(str(it.get("ingredient_id")))
+                        nm = str(it.get("canonical_name") or "").strip()
+                        if nm:
+                            ing_names.append(nm)
             except Exception:
                 ing_ids = []
+                ing_names = []
 
             pantry_cov, missing_items = _pantry_coverage_by_id(
                 pantry_id_to_name=pantry_id_to_name,
                 ingredient_ids=ing_ids,
                 id_to_name_hint={**missing_id_to_name},
             )
+
+            # Strict inventory enforcement (ignore staples/spices)
+            ok_inv, _inv_reasons, inv_ratio, inv_missing = _enforce_inventory_match_for_recipe(
+                enabled=inv_enabled,
+                min_match=inv_min_match,
+                max_missing=inv_max_missing,
+                min_scored_ingredients=inv_min_scored,
+                pantry_names=pantry_names,
+                ingredient_names=ing_names,
+            )
+            if inv_enabled and not ok_inv:
+                raise ValueError("Generated recipe failed inventory enforcement")
+
+            if inv_enabled:
+                pantry_cov = float(inv_ratio)
+                missing_items = [MissingIngredient(canonical_name=m) for m in (inv_missing or [])]
 
         except Exception as e:
             # Best-effort diagnostics. This endpoint used to swallow errors and always fall back,
@@ -2518,6 +2932,11 @@ async def generate_recipe_options(
 
     preferred_threshold = 0.70
 
+    inv_enabled, inv_min_match, inv_max_missing, inv_min_scored, inv_thresholds = _resolve_inventory_enforcement(
+        req,
+        pantry_names,
+    )
+
     # Deterministic fallback (for fail-closed behavior)
     assembled, assembled_cov, assembled_missing = _assemble_recipe(
         pantry_names=pantry_names,
@@ -2531,12 +2950,42 @@ async def generate_recipe_options(
     quality_rejections: dict[str, int] = {}
     quality_rejections_total = 0
 
+    inventory_rejections: dict[str, int] = {}
+    inventory_rejections_total = 0
+
     def _record_quality_rejection(reasons: List[str]) -> None:
         nonlocal quality_rejections_total
         quality_rejections_total += 1
         for r in (reasons or []):
             k = (r or "").strip() or "unknown"
             quality_rejections[k] = int(quality_rejections.get(k, 0)) + 1
+
+    def _record_inventory_rejection(reasons: List[str]) -> None:
+        nonlocal inventory_rejections_total
+        inventory_rejections_total += 1
+        for r in (reasons or []):
+            k = (r or "").strip() or "unknown"
+            inventory_rejections[k] = int(inventory_rejections.get(k, 0)) + 1
+
+    def _inventory_enforce_or_reject(*, recipe: CanonicalRecipe) -> Tuple[bool, float, List[MissingIngredient]]:
+        ing_names = [
+            str(getattr(i, "canonical_name", "") or "").strip()
+            for i in (getattr(recipe, "ingredients", None) or [])
+            if not bool(getattr(i, "optional", False))
+        ]
+        ok_inv, reasons, ratio, missing_names = _enforce_inventory_match_for_recipe(
+            enabled=inv_enabled,
+            min_match=inv_min_match,
+            max_missing=inv_max_missing,
+            min_scored_ingredients=inv_min_scored,
+            pantry_names=pantry_names,
+            ingredient_names=ing_names,
+        )
+        if not ok_inv:
+            _record_inventory_rejection(reasons)
+            return False, float(ratio or 0.0), []
+        missing_items = [MissingIngredient(canonical_name=m) for m in (missing_names or [])]
+        return True, float(ratio or 0.0), missing_items
 
     def _top_up_options_from_catalog(
         *,
@@ -2573,13 +3022,17 @@ async def generate_recipe_options(
             except Exception:
                 # Best-effort only; don't fail top-up.
                 pass
+
+            ok_inv, inv_ratio, inv_missing_items = _inventory_enforce_or_reject(recipe=recipe_obj)
+            if not ok_inv:
+                continue
             rid = str(getattr(recipe_obj, "recipe_id", "") or "").strip()
             if rid and rid in used_ids:
                 continue
             if rid:
                 used_ids.add(rid)
             trust = TrustSignals(
-                uses_what_you_have=float(pantry_cov or 0.0) >= preferred_threshold and len(missing_items) == 0,
+                uses_what_you_have=float(inv_ratio if inv_enabled else pantry_cov or 0.0) >= preferred_threshold and len(inv_missing_items if inv_enabled else (missing_items or [])) == 0,
                 estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
                 uses_expiring_items=bool(constraints.use_expiring_items and expiring),
                 adjustable_spice_level=True,
@@ -2588,8 +3041,8 @@ async def generate_recipe_options(
                 RecipeGenerateResponse(
                     recipe=recipe_obj,
                     locked_constraints=effective_constraints,
-                    pantry_coverage=float(pantry_cov or 0.0),
-                    missing_ingredients=list(missing_items or []),
+                    pantry_coverage=float(inv_ratio if inv_enabled else pantry_cov or 0.0),
+                    missing_ingredients=list(inv_missing_items if inv_enabled else (missing_items or [])),
                     mode="retrieved",
                     reason=str(reason),
                     trust_signals=trust,
@@ -2655,6 +3108,9 @@ async def generate_recipe_options(
             options=options,
             quality_rejections_total=int(quality_rejections_total),
             quality_rejections=dict(quality_rejections),
+            inventory_rejections_total=int(inventory_rejections_total),
+            inventory_rejections=dict(inventory_rejections),
+            inventory_thresholds=dict(inv_thresholds),
         )
 
     # Prepare generation prompt
@@ -2888,12 +3344,19 @@ async def generate_recipe_options(
             seen_names.add(nm)
 
             ing_ids: List[str] = []
+            ing_names: List[str] = []
             try:
                 for it in (item.get("ingredients") or []):
                     if isinstance(it, dict) and it.get("ingredient_id"):
+                        if bool(it.get("optional")):
+                            continue
                         ing_ids.append(str(it.get("ingredient_id")))
+                        nm = str(it.get("canonical_name") or "").strip()
+                        if nm:
+                            ing_names.append(nm)
             except Exception:
                 ing_ids = []
+                ing_names = []
 
             # Enforce the 2-item "main ingredient" focus when we have a blueprint.
             if isinstance(option_focus, list) and idx < len(option_focus):
@@ -2912,6 +3375,22 @@ async def generate_recipe_options(
                 ingredient_ids=ing_ids,
                 id_to_name_hint={**missing_id_to_name},
             )
+
+            ok_inv, reasons, inv_ratio, inv_missing_names = _enforce_inventory_match_for_recipe(
+                enabled=inv_enabled,
+                min_match=inv_min_match,
+                max_missing=inv_max_missing,
+                min_scored_ingredients=inv_min_scored,
+                pantry_names=pantry_names,
+                ingredient_names=ing_names,
+            )
+            if inv_enabled and not ok_inv:
+                _record_inventory_rejection(reasons)
+                continue
+
+            if inv_enabled:
+                pantry_cov = float(inv_ratio)
+                missing_items = [MissingIngredient(canonical_name=m) for m in (inv_missing_names or [])]
 
             uses_what_you_have = float(pantry_cov or 0.0) >= preferred_threshold and len(missing_items) == 0
             uses_expiring = bool(constraints.use_expiring_items and expiring)
@@ -3042,6 +3521,9 @@ async def generate_recipe_options(
             options=options,
             quality_rejections_total=int(quality_rejections_total),
             quality_rejections=dict(quality_rejections),
+            inventory_rejections_total=int(inventory_rejections_total),
+            inventory_rejections=dict(inventory_rejections),
+            inventory_thresholds=dict(inv_thresholds),
         )
 
     except Exception as e:
@@ -3166,6 +3648,9 @@ async def generate_recipe_options(
             options=fallback_options,
             quality_rejections_total=int(quality_rejections_total),
             quality_rejections=dict(quality_rejections),
+            inventory_rejections_total=int(inventory_rejections_total),
+            inventory_rejections=dict(inventory_rejections),
+            inventory_thresholds=dict(inv_thresholds),
         )
 
 
