@@ -1,0 +1,152 @@
+[
+  {
+    "id": "south_indian_lemon_rice_bowl",
+    "cuisine": "Indian",
+    "region": "South Indian",
+    "title": "Lemon Rice Bowl with Peanut Tempering + Cucumber Raita",
+    "tags": ["rice", "tempering", "raita", "tiffin"],
+    "key_ingredients": ["rice", "lemon", "turmeric", "mustard seeds", "curry leaves", "green chili", "peanuts", "yogurt", "cucumber"],
+    "components": {
+      "base": "Lemon rice (chitranna-style) with mustard-curry leaf tempering",
+      "main": "Quick pepper-fry style sautéed vegetable or paneer",
+      "side": "Cucumber raita",
+      "condiment": "Lime pickle or coconut chutney (optional)"
+    },
+    "flavor_logic": "Bright acid + turmeric, tempered mustard/curry leaves, crunch from peanuts; cooling raita balances heat."
+  },
+  {
+    "id": "rajma_chawal_bowl",
+    "cuisine": "Indian",
+    "region": "North Indian",
+    "title": "Rajma-Chawal Bowl with Onion Salad + Jeera Rice",
+    "tags": ["beans", "rice", "stew", "comfort"],
+    "key_ingredients": ["kidney beans", "rice", "onion", "tomato", "ginger", "garlic", "cumin", "garam masala", "coriander"],
+    "components": {
+      "base": "Jeera rice",
+      "main": "Rajma masala (tomato-onion gravy)",
+      "side": "Kachumber-style onion salad",
+      "condiment": "Lemon wedge or pickle"
+    },
+    "flavor_logic": "Slow-cooked bean gravy with toasted cumin aroma; fresh salad adds crunch and brightness."
+  },
+  {
+    "id": "chana_masala_bowl",
+    "cuisine": "Indian",
+    "region": "North Indian",
+    "title": "Chana Masala Bowl with Rice + Crunchy Kachumber",
+    "tags": ["chickpeas", "one-pot", "weeknight"],
+    "key_ingredients": ["chickpeas", "rice", "tomato", "onion", "cumin", "coriander", "amchur", "kasuri methi"],
+    "components": {
+      "base": "Steamed rice",
+      "main": "Chana masala",
+      "side": "Tomato-onion-cucumber kachumber",
+      "condiment": "Green chutney (optional)"
+    },
+    "flavor_logic": "Tangy chickpeas with amchur + kasuri methi; crunchy salad keeps the bowl lively."
+  },
+  {
+    "id": "sambar_rice_bowl",
+    "cuisine": "Indian",
+    "region": "South Indian",
+    "title": "Sambar Rice Bowl with Poriyal + Coconut Chutney",
+    "tags": ["lentils", "tamarind", "vegetables"],
+    "key_ingredients": ["toor dal", "rice", "tamarind", "sambar powder", "mustard seeds", "curry leaves", "vegetables", "coconut"],
+    "components": {
+      "base": "Rice",
+      "main": "Sambar (dal + tamarind + vegetables)",
+      "side": "Quick poriyal (stir-fry)",
+      "condiment": "Coconut chutney (optional)"
+    },
+    "flavor_logic": "Tamarind-lentil stew with sambar spice; dry poriyal adds texture contrast."
+  },
+  {
+    "id": "curd_rice_bowl",
+    "cuisine": "Indian",
+    "region": "South Indian",
+    "title": "Tempered Curd Rice Bowl with Mango/Carrot + Roasted Peanuts",
+    "tags": ["yogurt", "tempering", "summer"],
+    "key_ingredients": ["rice", "yogurt", "mustard seeds", "curry leaves", "ginger", "green chili", "carrot", "mango", "peanuts"],
+    "components": {
+      "base": "Curd rice (yogurt rice)",
+      "main": "Tempering (mustard + curry leaves + ginger)",
+      "side": "Carrot or mango mix-in",
+      "condiment": "Pickle (optional)"
+    },
+    "flavor_logic": "Cooling yogurt + aromatic tempering; crunchy peanuts and sweet-tart mix-ins."
+  },
+  {
+    "id": "vegetable_pulao_bowl",
+    "cuisine": "Indian",
+    "region": "Pan-Indian",
+    "title": "Vegetable Pulao Bowl with Raita + Pickle",
+    "tags": ["one-pot", "rice", "aromatic"],
+    "key_ingredients": ["rice", "mixed vegetables", "cumin", "whole spices", "onion", "mint", "yogurt"],
+    "components": {
+      "base": "Vegetable pulao",
+      "main": "Spiced vegetables folded into rice",
+      "side": "Raita",
+      "condiment": "Pickle"
+    },
+    "flavor_logic": "Whole-spice aroma in rice; raita cools and adds acidity."
+  },
+  {
+    "id": "khichdi_bowl",
+    "cuisine": "Indian",
+    "region": "Pan-Indian",
+    "title": "Moong Dal Khichdi Bowl with Ghee Tempering + Papad",
+    "tags": ["lentils", "comfort", "soft"],
+    "key_ingredients": ["moong dal", "rice", "ghee", "cumin", "hing", "turmeric", "ginger", "papad"],
+    "components": {
+      "base": "Soft moong dal khichdi",
+      "main": "Ghee-jeera tempering",
+      "side": "Papad or roasted peanuts",
+      "condiment": "Pickle or yogurt"
+    },
+    "flavor_logic": "Gentle spices + ghee aroma; crunchy papad adds contrast."
+  },
+  {
+    "id": "paneer_tikka_bowl",
+    "cuisine": "Indian",
+    "region": "North Indian",
+    "title": "Paneer Tikka Bowl with Rice + Mint-Coriander Chutney",
+    "tags": ["paneer", "tikka", "grill"],
+    "key_ingredients": ["paneer", "yogurt", "chili powder", "garam masala", "lemon", "rice", "mint", "coriander"],
+    "components": {
+      "base": "Rice",
+      "main": "Pan-seared paneer tikka-style pieces",
+      "side": "Onion-tomato salad",
+      "condiment": "Mint-coriander chutney"
+    },
+    "flavor_logic": "Smoky-spiced paneer with tangy yogurt-lemon notes; fresh chutney brightens."
+  },
+  {
+    "id": "egg_masala_bowl",
+    "cuisine": "Indian",
+    "region": "South Indian",
+    "title": "Egg Masala Bowl with Rice + Quick Thoran",
+    "tags": ["eggs", "masala", "quick"],
+    "key_ingredients": ["eggs", "rice", "onion", "tomato", "curry leaves", "mustard seeds", "chili powder"],
+    "components": {
+      "base": "Rice",
+      "main": "Egg masala (onion-tomato gravy)",
+      "side": "Quick sautéed greens or cabbage thoran (optional)",
+      "condiment": "Pickle or lemon"
+    },
+    "flavor_logic": "Robust onion-tomato masala with curry leaf tempering; side adds texture and freshness."
+  },
+  {
+    "id": "dal_tadka_bowl",
+    "cuisine": "Indian",
+    "region": "North Indian",
+    "title": "Dal Tadka Bowl with Rice + Onion Salad",
+    "tags": ["dal", "tempering", "weeknight"],
+    "key_ingredients": ["toor dal", "moong dal", "ghee", "cumin", "garlic", "red chili", "rice", "onion", "lemon"],
+    "components": {
+      "base": "Rice",
+      "main": "Dal tadka (garlic-cumin tempering)",
+      "side": "Onion salad",
+      "condiment": "Lemon wedge"
+    },
+    "flavor_logic": "Creamy dal with sizzling tempering; raw onion and lemon lift richness."
+  }
+]

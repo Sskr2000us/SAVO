@@ -42,6 +42,9 @@ from app.core.llm_utils import generate_json_with_retries
 from app.core.cultural_intelligence import build_cultural_intelligence_prompt
 from app.core.ingredient_combinations import IngredientCombinationEngine
 from app.core.media_storage import to_signed_url
+from app.core.pantry_bowl_composer import build_pantry_bowl_plan
+from app.core.recipe_rag import pick_pantry_bowl_exemplars
+from app.core.youtube_recipe_extraction import summarize_youtube_recipe
 
 
 router = APIRouter()
@@ -146,6 +149,227 @@ def _wants_native_or_innovative_recipe(request_text: str | None) -> bool:
         return False
     # Conservative substring matching (supports phrases like "native style" / "cultural recipe").
     return any(k in text for k in _CREATIVE_RECIPE_KEYWORDS)
+
+
+def _wants_pantry_bowl(
+    request_text: str | None,
+    *,
+    cuisine: str | None,
+    meal_type: str | None,
+) -> bool:
+    text = (request_text or "").strip().lower()
+    if not text:
+        return False
+
+    # Only trigger the bowl-composer path for explicit bowl intents.
+    # We do NOT want accidental generation of vague "pantry bowl" style recipes.
+    if "pantry bowl" in text:
+        return True
+    if "grain bowl" in text:
+        return True
+    if "buddha bowl" in text:
+        return True
+    if "rice bowl" in text:
+        return True
+
+    return False
+
+
+def _pantry_bowl_critic_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "ok": {"type": "boolean"},
+            "issues": {"type": "array", "items": {"type": "string"}},
+            "repair_instructions": {"type": "string"},
+        },
+        "required": ["ok", "issues", "repair_instructions"],
+    }
+
+
+async def _criticize_pantry_bowl_recipe(
+    *,
+    client: Any,
+    recipe: dict[str, Any],
+    constraints: "LockedConstraints",
+    pantry_names: list[str],
+) -> dict[str, Any]:
+    schema = _pantry_bowl_critic_schema()
+    payload = {
+        "locked_constraints": constraints.model_dump(),
+        "pantry_ingredients": list(pantry_names or [])[:80],
+        "recipe": recipe,
+        "criteria": [
+            "recipe_name_specific_and_not_generic",
+            "recipe_name_must_not_be_or_contain_indian_pantry_bowl",
+            "indian_flavor_logic_present_spice_base_fat_acid_aromatics",
+            "clear_component_structure_base_main_side_condiment_or_finish",
+            "steps_have_timings_and_action_verbs",
+            "ingredient_list_has_amounts_units",
+            "does_not_contradict_constraints_and_safety",
+        ],
+    }
+
+    return await generate_json_with_retries(
+        client=client,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict culinary QA critic for SAVO. "
+                    "Assess whether the given recipe is world-class and matches the criteria. "
+                    "Be conservative: if anything is generic, underspecified, or not Indian-authentic, mark ok=false. "
+                    "Return JSON only that matches the schema."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        schema=schema,
+        max_attempts=2,
+        repair_hint="pantry bowl critique json",
+        mode_hint="critique",
+        temperature=0.2,
+        presence_penalty=0.0,
+        frequency_penalty=0.0,
+    )
+
+
+async def _try_generate_pantry_bowl_recipe(
+    *,
+    client: Any,
+    req: "RecipeGenerateRequest",
+    constraints: "LockedConstraints",
+    pantry_names: list[str],
+    pantry_context: list[dict[str, Any]],
+    pantry_image_signals: list[dict[str, Any]],
+    missing_candidates: list[str],
+    expiring: list[str],
+    family_profile_compact: dict[str, Any],
+    safety_constraints_text: dict[str, Any],
+    cultural_intelligence_text: str,
+    preferred_threshold: float,
+    recent_avoid: dict[str, Any],
+    attempt_id: str,
+    safety_hint: str,
+) -> dict[str, Any]:
+    schema = _canonical_recipe_json_schema()
+
+    bowl_plan = build_pantry_bowl_plan(
+        pantry_names=list(pantry_names or []),
+        cuisine=constraints.cuisine,
+        request_text=(req.request_text or ""),
+        expiring=list(expiring or []),
+    )
+    exemplars = await pick_pantry_bowl_exemplars(
+        pantry_names=list(pantry_names or []),
+        request_text=(req.request_text or ""),
+        cuisine=constraints.cuisine,
+        limit=4,
+        prefer_embeddings=True,
+    )
+
+    prompt = {
+        "request_text": (req.request_text or ""),
+        "today_utc": _now_iso(),
+        "locked_constraints": constraints.model_dump(),
+        "family_profile": family_profile_compact,
+        "safety_constraints": safety_constraints_text,
+        "allowed_pantry_ingredients": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in pantry_names],
+        "pantry_context": pantry_context,
+        "pantry_image_signals": pantry_image_signals,
+        "missing_candidates": [{"canonical_name": n, "ingredient_id": _stable_ingredient_uuid(n)} for n in missing_candidates],
+        "expiring_items": expiring,
+        "avoid_recent": recent_avoid,
+        "preferred_pantry_coverage_threshold": preferred_threshold,
+        "serves": int(req.serves),
+        "creative_intent": True,
+        "bowl_plan": bowl_plan,
+        "rag_exemplars": exemplars,
+        "hard_constraints": [
+            "only_pantry_available_ingredients_or_explicitly_marked_missing",
+            "cuisine_logic_must_match",
+            "dietary_rules_must_be_enforced",
+            "max_cooking_time_must_be_respected",
+            "llm_never_decides_constraints_only_fills_structure",
+            "ingredient_id_must_come_from_allowed_or_missing_lists_only",
+            "include_short_description_chef_tips_serving_suggestions_cultural_context",
+            "recipe_name_must_be_specific_not_generic_not_pantry_bowl",
+            "bowl_structure_must_have_base_main_side_finish",
+        ],
+        "safety_hint": safety_hint,
+        "request_id": attempt_id,
+        "variation_seed": str(uuid4()),
+    }
+
+    system = (
+        "You are SAVO's Indian pantry-bowl composer. "
+        "You MUST follow locked_constraints exactly and respect safety_constraints and family_profile. "
+        "You MUST use bowl_plan as the structure: base + main + side + condiment/finish. "
+        "CRITICAL: Every ingredient_id MUST match one of allowed_pantry_ingredients or missing_candidates. "
+        "Recipe_name MUST be a specific, culturally grounded dish name (not generic like 'Pantry Bowl'). "
+        "CRITICAL: Recipe_name MUST NOT be 'Indian Pantry Bowl' and MUST NOT contain the phrase 'pantry bowl'. "
+        "Steps MUST be written in English and include timings/heat levels when relevant. "
+        "Use rag_exemplars only as inspiration and grounding; do not copy them verbatim. "
+        "You MUST include: short_description, chef_tips (3-6), serving_suggestions (2-5), and cultural_context. "
+        f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding):\n{(cultural_intelligence_text or '').strip()}\n"
+        "Return JSON only that matches the schema."
+    )
+
+    generated = await generate_json_with_retries(
+        client=client,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
+        schema=schema,
+        max_attempts=2,
+        repair_hint="indian pantry bowl recipe json",
+        mode_hint="recipe",
+        temperature=0.88,
+        presence_penalty=0.55,
+        frequency_penalty=0.12,
+    )
+
+    ok_meaningful, reasons = _is_meaningful_recipe_dict(generated)
+    if ok_meaningful:
+        return generated
+
+    # Critic pass + one repair attempt (kept tight for latency).
+    critique = await _criticize_pantry_bowl_recipe(
+        client=client,
+        recipe=generated if isinstance(generated, dict) else {},
+        constraints=constraints,
+        pantry_names=pantry_names,
+    )
+    if isinstance(critique, dict) and bool(critique.get("ok")):
+        return generated
+
+    critic_feedback = ""
+    try:
+        critic_feedback = (critique.get("repair_instructions") or "").strip() if isinstance(critique, dict) else ""
+    except Exception:
+        critic_feedback = ""
+
+    prompt["critic_feedback"] = critic_feedback
+    prompt["quality_rejection_reasons"] = list(reasons or [])
+    prompt["variation_seed"] = str(uuid4())
+
+    repaired = await generate_json_with_retries(
+        client=client,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
+        schema=schema,
+        max_attempts=2,
+        repair_hint="indian pantry bowl recipe json repair",
+        mode_hint="recipe",
+        temperature=0.84,
+        presence_penalty=0.45,
+        frequency_penalty=0.10,
+    )
+    return repaired
 
 
 def _pick_cultural_focus_ingredients(*, pantry_names: list[str], expiring: list[str]) -> list[str]:
@@ -602,6 +826,22 @@ class RecipeGenerateRequest(BaseModel):
     creativity: Optional[Literal["standard", "high"]] = Field(
         default=None,
         description="Optional creativity level. 'high' forces LLM generation for more native/innovative recipes.",
+    )
+
+    # Source locking (retrieve-first)
+    source_recipe_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "If provided, the API must resolve this exact recipe_id from the SAVO catalog and return it. "
+            "Example: 'youtube:<video_id>'. When set, the API must NOT generate a new recipe."
+        ),
+    )
+    youtube_video_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional YouTube video id to hard-lock the recipe source. Equivalent to source_recipe_id='youtube:<video_id>'. "
+            "When set, the API must NOT generate a new recipe."
+        ),
     )
 
     # Inventory enforcement (strict mode)
@@ -2317,6 +2557,554 @@ _GENERIC_RECIPE_NAME_RE = re.compile(
 )
 
 
+_GENERIC_NAME_FORBIDDEN_PHRASES = [
+    # Beyond pantry bowl: explicitly forbid generic 'bowl' labels.
+    "indian rice bowl",
+    "spiced rice bowl",
+    "healthy bowl",
+    "fusion bowl",
+    "indian bowl",
+    "spiced bowl",
+    "rice bowl",
+    "grain bowl",
+    "buddha bowl",
+]
+
+
+def _is_too_generic_recipe_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if not n:
+        return True
+    if _GENERIC_RECIPE_NAME_RE.search(n):
+        return True
+    if re.search(r"\bindian\s+pantry\s+bowl\b", n, flags=re.IGNORECASE):
+        return True
+    for p in _GENERIC_NAME_FORBIDDEN_PHRASES:
+        if p in n:
+            return True
+    # Catch near-equivalents like "Quick Healthy Bowl" / "Indian Bowl (Rice)".
+    if re.search(r"\b(healthy|fusion|spiced|indian)\s+(rice\s+)?bowl\b", n, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _step_has_numbers_and_heat(step: str) -> bool:
+    s = (step or "").strip().lower()
+    if not s:
+        return False
+    has_num = bool(re.search(r"\d", s))
+    if not has_num:
+        return False
+    has_time_or_temp = bool(
+        re.search(r"\b(sec|secs|second|seconds|min|mins|minute|minutes|hour|hours)\b", s)
+        or re.search(r"\b(low|medium|med|high)\b", s)
+        or ("°c" in s or "°f" in s or "c" in s and "°" in s)
+        or bool(re.search(r"\b\d+\s*(c|f)\b", s))
+    )
+    return has_time_or_temp
+
+
+def _validate_specificity_contract(recipe: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """High-ROI specificity contract for generated recipes.
+
+    - Numbers everywhere (steps)
+    - Quantities + units for ingredients
+    - Dish identity fields exist
+    """
+
+    issues: List[str] = []
+
+    ing = recipe.get("ingredients")
+    if not isinstance(ing, list) or not ing:
+        issues.append("missing_ingredients")
+    else:
+        for it in ing:
+            if not isinstance(it, dict):
+                issues.append("invalid_ingredient_shape")
+                break
+            try:
+                qty = float(it.get("quantity"))
+            except Exception:
+                qty = None
+            unit = str(it.get("unit") or "").strip()
+            if qty is None or qty <= 0:
+                issues.append("ingredient_missing_quantity")
+                break
+            if not unit:
+                issues.append("ingredient_missing_unit")
+                break
+
+    steps = recipe.get("steps")
+    if not isinstance(steps, list) or not steps:
+        issues.append("missing_steps")
+    else:
+        bad = 0
+        for s in steps:
+            if not isinstance(s, str) or not s.strip():
+                bad += 1
+                continue
+            if not _step_has_numbers_and_heat(s):
+                bad += 1
+        if bad > 0:
+            issues.append("steps_missing_numbers_or_heat")
+
+    cc = recipe.get("cultural_context")
+    if not isinstance(cc, dict):
+        issues.append("missing_cultural_context")
+    else:
+        for k in ["dish_family", "region", "signature_technique", "flavor_profile"]:
+            v = cc.get(k)
+            if not isinstance(v, str) or not v.strip():
+                issues.append(f"missing_{k}")
+
+    nm = (recipe.get("recipe_name") or "").strip()
+    if _is_too_generic_recipe_name(nm):
+        issues.append("generic_name")
+
+    return (len(issues) == 0), issues
+
+
+def _recipe_critic_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "ok": {"type": "boolean"},
+            "issues": {"type": "array", "items": {"type": "string"}},
+            "repair_instructions": {"type": "string"},
+        },
+        "required": ["ok", "issues", "repair_instructions"],
+    }
+
+
+async def _criticize_generated_recipe(
+    *,
+    client: Any,
+    recipe: dict[str, Any],
+    constraints: "LockedConstraints",
+    pantry_names: list[str],
+) -> dict[str, Any]:
+    schema = _recipe_critic_schema()
+    payload = {
+        "locked_constraints": constraints.model_dump(),
+        "pantry_ingredients": list(pantry_names or [])[:80],
+        "recipe": recipe,
+        "specificity_contract": {
+            "require_numbers_everywhere_in_steps": True,
+            "require_ingredient_quantities_and_units": True,
+            "require_dish_identity_fields": ["dish_family", "region", "signature_technique", "flavor_profile"],
+            "forbid_generic_names": _GENERIC_NAME_FORBIDDEN_PHRASES,
+        },
+        "criteria": [
+            "recipe_name_specific_not_generic_not_bowl_label",
+            "ingredients_have_quantities_and_units",
+            "steps_have_numbers_time_and_heat_or_temperature",
+            "cultural_context_contains_identity_fields",
+            "dish_identity_is_reflected_in_steps",
+            "does_not_contradict_constraints_and_safety",
+        ],
+    }
+
+    return await generate_json_with_retries(
+        client=client,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict recipe QA critic for SAVO. "
+                    "Be conservative: if any specificity contract item is missing, ok=false. "
+                    "Return JSON only that matches the schema."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        schema=schema,
+        max_attempts=2,
+        repair_hint="recipe critique json",
+        mode_hint="critique",
+        temperature=0.2,
+        presence_penalty=0.0,
+        frequency_penalty=0.0,
+    )
+
+
+def _resolve_source_lock_recipe_id(req: "RecipeGenerateRequest") -> str | None:
+    rid = (getattr(req, "source_recipe_id", None) or "").strip()
+    if rid:
+        return rid
+    vid = (getattr(req, "youtube_video_id", None) or "").strip()
+    if vid:
+        # Keep fairly permissive; we still require an exact catalog match.
+        if not re.fullmatch(r"[A-Za-z0-9_-]{6,}", vid):
+            return None
+        return f"youtube:{vid}"
+    return None
+
+
+def _is_sparse_catalog_row(row: dict[str, Any]) -> bool:
+    ing = row.get("ingredients")
+    if isinstance(ing, list) and len([x for x in ing if x]) > 0:
+        return False
+    instr = row.get("instructions")
+    if isinstance(instr, list):
+        joined = " ".join([str(x) for x in instr if x is not None]).lower()
+        if "watch" in joined and "video" in joined:
+            return True
+        if len([x for x in instr if str(x).strip()]) <= 1:
+            return True
+    if isinstance(instr, str):
+        t = instr.lower()
+        if "watch" in t and "video" in t:
+            return True
+    return True
+
+
+def _youtube_augmentation_path() -> Path:
+    here = Path(__file__).resolve()
+    # services/api/app/api/routes -> services/api/app/data
+    return here.parents[2] / "data" / "youtube_recipe_augmentations.json"
+
+
+_YOUTUBE_AUG_CACHE: dict[str, Any] = {"path": None, "mtime": None, "items": None}
+
+
+def _load_youtube_augmentations() -> dict[str, Any]:
+    path = _youtube_augmentation_path()
+    if not path.exists():
+        return {}
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+
+    if (
+        _YOUTUBE_AUG_CACHE.get("items") is not None
+        and _YOUTUBE_AUG_CACHE.get("path") == str(path)
+        and _YOUTUBE_AUG_CACHE.get("mtime") == mtime
+    ):
+        return dict(_YOUTUBE_AUG_CACHE.get("items") or {})
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        _YOUTUBE_AUG_CACHE.update({"path": str(path), "mtime": mtime, "items": data})
+        return dict(data)
+    except Exception:
+        return {}
+
+
+def _save_youtube_augmentations(items: dict[str, Any]) -> None:
+    path = _youtube_augmentation_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+        try:
+            _YOUTUBE_AUG_CACHE.update({"path": str(path), "mtime": path.stat().st_mtime, "items": dict(items)})
+        except Exception:
+            pass
+    except Exception:
+        # Best-effort only.
+        return
+
+
+def _catalog_row_by_recipe_id(recipe_id: str) -> dict[str, Any] | None:
+    rid = (recipe_id or "").strip()
+    if not rid:
+        return None
+    for row in (_load_catalog_items() or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("recipe_id") or "").strip() == rid:
+            return row
+    return None
+
+
+def _youtube_video_id_from_recipe_id(recipe_id: str) -> str | None:
+    rid = (recipe_id or "").strip()
+    if rid.lower().startswith("youtube:"):
+        vid = rid.split(":", 1)[1].strip()
+        return vid if vid else None
+    return None
+
+
+def _parse_ingredient_line(line: str) -> Tuple[str, float, str]:
+    """Best-effort parse for transcript ingredient strings like '2 tbsp oil'."""
+    s = (line or "").strip()
+    if not s:
+        return "", 1.0, "pieces"
+
+    parts = s.split()
+    qty = None
+    unit = ""
+    name = s
+    try:
+        qty = float(parts[0])
+        if len(parts) >= 2:
+            unit = parts[1]
+        name = " ".join(parts[2:]).strip() if len(parts) >= 3 else "".strip()
+    except Exception:
+        qty = None
+
+    if qty is None:
+        return s, 1.0, "pieces"
+    if not unit:
+        unit = "pieces"
+    if not name:
+        name = s
+    return name, float(qty), str(unit)
+
+
+async def _maybe_enrich_youtube_catalog_row(
+    *,
+    row: dict[str, Any],
+    output_language: str,
+) -> dict[str, Any]:
+    rid = str(row.get("recipe_id") or "").strip()
+    vid = _youtube_video_id_from_recipe_id(rid)
+    if not vid:
+        return row
+    if not _is_sparse_catalog_row(row):
+        return row
+
+    aug = _load_youtube_augmentations()
+    cached = aug.get(vid) if isinstance(aug, dict) else None
+    if isinstance(cached, dict):
+        merged = dict(row)
+        if isinstance(cached.get("ingredients"), list) and not merged.get("ingredients"):
+            merged["ingredients"] = list(cached.get("ingredients") or [])
+        if isinstance(cached.get("steps"), list) and not merged.get("instructions"):
+            merged["instructions"] = list(cached.get("steps") or [])
+        if isinstance(cached.get("recipe_name_en"), str) and cached.get("recipe_name_en"):
+            merged["recipe_name"] = {"en": str(cached.get("recipe_name_en"))}
+        return merged
+
+    # On-demand enrichment via transcript pipeline (best-effort).
+    try:
+        llm_client = get_reasoning_client()
+        name_hint = _catalog_recipe_name_en(row) or rid
+        summary = await summarize_youtube_recipe(
+            video_id=vid,
+            recipe_name=name_hint,
+            output_language=(output_language or "en"),
+            transcript_language=None,
+            llm_client=llm_client,
+        )
+        ingredients = summary.get("ingredients") if isinstance(summary, dict) else []
+        steps = summary.get("steps") if isinstance(summary, dict) else []
+        recipe_name_en = summary.get("recipe_name_en") if isinstance(summary, dict) else ""
+
+        if not isinstance(ingredients, list):
+            ingredients = []
+        if not isinstance(steps, list):
+            steps = []
+        if not isinstance(recipe_name_en, str):
+            recipe_name_en = ""
+
+        if ingredients or steps or recipe_name_en:
+            aug = aug if isinstance(aug, dict) else {}
+            aug[vid] = {
+                "recipe_name_en": recipe_name_en,
+                "ingredients": ingredients,
+                "steps": steps,
+                "updated_at": _now_iso(),
+            }
+            _save_youtube_augmentations(aug)
+
+        merged = dict(row)
+        if ingredients and not merged.get("ingredients"):
+            merged["ingredients"] = ingredients
+        if steps and not merged.get("instructions"):
+            merged["instructions"] = steps
+        if recipe_name_en:
+            merged["recipe_name"] = {"en": recipe_name_en}
+        return merged
+    except Exception:
+        return row
+
+
+def _catalog_row_to_canonical_recipe(
+    *,
+    row: dict[str, Any],
+    serves: int,
+    constraints: LockedConstraints,
+) -> CanonicalRecipe:
+    rid = str(row.get("recipe_id") or str(uuid4()))
+    rcuisine = str(row.get("cuisine") or constraints.cuisine or "mixed").strip().lower() or "mixed"
+    difficulty = str(row.get("difficulty") or "easy").strip().lower() or "easy"
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = "easy"
+
+    steps: list[str] = []
+    instr = row.get("instructions")
+    if isinstance(instr, list):
+        steps = [str(x).strip() for x in instr if str(x).strip()]
+    elif isinstance(instr, str) and instr.strip():
+        steps = [s.strip() for s in instr.split("\n") if s.strip()]
+    if not steps:
+        steps = ["Follow the linked recipe/video instructions."]
+
+    ingredients: list[CanonicalIngredient] = []
+    ing = row.get("ingredients")
+    if isinstance(ing, list):
+        for it in ing[:20]:
+            if isinstance(it, dict):
+                nm = str(it.get("canonical_name") or it.get("name") or it.get("ingredient") or "").strip()
+                if not nm:
+                    continue
+                try:
+                    qty = float(it.get("quantity") or 1)
+                except Exception:
+                    qty = 1.0
+                unit = str(it.get("unit") or "pieces").strip() or "pieces"
+                ingredients.append(
+                    CanonicalIngredient(
+                        canonical_name=nm,
+                        ingredient_id=str(it.get("ingredient_id") or _stable_ingredient_uuid(nm)),
+                        quantity=float(qty),
+                        unit=unit,
+                        optional=bool(it.get("optional", False)),
+                    )
+                )
+            elif isinstance(it, str) and it.strip():
+                nm, qty, unit = _parse_ingredient_line(it)
+                if nm:
+                    ingredients.append(
+                        CanonicalIngredient(
+                            canonical_name=nm,
+                            ingredient_id=_stable_ingredient_uuid(nm),
+                            quantity=float(qty),
+                            unit=str(unit or "pieces"),
+                            optional=False,
+                        )
+                    )
+
+    # Best-effort cultural_context passthrough.
+    cc = row.get("cultural_context") if isinstance(row.get("cultural_context"), dict) else None
+
+    recipe = CanonicalRecipe(
+        recipe_id=rid,
+        recipe_name=_catalog_recipe_name_en(row) or "Recipe",
+        cuisine=rcuisine,
+        dietary_tags=list(row.get("dietary_tags") or constraints.dietary or []),
+        prep_time_minutes=int(row.get("prep_time_minutes") or 30),
+        difficulty=difficulty,
+        ingredients=ingredients,
+        techniques=list(row.get("techniques") or constraints.techniques_allowed or []),
+        steps=steps[:18],
+        serves=int(serves),
+        chef_tips=list(row.get("chef_tips") or []) if isinstance(row.get("chef_tips"), list) else [],
+        serving_suggestions=list(row.get("serving_suggestions") or []) if isinstance(row.get("serving_suggestions"), list) else [],
+        cultural_context=cc,
+        created_from="retrieved",
+        version=str(row.get("version") or "v1"),
+    )
+
+    recipe.image_urls = _build_image_urls(recipe_name=recipe.recipe_name, cuisine=recipe.cuisine, count=3)
+    if recipe.image_urls and not (recipe.image_url or "").strip():
+        recipe.image_url = recipe.image_urls[0]
+    return recipe
+
+
+async def _finalize_generate_response(
+    *,
+    req: RecipeGenerateRequest,
+    user_id: str,
+    attempt_id: str,
+    profile: dict[str, Any],
+    pantry: list[dict[str, Any]],
+    constraints: LockedConstraints,
+    preferred_threshold: float,
+    expiring: list[str],
+    recipe_obj: CanonicalRecipe,
+    pantry_cov: float,
+    missing_items: list[MissingIngredient],
+    mode: str,
+    reason: str,
+) -> RecipeGenerateResponse:
+    # Best-effort recipe image derived from pantry item images.
+    try:
+        img = _best_effort_recipe_image_url(
+            pantry=pantry if isinstance(pantry, list) else [],
+            recipe=recipe_obj,
+        )
+        if img and str(img).strip():
+            recipe_obj.image_url = str(img).strip()
+    except Exception:
+        pass
+
+    emit_event(
+        event_type="recipe.mode_selected",
+        user_id=str(user_id),
+        entity_type="recipe_attempt",
+        entity_id=attempt_id,
+        payload={
+            "mode": mode,
+            "reason": reason,
+            "pantry_coverage": pantry_cov,
+            "missing_count": len(missing_items),
+        },
+    )
+
+    uses_what_you_have = pantry_cov >= preferred_threshold and len(missing_items) == 0
+    uses_expiring = bool(constraints.use_expiring_items and expiring)
+
+    trust = TrustSignals(
+        uses_what_you_have=bool(uses_what_you_have),
+        estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
+        uses_expiring_items=uses_expiring,
+        adjustable_spice_level=True,
+    )
+
+    try:
+        family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
+        pantry_context_all = _extract_pantry_context(
+            pantry if isinstance(pantry, list) else [],
+            prefer_expiring_items=bool(constraints.use_expiring_items),
+            expiring_names=expiring,
+        )
+        image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
+        _best_effort_persist_recipe_attempt(
+            user_id=str(user_id),
+            attempt_id=attempt_id,
+            payload={
+                "recipe_id": str(getattr(recipe_obj, "recipe_id", "")),
+                "request_text": (req.request_text or ""),
+                "mode": mode,
+                "reason": reason,
+                "pantry_coverage": float(pantry_cov or 0.0),
+                "locked_constraints": constraints.model_dump(),
+                "family_profile": family_profile_compact,
+                "pantry_context": pantry_context_all,
+                "missing_ingredients": [m.model_dump() for m in (missing_items or [])],
+                "recipe": recipe_obj.model_dump(),
+                "image_signals": image_signals,
+            },
+        )
+    except Exception:
+        pass
+
+    target_language = _requested_translation_target(req)
+    i18n = await _translate_canonical_recipe_i18n(
+        recipe=recipe_obj,
+        target_language=target_language,
+        include_steps=True,
+    )
+
+    return RecipeGenerateResponse(
+        recipe=recipe_obj,
+        locked_constraints=constraints,
+        pantry_coverage=float(pantry_cov or 0.0),
+        missing_ingredients=list(missing_items or []),
+        mode=mode,
+        reason=reason,
+        trust_signals=trust,
+        i18n=i18n,
+    )
+
+
 def _is_placeholder_text(value: str) -> bool:
     v = (value or "").strip().lower()
     if not v:
@@ -2339,7 +3127,7 @@ def _is_meaningful_recipe_dict(recipe: Dict[str, Any]) -> Tuple[bool, List[str]]
     if _is_placeholder_text(name):
         reasons.append("missing_name")
     else:
-        if _GENERIC_RECIPE_NAME_RE.search(name):
+        if _is_too_generic_recipe_name(name):
             reasons.append("generic_name")
         if len(name) < 3:
             reasons.append("name_too_short")
@@ -2463,7 +3251,8 @@ async def generate_recipe(
     constraints.ingredients_allowed = pantry_names
 
     req_creativity = (req.creativity or "").strip().lower()
-    force_generation = (req_creativity == "high") or _wants_native_or_innovative_recipe(req.request_text)
+    wants_bowl = _wants_pantry_bowl(req.request_text, cuisine=constraints.cuisine, meal_type=req.meal_type)
+    force_generation = (req_creativity == "high") or _wants_native_or_innovative_recipe(req.request_text) or bool(wants_bowl)
 
     attempt_id = str(uuid4())
 
@@ -2481,6 +3270,64 @@ async def generate_recipe(
         req,
         pantry_names,
     )
+
+    # Source locking: resolve exact recipe_id from catalog (ID-based matching).
+    source_lock_id = _resolve_source_lock_recipe_id(req)
+    if source_lock_id:
+        row = _catalog_row_by_recipe_id(source_lock_id)
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "source_recipe_not_found",
+                    "source_recipe_id": source_lock_id,
+                    "hint": "Expected a recipe_id present in ALL_RECIPES_COMPLETE.json (e.g., youtube:<video_id>).",
+                },
+            )
+
+        # Enrich sparse YouTube catalog entries (best-effort; cached augmentation).
+        out_lang = _normalize_language_code(req.output_language) or "en"
+        if str(source_lock_id).lower().startswith("youtube:"):
+            row = await _maybe_enrich_youtube_catalog_row(row=row, output_language=out_lang)
+
+        recipe_obj = _catalog_row_to_canonical_recipe(row=row, serves=req.serves, constraints=constraints)
+
+        # Safety validation still applies.
+        ok_safe, safety_viol = validate_recipe_safety(recipe_obj.model_dump(), profile if isinstance(profile, dict) else {})
+        if not ok_safe:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "source_recipe_conflicts_with_safety",
+                    "violations": list(safety_viol or []),
+                    "source_recipe_id": source_lock_id,
+                },
+            )
+
+        # Pantry coverage is best-effort for catalog entries.
+        ing_names = [str(i.canonical_name or "").strip() for i in (recipe_obj.ingredients or []) if not bool(i.optional)]
+        pantry_cov = 0.0
+        missing_items: List[MissingIngredient] = []
+        if ing_names and pantry_names:
+            cov, missing_names = _pantry_coverage(pantry_names=pantry_names, ingredient_names=ing_names)
+            pantry_cov = float(cov or 0.0)
+            missing_items = [MissingIngredient(canonical_name=m) for m in (missing_names or [])]
+
+        return await _finalize_generate_response(
+            req=req,
+            user_id=str(user_id),
+            attempt_id=attempt_id,
+            profile=profile if isinstance(profile, dict) else {},
+            pantry=pantry if isinstance(pantry, list) else [],
+            constraints=constraints,
+            preferred_threshold=preferred_threshold,
+            expiring=expiring,
+            recipe_obj=recipe_obj,
+            pantry_cov=pantry_cov,
+            missing_items=missing_items,
+            mode="retrieved",
+            reason="source_locked",
+        )
 
     # Try retrieved first.
     # Optimization: for explicit creative/native requests we skip retrieval to reduce latency
@@ -2658,6 +3505,96 @@ async def generate_recipe(
             cuisine=constraints.cuisine,
         ).strip()
 
+        # Pantry-bowl path: higher-signal composer + critic loop.
+        if bool(wants_bowl):
+            try:
+                budget_seconds = max(10, int(_GENERATION_BUDGET_SECONDS))
+                budget_seconds = min(20, int(budget_seconds) + 2)
+
+                generated = await asyncio.wait_for(
+                    _try_generate_pantry_bowl_recipe(
+                        client=client,
+                        req=req,
+                        constraints=constraints,
+                        pantry_names=pantry_names,
+                        pantry_context=pantry_context,
+                        pantry_image_signals=pantry_image_signals,
+                        missing_candidates=missing_candidates,
+                        expiring=expiring,
+                        family_profile_compact=family_profile_compact,
+                        safety_constraints_text=safety_constraints_text,
+                        cultural_intelligence_text=cultural_intelligence_text,
+                        preferred_threshold=preferred_threshold,
+                        recent_avoid=recent_avoid,
+                        attempt_id=attempt_id,
+                        safety_hint=safety_hint,
+                    ),
+                    timeout=budget_seconds,
+                )
+
+                # Normalize fields and validate
+                is_ok, violations = _validate_against_constraints(recipe=generated, constraints=constraints, pantry_names=pantry_names)
+                ok2, safety_viol2 = validate_recipe_safety(generated, profile if isinstance(profile, dict) else {})
+
+                if not is_ok:
+                    raise ValueError(f"Generated pantry bowl violates constraints: {violations}")
+                if not ok2:
+                    raise ValueError(f"Generated pantry bowl violates safety: {safety_viol2}")
+
+                ok_meaningful, reasons = _is_meaningful_recipe_dict(generated)
+                if not ok_meaningful:
+                    raise ValueError(f"Generated pantry bowl rejected: {reasons}")
+
+                recipe_obj = CanonicalRecipe(
+                    **{
+                        **generated,
+                        "recipe_id": (generated.get("recipe_id") or str(uuid4())),
+                        "version": (generated.get("version") or "v1"),
+                        "created_from": "generated",
+                    }
+                )
+
+                # Pantry coverage for generated recipes is computed by stable ingredient_id mapping.
+                ing_ids: List[str] = []
+                ing_names: List[str] = []
+                try:
+                    for it in (generated.get("ingredients") or []):
+                        if isinstance(it, dict) and it.get("ingredient_id"):
+                            if bool(it.get("optional")):
+                                continue
+                            ing_ids.append(str(it.get("ingredient_id")))
+                            nm = str(it.get("canonical_name") or "").strip()
+                            if nm:
+                                ing_names.append(nm)
+                except Exception:
+                    ing_ids = []
+                    ing_names = []
+
+                pantry_cov, missing_items = _pantry_coverage_by_id(
+                    pantry_id_to_name=pantry_id_to_name,
+                    ingredient_ids=ing_ids,
+                    id_to_name_hint={**missing_id_to_name},
+                )
+
+                ok_inv, _inv_reasons, inv_ratio, inv_missing = _enforce_inventory_match_for_recipe(
+                    enabled=inv_enabled,
+                    min_match=inv_min_match,
+                    max_missing=inv_max_missing,
+                    min_scored_ingredients=inv_min_scored,
+                    pantry_names=pantry_names,
+                    ingredient_names=ing_names,
+                )
+                if inv_enabled and not ok_inv:
+                    raise ValueError("Generated pantry bowl failed inventory enforcement")
+                if inv_enabled:
+                    pantry_cov = float(inv_ratio)
+                    missing_items = [MissingIngredient(canonical_name=m) for m in (inv_missing or [])]
+
+                reason = "pantry_bowl"
+            except Exception:
+                # Fall through to default constrained generation below.
+                pass
+
         prompt = {
             "request_text": (req.request_text or ""),
             "requested_ingredient_hints": requested_hints,
@@ -2696,41 +3633,53 @@ async def generate_recipe(
             prompt["request_id"] = attempt_id
             prompt["variation_seed"] = str(uuid4())
 
+            def _system_prompt(is_repair: bool) -> str:
+                repair_line = (
+                    "You are repairing a previously rejected draft. Follow critic feedback exactly. "
+                    if is_repair
+                    else ""
+                )
+                return (
+                    "You are SAVO's constrained recipe generator. "
+                    + repair_line
+                    + "You MUST follow the locked constraints exactly. "
+                    "You must not invent constraints. "
+                    "You MUST respect family_profile + safety_constraints. "
+                    "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
+                    "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
+                    "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
+                    "If main_ingredient_focus is provided, you MUST treat those main_ingredients as the centerpiece (both must appear as non-optional ingredients). "
+                    "You MUST avoid repeating any recipe_names, recipe_ids, or recipe_fingerprints listed in avoid_recent. "
+                    "Recipe_fingerprints represent the combination of cuisine + technique + main ingredients; do NOT repeat those patterns. "
+                    "SPECIFICITY CONTRACT (hard requirement): "
+                    "- Ingredients MUST include quantity + unit for EVERY item. "
+                    "- Steps MUST include numbers everywhere (time per step and heat level/temperature). "
+                    "- Before writing steps, fill cultural_context with dish identity fields: dish_family, region, signature_technique, flavor_profile. "
+                    "- Steps MUST explicitly implement signature_technique in order. "
+                    "Recipe_name MUST be a specific, culturally grounded dish name (not generic 'bowl' labels). "
+                    "Forbidden generic name phrases include: "
+                    + ", ".join(_GENERIC_NAME_FORBIDDEN_PHRASES)
+                    + ". "
+                    "Steps MUST be written in English (translation is handled separately). "
+                    "You MUST include: short_description, chef_tips (3-6), serving_suggestions (2-5), and cultural_context (dish_family, region, signature_technique, flavor_profile, origin, why_native, serving_note). "
+                    "If creative_intent is true, prioritize culturally authentic, regionally-native dishes with correct flavor logic (spice base, fat, acid, aromatics) for the cuisine. "
+                    f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
+                    "Return JSON only that matches the schema."
+                )
+
+            # PASS 1: draft
             generated = await asyncio.wait_for(
                 generate_json_with_retries(
                     client=client,
                     messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are SAVO's constrained recipe generator. "
-                                "You MUST follow the locked constraints exactly. "
-                                "You must not invent constraints. "
-                                "You MUST respect family_profile + safety_constraints. "
-                                "You MUST maximize use of pantry_context and allowed_pantry_ingredients. "
-                                "Use pantry_image_signals only as weak evidence of item type/freshness and packaged portions; be conservative about quantities. "
-                                "CRITICAL: Every ingredient_id MUST match one of the provided allowed_pantry_ingredients or missing_candidates. "
-                                "If main_ingredient_focus is provided, you MUST treat those main_ingredients as the centerpiece (both must appear as non-optional ingredients). "
-                                "You MUST avoid repeating any recipe_names, recipe_ids, or recipe_fingerprints listed in avoid_recent. "
-                                "Recipe_fingerprints represent the combination of cuisine + technique + main ingredients; do NOT repeat those patterns. "
-                                "Recipe_name MUST be a specific, culturally grounded dish name (not generic like 'Pantry Bowl'). "
-                                "Steps MUST be written in English (translation is handled separately). "
-                                "You MUST include: short_description, chef_tips (3-6), serving_suggestions (2-5), and cultural_context (origin + why_native + serving_note). "
-                                "If creative_intent is true, prioritize culturally authentic, regionally-native dishes with correct flavor logic (spice base, fat, acid, aromatics) for the cuisine. "
-                                f"\n\nCULTURAL INTELLIGENCE CONTEXT (use as grounding, do not contradict safety/constraints):\n{cultural_intelligence_text}\n"
-                                "Return JSON only that matches the schema." 
-                            ),
-                        },
+                        {"role": "system", "content": _system_prompt(False)},
                         {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                     ],
                     schema=schema,
-                    # For creative requests, prioritize speed. If generation fails,
-                    # we fail closed to assembled.
                     max_attempts=3,
                     repair_hint="constrained recipe json",
                     mode_hint="recipe",
                     temperature=0.85 if force_generation else 0.70,
-                    # Encourage novelty while schema + validators keep structure/safety tight.
                     presence_penalty=0.5 if force_generation else 0.2,
                     frequency_penalty=0.10 if force_generation else 0.05,
                 ),
@@ -2745,6 +3694,65 @@ async def generate_recipe(
                 raise ValueError(f"Generated recipe violates constraints: {violations}")
             if not ok2:
                 raise ValueError(f"Generated recipe violates safety: {safety_viol2}")
+
+            ok_contract, contract_issues = _validate_specificity_contract(generated if isinstance(generated, dict) else {})
+            critique = await _criticize_generated_recipe(
+                client=client,
+                recipe=generated if isinstance(generated, dict) else {},
+                constraints=constraints,
+                pantry_names=pantry_names,
+            )
+
+            critic_ok = bool(isinstance(critique, dict) and critique.get("ok") is True)
+            if not ok_contract:
+                critic_ok = False
+
+            # PASS 2: critic + one repair attempt if needed
+            if not critic_ok:
+                critic_feedback = ""
+                try:
+                    critic_feedback = (critique.get("repair_instructions") or "").strip() if isinstance(critique, dict) else ""
+                except Exception:
+                    critic_feedback = ""
+                prompt["critic_feedback"] = critic_feedback
+                prompt["critic_issues"] = list((critique.get("issues") or []) if isinstance(critique, dict) else [])
+                prompt["specificity_contract_failures"] = list(contract_issues or [])
+                prompt["variation_seed"] = str(uuid4())
+
+                repaired = await asyncio.wait_for(
+                    generate_json_with_retries(
+                        client=client,
+                        messages=[
+                            {"role": "system", "content": _system_prompt(True)},
+                            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                        ],
+                        schema=schema,
+                        max_attempts=2,
+                        repair_hint="constrained recipe json repair",
+                        mode_hint="recipe",
+                        temperature=0.65,
+                        presence_penalty=0.1,
+                        frequency_penalty=0.02,
+                    ),
+                    timeout=max(6, int(budget_seconds) - 2),
+                )
+
+                is_ok2, violations2 = _validate_against_constraints(recipe=repaired, constraints=constraints, pantry_names=pantry_names)
+                ok_safe2, safety_viol3 = validate_recipe_safety(repaired, profile if isinstance(profile, dict) else {})
+                ok_contract2, _contract_issues2 = _validate_specificity_contract(repaired if isinstance(repaired, dict) else {})
+                critique2 = await _criticize_generated_recipe(
+                    client=client,
+                    recipe=repaired if isinstance(repaired, dict) else {},
+                    constraints=constraints,
+                    pantry_names=pantry_names,
+                )
+                critic_ok2 = bool(isinstance(critique2, dict) and critique2.get("ok") is True)
+                if not (is_ok2 and ok_safe2 and ok_contract2 and critic_ok2):
+                    raise ValueError(
+                        f"Generated recipe rejected by critic (ok={critic_ok2}) or contract/safety. "
+                        f"violations={violations2} safety={safety_viol3}"
+                    )
+                generated = repaired
 
             recipe_obj = CanonicalRecipe(**{
                 **generated,
@@ -2817,86 +3825,20 @@ async def generate_recipe(
             pantry_cov = float(coverage)
             missing_items = list(missing)
 
-    # Best-effort recipe image derived from pantry item images.
-    try:
-        img = _best_effort_recipe_image_url(
-            pantry=pantry if isinstance(pantry, list) else [],
-            recipe=recipe_obj,
-        )
-        if img and str(img).strip():
-            recipe_obj.image_url = str(img).strip()
-    except Exception:
-        pass
-
-    # Emit mode selection event
-    emit_event(
-        event_type="recipe.mode_selected",
+    return await _finalize_generate_response(
+        req=req,
         user_id=str(user_id),
-        entity_type="recipe_attempt",
-        entity_id=attempt_id,
-        payload={
-            "mode": mode,
-            "reason": reason,
-            "pantry_coverage": pantry_cov,
-            "missing_count": len(missing_items),
-        },
-    )
-
-    uses_what_you_have = pantry_cov >= preferred_threshold and len(missing_items) == 0
-    uses_expiring = bool(constraints.use_expiring_items and expiring)
-
-    trust = TrustSignals(
-                                    timeout_seconds=11,
-        estimated_time_minutes=int(getattr(recipe_obj, "prep_time_minutes", 0) or 0),
-        uses_expiring_items=uses_expiring,
-        adjustable_spice_level=True,
-    )
-
-    # Persist attempt + context for later saving/planning (best-effort).
-    try:
-        family_profile_compact = _compact_family_profile(profile if isinstance(profile, dict) else {})
-        pantry_context_all = _extract_pantry_context(
-            pantry if isinstance(pantry, list) else [],
-            prefer_expiring_items=bool(constraints.use_expiring_items),
-            expiring_names=expiring,
-        )
-        image_signals = _build_image_signals(pantry if isinstance(pantry, list) else [])
-        _best_effort_persist_recipe_attempt(
-            user_id=str(user_id),
-            attempt_id=attempt_id,
-            payload={
-                "recipe_id": str(getattr(recipe_obj, "recipe_id", "")),
-                "request_text": (req.request_text or ""),
-                "mode": mode,
-                "reason": reason,
-                "pantry_coverage": float(pantry_cov or 0.0),
-                "locked_constraints": constraints.model_dump(),
-                "family_profile": family_profile_compact,
-                "pantry_context": pantry_context_all,
-                "missing_ingredients": [m.model_dump() for m in (missing_items or [])],
-                "recipe": recipe_obj.model_dump(),
-                "image_signals": image_signals,
-            },
-        )
-    except Exception:
-        pass
-
-    target_language = _requested_translation_target(req)
-    i18n = await _translate_canonical_recipe_i18n(
-        recipe=recipe_obj,
-        target_language=target_language,
-        include_steps=True,
-    )
-
-    return RecipeGenerateResponse(
-        recipe=recipe_obj,
-        locked_constraints=constraints,
-        pantry_coverage=pantry_cov,
-        missing_ingredients=missing_items,
+        attempt_id=attempt_id,
+        profile=profile if isinstance(profile, dict) else {},
+        pantry=pantry if isinstance(pantry, list) else [],
+        constraints=constraints,
+        preferred_threshold=preferred_threshold,
+        expiring=expiring,
+        recipe_obj=recipe_obj,
+        pantry_cov=pantry_cov,
+        missing_items=missing_items,
         mode=mode,
         reason=reason,
-        trust_signals=trust,
-        i18n=i18n,
     )
 
 

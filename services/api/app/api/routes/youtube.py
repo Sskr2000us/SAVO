@@ -6,113 +6,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import re
 from typing import Optional, Tuple
-from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 
 from app.models.youtube import YouTubeRankRequest, YouTubeRankResponse
 from app.core.orchestrator import youtube_rank
 from app.core.llm_client import get_reasoning_client
+from app.core.youtube_recipe_extraction import summarize_youtube_recipe
 
 router = APIRouter()
 
 
-def _fetch_transcript(video_id: str, preferred_lang: str = "en") -> list[dict]:
-    """Fetch a YouTube transcript in a version-tolerant way.
-
-    Some environments may have older/newer variants of youtube-transcript-api where
-    `YouTubeTranscriptApi.get_transcript` is missing. Fall back to list_transcripts().
-    """
-    vid = (video_id or "").strip()
-    if not vid:
-        raise ValueError("video_id is required")
-
-    lang = (preferred_lang or "en").strip().lower()
-    lang_candidates = [lang] if lang else []
-    for l in ["en", "en-US", "en-GB"]:
-        if l not in lang_candidates:
-            lang_candidates.append(l)
-
-    # Preferred path
-    if hasattr(YouTubeTranscriptApi, "get_transcript"):
-        try:
-            return YouTubeTranscriptApi.get_transcript(vid, languages=lang_candidates)
-        except TypeError:
-            # Some versions don't support languages=...
-            return YouTubeTranscriptApi.get_transcript(vid)
-
-    # Fallback path
-    if hasattr(YouTubeTranscriptApi, "list_transcripts"):
-        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-        try:
-            transcript = transcript_list.find_transcript(lang_candidates)
-        except Exception:
-            transcript = transcript_list.find_generated_transcript(lang_candidates)
-        return transcript.fetch()
-
-    raise RuntimeError("youtube-transcript-api missing transcript methods")
-
-
-def _fetch_transcript_any_language(video_id: str, preferred_lang: str = "en") -> Tuple[list[dict], str]:
-    """Fetch transcript; if preferred language isn't available, fall back to any available transcript.
-
-    Returns (transcript_entries, transcript_language_code).
-    """
-    vid = (video_id or "").strip()
-    if not vid:
-        raise ValueError("video_id is required")
-
-    preferred = (preferred_lang or "en").strip().lower()
-
-    # First try: preferred (plus common English variants; plus Tamil/Indian fallbacks when output is English).
-    lang_candidates: list[str] = []
-    if preferred:
-        lang_candidates.append(preferred)
-    for l in ["en", "en-US", "en-GB"]:
-        if l not in lang_candidates:
-            lang_candidates.append(l)
-    if preferred in {"en", "en-us", "en-gb"}:
-        for l in ["ta", "ta-IN", "hi", "hi-IN"]:
-            if l not in lang_candidates:
-                lang_candidates.append(l)
-
-    if hasattr(YouTubeTranscriptApi, "get_transcript"):
-        try:
-            entries = YouTubeTranscriptApi.get_transcript(vid, languages=lang_candidates)
-            return entries, preferred or "unknown"
-        except Exception:
-            # We'll fall back to list_transcripts below.
-            pass
-
-    if hasattr(YouTubeTranscriptApi, "list_transcripts"):
-        tl = YouTubeTranscriptApi.list_transcripts(vid)
-
-        picked = None
-        # Try preferred candidates first
-        try:
-            picked = tl.find_transcript(lang_candidates)
-        except Exception:
-            try:
-                picked = tl.find_generated_transcript(lang_candidates)
-            except Exception:
-                picked = None
-
-        # If still none, pick any available transcript (prefer manually created)
-        if picked is None:
-            try:
-                all_tx = [t for t in tl]
-            except Exception:
-                all_tx = []
-            if all_tx:
-                manual = [t for t in all_tx if getattr(t, "is_generated", False) is False]
-                picked = (manual[0] if manual else all_tx[0])
-
-        if picked is None:
-            raise NoTranscriptFound(vid)
-
-        lang_code = str(getattr(picked, "language_code", "") or "unknown")
-        return picked.fetch(), lang_code
-
-    raise RuntimeError("youtube-transcript-api missing transcript methods")
+## Transcript fetching is implemented in app.core.youtube_recipe_extraction
 
 
 class YouTubeSummaryRequest(BaseModel):
@@ -205,89 +109,14 @@ async def post_rank(req: YouTubeRankRequest):
 async def post_summary(req: YouTubeSummaryRequest):
     """Generate AI summary of YouTube video for cooking"""
     try:
-        # Fetch transcript (fall back to any available language; Tamil is common)
-        preferred_tx_lang = (req.transcript_language or "").strip() or (req.output_language or "en")
-        transcript_list, source_language = _fetch_transcript_any_language(req.video_id, preferred_lang=preferred_tx_lang)
-        
-        # Combine transcript into full text
-        full_transcript = " ".join([entry['text'] for entry in transcript_list])
-        
-        # Use LLM to generate summary + ingredients + steps (schema-enforced)
         llm_client = get_reasoning_client()
-
-        schema = {
-            "type": "object",
-            "required": [
-                "summary",
-                "condensed_summary",
-                "key_techniques",
-                "timestamp_highlights",
-                "watch_time_estimate",
-                "recipe_name_en",
-                "ingredients",
-                "steps",
-                "confidence",
-                "source_language",
-            ],
-            "properties": {
-                "summary": {"type": "string"},
-                "condensed_summary": {"type": "string"},
-                "key_techniques": {"type": "array", "items": {"type": "string"}},
-                "timestamp_highlights": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["time", "description"],
-                        "properties": {
-                            "time": {"type": "string"},
-                            "description": {"type": "string"},
-                        },
-                        "additionalProperties": False,
-                    },
-                },
-                "watch_time_estimate": {"type": "string"},
-                "recipe_name_en": {"type": "string"},
-                "ingredients": {"type": "array", "items": {"type": "string"}},
-                "steps": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-                "source_language": {"type": "string"},
-            },
-            "additionalProperties": False,
-        }
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a cooking video analyst. Return JSON only. "
-                    "Write all output text in the requested output_language. "
-                    "Do NOT guess ingredients or steps. If the transcript does not clearly state them, return empty arrays and confidence='low'."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Recipe: {req.recipe_name}\n"
-                    f"output_language: {req.output_language}\n\n"
-                    f"transcript_source_language: {source_language}\n\n"
-                    "Transcript (may be truncated):\n"
-                    f"{full_transcript[:8000]}\n\n"
-                    "Instructions:\n"
-                    "- summary: 2-3 sentences, practical and specific.\n"
-                    "- condensed_summary: EXACTLY 3-4 lines separated by '\\n'. Each line should be a short actionable takeaway.\n"
-                    "- key_techniques: 3-5 items.\n"
-                    "- timestamp_highlights: 2-4 items, approximate times like '2:30'.\n"
-                    "- watch_time_estimate: e.g. 'Full video (12 min)' or 'Skip to 3:20'.\n"
-                    "- recipe_name_en: English recipe name (translate if needed).\n"
-                    "- ingredients: list only ingredients explicitly mentioned (English if output_language is en).\n"
-                    "- steps: concise step-by-step method (only if explicitly stated).\n"
-                    "- confidence: high if ingredients+steps are complete, medium if partial, low if missing.\n"
-                    "- source_language: echo transcript_source_language."
-                ),
-            },
-        ]
-
-        summary_json = await llm_client.generate_json(messages=messages, schema=schema)
+        summary_json = await summarize_youtube_recipe(
+            video_id=req.video_id,
+            recipe_name=req.recipe_name,
+            output_language=req.output_language,
+            transcript_language=req.transcript_language,
+            llm_client=llm_client,
+        )
         
         return YouTubeSummaryResponse(
             video_id=req.video_id,
@@ -300,7 +129,7 @@ async def post_summary(req: YouTubeSummaryRequest):
             ingredients=summary_json.get("ingredients", []),
             steps=summary_json.get("steps", []),
             confidence=summary_json.get("confidence", "low"),
-            source_language=summary_json.get("source_language", source_language),
+            source_language=summary_json.get("source_language", "unknown"),
         )
         
     except (TranscriptsDisabled, NoTranscriptFound) as e:
