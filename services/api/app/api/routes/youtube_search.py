@@ -37,9 +37,29 @@ def _normalize_text(value: str) -> str:
 
 def _tokenize(value: str) -> set[str]:
     value = _normalize_text(value)
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    # Keep non-Latin scripts (e.g., Tamil) so overlap scoring still works.
+    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    value = value.replace("_", " ")
     tokens = {t for t in value.split() if t and t not in _STOPWORDS and len(t) > 1}
     return tokens
+
+
+def _detect_language_code(text: str) -> str:
+    """Best-effort language hint based on Unicode ranges.
+
+    This is intentionally lightweight (no network calls). It helps the client/UI
+    and downstream ranking to treat Tamil titles differently from English.
+    """
+    s = text or ""
+    for ch in s:
+        o = ord(ch)
+        # Tamil block: U+0B80–U+0BFF
+        if 0x0B80 <= o <= 0x0BFF:
+            return "ta"
+        # Devanagari block (Hindi): U+0900–U+097F
+        if 0x0900 <= o <= 0x097F:
+            return "hi"
+    return "en"
 
 
 def _overlap_score(query: str, title: str) -> float:
@@ -133,15 +153,19 @@ async def search_youtube(req: YouTubeSearchRequest):
             snippet = item["snippet"]
             thumbs = snippet.get("thumbnails") or {}
             thumb = (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {})
+            title = snippet.get("title") or ""
+            desc = (snippet.get("description") or "")
+            lang = _detect_language_code(f"{title} {desc}")
             return {
                 "video_id": video_id,
-                "title": snippet.get("title") or "",
+                "title": title,
                 "channel": snippet.get("channelTitle") or "",
-                "language": "en",
-                "transcript": (snippet.get("description") or "")[:500],
+                "language": lang,
+                "transcript": desc[:500],
                 "metadata": {
                     "thumbnail": thumb.get("url") or "",
                     "published_at": snippet.get("publishedAt") or "",
+                    "title_needs_translation": lang != "en",
                 },
             }
 

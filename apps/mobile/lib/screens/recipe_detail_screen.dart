@@ -801,7 +801,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     String normalize(String v) {
       return v
           .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+          .replaceAll(RegExp(r'[^\w\s]', unicode: true), ' ')
+          .replaceAll('_', ' ')
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
     }
@@ -947,6 +948,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         videoId: videoId,
         recipeName: recipeNameQuery,
         outputLanguage: _recipeLanguageCode,
+        transcriptLanguage: _recipeLanguageCode,
       );
 
       final response = await apiClient.post('/youtube/summary', request.toJson());
@@ -1890,6 +1892,32 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if ((summary.confidence.toLowerCase() == 'low') ||
+                      (summary.ingredients.isEmpty && summary.steps.isEmpty)) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber[100],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amber[300]!),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.amber[900], size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Details unavailable (no transcript/ingredients found).',
+                              style: TextStyle(color: Colors.amber[900], fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   Row(
                     children: [
                       Icon(Icons.auto_awesome, size: 18, color: Colors.purple[700]),
@@ -1912,11 +1940,82 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                       ),
                     ],
                   ),
+                  if (summary.recipeNameEn.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Recipe (English): ${summary.recipeNameEn.trim()}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[800],
+                        fontStyle: FontStyle.italic,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Text(
                     summary.summary,
                     style: TextStyle(color: Colors.grey[800]),
                   ),
+                  if (summary.ingredients.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Ingredients:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Colors.purple[900],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    ...summary.ingredients.map(
+                      (ing) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('• ', style: TextStyle(color: Colors.grey[800])),
+                            Expanded(
+                              child: Text(
+                                ing,
+                                style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (summary.steps.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Step-by-step:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Colors.purple[900],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    ...summary.steps.asMap().entries.map(
+                      (e) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${e.key + 1}. ', style: TextStyle(color: Colors.grey[800])),
+                            Expanded(
+                              child: Text(
+                                e.value,
+                                style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   if (summary.keyTechniques.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -1989,6 +2088,49 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      TextButton.icon(
+                        onPressed: () async {
+                          final lines = <String>[];
+                          final rn = summary.recipeNameEn.trim();
+                          if (rn.isNotEmpty) {
+                            lines.add('Recipe (English): $rn');
+                            lines.add('');
+                          }
+
+                          lines.add('Ingredients:');
+                          if (summary.ingredients.isNotEmpty) {
+                            for (final ing in summary.ingredients) {
+                              final v = ing.trim();
+                              if (v.isNotEmpty) lines.add('- $v');
+                            }
+                          } else {
+                            lines.add('- (not available)');
+                          }
+
+                          lines.add('');
+                          lines.add('Steps:');
+                          if (summary.steps.isNotEmpty) {
+                            for (var i = 0; i < summary.steps.length; i++) {
+                              final v = summary.steps[i].trim();
+                              if (v.isNotEmpty) lines.add('${i + 1}. $v');
+                            }
+                          } else {
+                            lines.add('(not available)');
+                          }
+
+                          final text = lines.join('\n').trim();
+                          await Clipboard.setData(ClipboardData(text: text));
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Ingredients/steps copied to clipboard!')),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text('Copy'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.purple[700],
+                        ),
+                      ),
                       TextButton(
                         onPressed: () {
                           setState(() {

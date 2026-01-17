@@ -233,7 +233,9 @@ def _recipe_name_text(recipe_name: Any) -> str:
 
 def _yt_tokenize(value: str) -> set[str]:
     value = (value or "").lower()
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    # Keep non-Latin scripts (e.g., Tamil) so overlap scoring doesn't drop to 0.
+    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    value = value.replace("_", " ")
     tokens = {t for t in value.split() if t and len(t) > 1}
     return tokens
 

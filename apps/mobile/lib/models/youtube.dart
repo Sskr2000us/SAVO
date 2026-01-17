@@ -123,17 +123,21 @@ class YouTubeSummaryRequest {
   final String videoId;
   final String recipeName;
   final String outputLanguage;
+  final String? transcriptLanguage;
 
   YouTubeSummaryRequest({
     required this.videoId,
     required this.recipeName,
     this.outputLanguage = 'en',
+    this.transcriptLanguage,
   });
 
   Map<String, dynamic> toJson() => {
         'video_id': videoId,
         'recipe_name': recipeName,
         'output_language': outputLanguage,
+        if (transcriptLanguage != null && transcriptLanguage!.trim().isNotEmpty)
+          'transcript_language': transcriptLanguage,
       };
 }
 
@@ -161,6 +165,11 @@ class YouTubeSummary {
   final List<String> keyTechniques;
   final List<TimestampHighlight> timestampHighlights;
   final String watchTimeEstimate;
+  final String recipeNameEn;
+  final List<String> ingredients;
+  final List<String> steps;
+  final String confidence;
+  final String sourceLanguage;
 
   YouTubeSummary({
     required this.videoId,
@@ -169,6 +178,11 @@ class YouTubeSummary {
     required this.keyTechniques,
     required this.timestampHighlights,
     required this.watchTimeEstimate,
+    this.recipeNameEn = '',
+    this.ingredients = const [],
+    this.steps = const [],
+    this.confidence = 'low',
+    this.sourceLanguage = 'unknown',
   });
 
   factory YouTubeSummary.fromJson(Map<String, dynamic> json) {
@@ -182,6 +196,11 @@ class YouTubeSummary {
               .toList() ??
           [],
       watchTimeEstimate: json['watch_time_estimate'] ?? 'Full video',
+      recipeNameEn: json['recipe_name_en'] ?? '',
+      ingredients: List<String>.from(json['ingredients'] ?? []),
+      steps: List<String>.from(json['steps'] ?? []),
+      confidence: json['confidence'] ?? 'low',
+      sourceLanguage: json['source_language'] ?? 'unknown',
     );
   }
 }
