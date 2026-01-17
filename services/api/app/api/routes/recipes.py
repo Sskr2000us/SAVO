@@ -5,7 +5,7 @@ import html as _html
 from pathlib import Path
 import hashlib
 
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Response
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, Response, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from uuid import uuid4
@@ -26,6 +26,7 @@ from app.core.prompt_pack import get_schema, get_system_prompt_lines, get_task
 from app.core.database import get_db_client
 from app.core.database import get_full_profile, get_inventory
 from app.core.recipe_images import build_llm_image_query
+from app.core.recipe_catalog_search import rank_catalog_entries
 
 router = APIRouter()
 public_router = APIRouter()
@@ -230,6 +231,212 @@ def _catalog_text(row: dict[str, Any]) -> str:
             parts.append(str(row.get(key)))
 
     return " ".join(parts).lower()
+
+
+_RECIPE_SEARCH_NON_ALNUM = re.compile(r"[^a-z0-9\s_-]+")
+
+
+def _normalize_title_key(value: str) -> str:
+    s = (value or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _canonicalize_name_for_search(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if not s:
+        return ""
+    s = s.replace("-", " ").replace("_", " ")
+    s = _RECIPE_SEARCH_NON_ALNUM.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return ""
+    # Keep a stable canonical form similar to inventory canonical names.
+    s = s.replace(" ", "_")
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
+
+
+def _is_assumed_staple(nm: str) -> bool:
+    s = (nm or "").strip().lower()
+    if not s:
+        return False
+    if s in {"salt", "pepper", "black_pepper", "oil", "olive_oil", "vegetable_oil", "butter", "ghee", "sugar", "water"}:
+        return True
+    if s.endswith("_powder") or s.endswith("_masala"):
+        return True
+    if any(k in s for k in ["cumin", "coriander", "turmeric", "paprika", "chili", "cinnamon", "cardamom", "clove", "ginger", "garlic"]):
+        return True
+    return False
+
+
+def _extract_pantry_names(raw_items: list[Any]) -> list[str]:
+    out: list[str] = []
+    for it in raw_items or []:
+        if isinstance(it, str):
+            if it.strip():
+                out.append(it.strip())
+            continue
+        if isinstance(it, dict):
+            # tolerate inventory-ish objects
+            for k in ("canonical_name", "name", "item", "label"):
+                v = it.get(k)
+                if isinstance(v, str) and v.strip():
+                    out.append(v.strip())
+                    break
+    return out
+
+
+class RecipeSearchRequest(BaseModel):
+    query: str = Field("", description="Free-text query (e.g., 'quick paneer dinner')")
+    cuisine: str = Field("", description="Optional cuisine filter")
+    pantry_items: list[Any] = Field(default_factory=list, description="List of pantry names (strings or inventory-like objects)")
+    like_tokens: list[str] = Field(default_factory=list, description="Optional preference tokens")
+    dislike_tokens: list[str] = Field(default_factory=list, description="Optional dislike tokens")
+    course_hint: str = Field("", description="Optional: main/side/dessert")
+    limit: int = Field(10, ge=1, le=50)
+
+
+@router.post("/search")
+async def search_recipes(req: RecipeSearchRequest):
+    """Hybrid search over the curated recipe catalog.
+
+    Returns best-effort matches using BM25 + pantry overlap + preference hints.
+    This is designed for mobile/web discovery: "what can I cook with X".
+    """
+
+    limit = max(1, min(int(req.limit or 10), 50))
+    query = (req.query or "").strip()
+    cuisine_norm = (req.cuisine or "").strip().lower()
+    course_hint = (req.course_hint or "").strip().lower()
+
+    pantry_names = _extract_pantry_names(req.pantry_items)
+    pantry_set = {nm for nm in [_canonicalize_name_for_search(x) for x in pantry_names] if nm}
+
+    items = _load_catalog_items()
+    if not items:
+        return {"success": True, "count": 0, "items": []}
+
+    # Filter by cuisine if requested.
+    if cuisine_norm:
+        filtered: list[dict[str, Any]] = []
+        for row in items:
+            c = str(row.get("cuisine") or row.get("cuisine_code") or "").strip().lower()
+            if c == cuisine_norm:
+                filtered.append(row)
+        items = filtered
+
+    # Build a slightly enriched query text so empty query still works.
+    likes = {(_normalize_title_key(x) or "") for x in (req.like_tokens or []) if isinstance(x, str)}
+    dislikes = {(_normalize_title_key(x) or "") for x in (req.dislike_tokens or []) if isinstance(x, str)}
+    likes.discard("")
+    dislikes.discard("")
+
+    pantry_hint = " ".join(list(sorted(pantry_set))[:30])
+    query_text = " ".join([query, cuisine_norm, course_hint, " ".join(sorted(likes))[:200], pantry_hint]).strip()
+    if not query_text:
+        query_text = "recipe"
+
+    ranked = rank_catalog_entries(
+        items,
+        query_text=query_text,
+        pantry_set=pantry_set,
+        like_tokens=likes,
+        dislike_tokens=dislikes,
+        course_hint=course_hint,
+        exclude_title_keys=None,
+        limit=max(limit * 5, limit),
+        normalize_title_key=_normalize_title_key,
+        canonicalize_ingredient=_canonicalize_name_for_search,
+        prefer_embeddings=False,
+    )
+
+    results: list[dict[str, Any]] = []
+    for row in ranked[:limit]:
+        # Compute pantry coverage + missing list.
+        total = 0
+        matched = 0
+        missing: list[str] = []
+        for ing in row.get("ingredients") or []:
+            item = ""
+            if isinstance(ing, dict):
+                item = str(ing.get("item") or "").strip()
+            elif isinstance(ing, str):
+                item = ing.strip()
+            if not item:
+                continue
+            nm = _canonicalize_name_for_search(item)
+            if not nm:
+                continue
+            total += 1
+            if nm in pantry_set or _is_assumed_staple(nm):
+                matched += 1
+            else:
+                missing.append(nm)
+
+        coverage = float(matched) / float(max(1, total)) if total else 0.0
+        missing = list(dict.fromkeys(missing))[:20]
+
+        results.append(
+            {
+                "id": str(row.get("id") or ""),
+                "recipe_name": row.get("recipe_name"),
+                "cuisine": row.get("cuisine") or row.get("cuisine_code") or "",
+                "difficulty": row.get("difficulty") or "",
+                "prep_time_minutes": row.get("prep_time_minutes") or row.get("prep_minutes") or None,
+                "cook_time_minutes": row.get("cook_time_minutes") or row.get("cook_minutes") or None,
+                "total_time_minutes": row.get("total_time_minutes") or row.get("total_minutes") or None,
+                "image_urls": row.get("image_urls") or [],
+                "video_url": row.get("video_url") or "",
+                "match": {
+                    "coverage": coverage,
+                    "matched_ingredients": matched,
+                    "total_ingredients": total,
+                    "missing_ingredients": missing,
+                },
+                # Keep a compact preview rather than the full payload.
+                "ingredients_preview": [
+                    (str(x.get("item") or "").strip() if isinstance(x, dict) else str(x).strip())
+                    for x in (row.get("ingredients") or [])
+                    if (isinstance(x, dict) and str(x.get("item") or "").strip()) or (isinstance(x, str) and x.strip())
+                ][:12],
+            }
+        )
+
+    return {"success": True, "count": len(results), "items": results}
+
+
+@router.get("/search")
+async def search_recipes_get(
+    q: str = "",
+    cuisine: str = "",
+    pantry: str = "",
+    likes: str = "",
+    dislikes: str = "",
+    course_hint: str = "",
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Convenience wrapper around POST /recipes/search.
+
+    This is meant for quick testing in a browser/Postman.
+    Use comma-separated strings for pantry/likes/dislikes.
+    """
+
+    pantry_items = [x.strip() for x in (pantry or "").split(",") if x.strip()]
+    like_tokens = [x.strip() for x in (likes or "").split(",") if x.strip()]
+    dislike_tokens = [x.strip() for x in (dislikes or "").split(",") if x.strip()]
+
+    req = RecipeSearchRequest(
+        query=q or "",
+        cuisine=cuisine or "",
+        pantry_items=pantry_items,
+        like_tokens=like_tokens,
+        dislike_tokens=dislike_tokens,
+        course_hint=course_hint or "",
+        limit=int(limit or 10),
+    )
+    return await search_recipes(req)
 
 
 @router.get("/catalog")

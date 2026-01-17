@@ -1376,151 +1376,30 @@ def _pick_catalog_recipes(
     if not isinstance(entries, list) or not entries:
         return []
 
-    def _major_group(nm: str) -> str:
-        s = (nm or "").strip().lower()
-        if any(k in s for k in ["pasta", "rotini", "penne", "spaghetti", "noodle", "macaroni", "rigatoni", "fusilli", "farfalle", "orzo"]):
-            return "pasta"
-        if "rice" in s:
-            return "rice"
-        return s
+    try:
+        from app.core.recipe_catalog_search import rank_catalog_entries
 
-    pantry_groups = {g for g in [_major_group(x) for x in pantry_set] if g}
+        # Build a lightweight query intent from course + pantry + likes.
+        likes_str = " ".join(sorted(like_tokens or set()))
+        pantry_str = " ".join(list(sorted(pantry_set))[:30])
+        query_text = f"{course_hint} {likes_str} {pantry_str}".strip() or f"{cuisine} recipe"
 
-    def _title_key(entry: dict[str, Any]) -> str:
-        rn = entry.get("recipe_name")
-        title = ""
-        if isinstance(rn, dict):
-            title = str(rn.get("en") or next(iter(rn.values()), "") or "")
-        elif isinstance(rn, str):
-            title = rn
-        return _normalize_title_key(title)
-
-    def _title_requires_pantry_core(title_k: str) -> bool:
-        """If a dish name implies a core ingredient (paneer/chicken/etc), require it in pantry."""
-        if not pantry_set:
-            return True
-        # keyword -> acceptable pantry substrings
-        core = {
-            "paneer": ["paneer"],
-            "chicken": ["chicken"],
-            "mutton": ["mutton", "lamb"],
-            "lamb": ["lamb", "mutton"],
-            "beef": ["beef"],
-            "pork": ["pork"],
-            "fish": ["fish", "salmon", "tuna", "cod"],
-            "shrimp": ["shrimp", "prawn"],
-            "prawn": ["shrimp", "prawn"],
-            "egg": ["egg"],
-            "tofu": ["tofu"],
-        }
-        required: list[str] = []
-        for k, subs in core.items():
-            if k in title_k:
-                required.extend(subs)
-        if not required:
-            return True
-
-        pantry_join = " | ".join(sorted(pantry_set))
-        for needle in required:
-            if needle and needle in pantry_join:
-                return True
-        return False
-
-    dessert_kw = {
-        "dessert",
-        "kheer",
-        "payasam",
-        "halwa",
-        "pudding",
-        "gulab",
-        "jamun",
-        "laddu",
-        "ladoo",
-        "barfi",
-        "burfi",
-        "rasgulla",
-        "kulfi",
-        "sweet",
-        "cake",
-        "cookie",
-    }
-    side_kw = {
-        "raita",
-        "salad",
-        "chutney",
-        "pickle",
-        "papad",
-        "papadam",
-        "naan",
-        "roti",
-        "paratha",
-        "bread",
-        "rice",
-        "pulao",
-        "jeera",
-        "dal",
-        "dahi",
-        "yogurt",
-        "soup",
-    }
-
-    def _fits_course(title_k: str) -> bool:
-        h = (course_hint or "").strip().lower()
-        if not h:
-            return True
-        has_dessert = any(k in title_k for k in dessert_kw)
-        has_side = any(k in title_k for k in side_kw)
-        if h == "dessert":
-            return has_dessert
-        if h == "side":
-            # Avoid desserts for side slots.
-            return has_side and not has_dessert
-        if h == "main":
-            # Avoid obvious desserts/sides for mains.
-            return (not has_dessert) and (not has_side)
-        return True
-
-    def _score(entry: dict[str, Any]) -> int:
-        score = 0
-        title_k = _title_key(entry)
-        if title_k and like_tokens:
-            if any(t in title_k for t in like_tokens):
-                score += 4
-        if title_k and dislike_tokens:
-            if any(t in title_k for t in dislike_tokens):
-                score -= 8
-        for ing in entry.get("ingredients") or []:
-            if not isinstance(ing, dict):
-                continue
-            item = str(ing.get("item") or "").strip()
-            if not item:
-                continue
-            nm = _canonicalize_inventory_name_for_planning(item)
-            if nm in pantry_set:
-                score += 3
-                continue
-            g = _major_group(nm)
-            if g and g in pantry_groups:
-                score += 1
-            if like_tokens and any(t in nm for t in like_tokens):
-                score += 1
-            if dislike_tokens and any(t in nm for t in dislike_tokens):
-                score -= 2
-        return score
-
-    ranked = []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        title_k = _title_key(e)
-        if exclude_title_keys and title_k and title_k in exclude_title_keys:
-            continue
-        if title_k and not _fits_course(title_k):
-            continue
-        if title_k and not _title_requires_pantry_core(title_k):
-            continue
-        ranked.append(e)
-    ranked.sort(key=_score, reverse=True)
+        ranked = rank_catalog_entries(
+            entries,
+            query_text=query_text,
+            pantry_set=pantry_set,
+            like_tokens=like_tokens,
+            dislike_tokens=dislike_tokens,
+            course_hint=course_hint,
+            exclude_title_keys=exclude_title_keys,
+            limit=max(limit * 5, limit),
+            normalize_title_key=_normalize_title_key,
+            canonicalize_ingredient=_canonicalize_inventory_name_for_planning,
+            prefer_embeddings=True,
+        )
+    except Exception:
+        # Safe fallback to previous simple ranking (older behavior)
+        ranked = list(entries)
     picked: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for e in ranked:
